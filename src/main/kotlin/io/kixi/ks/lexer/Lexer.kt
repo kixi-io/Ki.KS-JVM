@@ -1,5 +1,7 @@
 package io.kixi.ks.lexer
 
+import io.kixi.ks.SourceLocation
+
 /**
  * KS Language Lexer
  *
@@ -58,8 +60,7 @@ class Lexer(private val source: String) {
     // ========================================================================
 
     private fun scanToken() {
-        val c = advance()
-        when (c) {
+        when (val c = advance()) {
             // --- Whitespace (non-newline) ---
             ' ', '\t', '\r' -> { /* skip */ }
 
@@ -124,6 +125,11 @@ class Lexer(private val source: String) {
             }
             '*' -> {
                 when {
+                    match('*') -> {
+                        // ** or **=
+                        if (match('=')) addToken(TokenType.STAR_STAR_EQUAL)
+                        else addToken(TokenType.STAR_STAR)
+                    }
                     match('=') -> addToken(TokenType.STAR_EQUAL)
                     else -> addToken(TokenType.STAR)
                 }
@@ -618,8 +624,7 @@ class Lexer(private val source: String) {
      */
     private fun scanEscapeChar(): Char {
         if (isAtEnd()) error("Unterminated escape sequence")
-        val c = advance()
-        return when (c) {
+        return when (val c = advance()) {
             't' -> '\t'
             'b' -> '\b'
             'n' -> '\n'
@@ -904,10 +909,11 @@ class Lexer(private val source: String) {
         val lastType = tokens.last().type
         return when (lastType) {
             // These tokens indicate the line continues
-            TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.SLASH,
-            TokenType.PERCENT,
+            TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.STAR_STAR,
+            TokenType.SLASH, TokenType.PERCENT,
             TokenType.EQUAL, TokenType.PLUS_EQUAL, TokenType.MINUS_EQUAL,
-            TokenType.STAR_EQUAL, TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL,
+            TokenType.STAR_EQUAL, TokenType.STAR_STAR_EQUAL,
+            TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL,
             TokenType.AMP_AMP, TokenType.PIPE_PIPE,
             TokenType.LESS, TokenType.GREATER, TokenType.LESS_EQUAL, TokenType.GREATER_EQUAL,
             TokenType.EQUAL_EQUAL, TokenType.BANG_EQUAL,
@@ -951,7 +957,7 @@ class Lexer(private val source: String) {
         val content = if (raw.startsWith("\n")) raw.substring(1) else raw
 
         // If empty after stripping, return empty
-        if (content.length == 0) return ""
+        if (content.isEmpty()) return ""
 
         // Step 2: Find the last line — this determines base indentation
         val lastNewline = content.lastIndexOf('\n')

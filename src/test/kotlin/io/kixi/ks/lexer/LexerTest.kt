@@ -1,5 +1,6 @@
 package io.kixi.ks.lexer
 
+import io.kixi.ks.SourceLocation
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe

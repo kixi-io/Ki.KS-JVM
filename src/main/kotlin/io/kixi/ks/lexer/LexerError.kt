@@ -1,4 +1,7 @@
 package io.kixi.ks.lexer
+
+import io.kixi.ks.SourceLocation
+
 /**
  * Error thrown during lexing when invalid or unexpected characters are encountered.
  */

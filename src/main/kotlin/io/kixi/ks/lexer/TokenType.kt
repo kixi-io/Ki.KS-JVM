@@ -9,6 +9,10 @@ package io.kixi.ks.lexer
  * - Delimiters (brackets, braces, parens, etc.)
  * - Keywords (var, let, fun, class, trait, enum, control flow, etc.)
  * - Special (EOF, NEWLINE, identifiers)
+ *
+ * Changes from previous version:
+ * - Added STAR_STAR (**) for exponentiation: 5**3
+ * - Added STAR_STAR_EQUAL (**=) for compound exponentiation assignment
  */
 enum class TokenType {
 
@@ -40,6 +44,7 @@ enum class TokenType {
     PLUS,                   // +
     MINUS,                  // -
     STAR,                   // *
+    STAR_STAR,              // ** (exponentiation)
     SLASH,                  // /
     PERCENT,                // %
 
@@ -65,6 +70,7 @@ enum class TokenType {
     PLUS_EQUAL,             // +=
     MINUS_EQUAL,            // -=
     STAR_EQUAL,             // *=
+    STAR_STAR_EQUAL,        // **= (compound exponentiation)
     SLASH_EQUAL,            // /=
     PERCENT_EQUAL,          // %=
 

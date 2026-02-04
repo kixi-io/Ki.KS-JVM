@@ -1,4 +1,4 @@
-package io.kixi.ks.lexer
+package io.kixi.ks
 
 /**
  * Represents a position in KS source code. Used by tokens, AST nodes, and error messages.

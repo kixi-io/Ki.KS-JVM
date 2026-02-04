@@ -1,5 +1,7 @@
 package io.kixi.ks.lexer
 
+import io.kixi.ks.SourceLocation
+
 /**
  * A single token produced by the KS Lexer.
  *
