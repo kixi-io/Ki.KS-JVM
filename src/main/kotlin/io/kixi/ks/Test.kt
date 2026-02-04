@@ -1,8 +1,7 @@
 package io.kixi.ks
 
-class Test {
-}
+import io.kixi.Email
 
 fun main() {
-    println("Hello, World!")
+    println("Hello, World! ${Email.of("dan@ikayzo.com")}")
 }
