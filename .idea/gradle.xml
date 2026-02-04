@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GradleSettings">
+    <option name="linkedExternalProjectsSettings">
+      <GradleProjectSettings>
+        <compositeConfiguration>
+          <compositeBuild compositeDefinitionSource="SCRIPT">
+            <builds>
+              <build path="$PROJECT_DIR$/../Ki.Core-JVM" name="Ki.Core-JVM">
+                <projects>
+                  <project path="$PROJECT_DIR$/../Ki.Core-JVM" />
+                </projects>
+              </build>
+              <build path="$PROJECT_DIR$/../Ki.KD-JVM" name="Ki.KD-JVM">
+                <projects>
+                  <project path="$PROJECT_DIR$/../Ki.KD-JVM" />
+                </projects>
+              </build>
+            </builds>
+          </compositeBuild>
+        </compositeConfiguration>
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="gradleHome" value="" />
+        <option name="modules">
+          <set>
+            <option value="$PROJECT_DIR$/../Ki.Core-JVM" />
+            <option value="$PROJECT_DIR$/../Ki.KD-JVM" />
+            <option value="$PROJECT_DIR$" />
+          </set>
+        </option>
+      </GradleProjectSettings>
+    </option>
+  </component>
+</project>
