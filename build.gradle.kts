@@ -15,7 +15,7 @@ description = "ki-ks"
 
 // Application config goes HERE - outside plugins block
 application {
-    mainClass.set("MainKt")
+    mainClass.set("AppKt")
 }
 
 repositories {

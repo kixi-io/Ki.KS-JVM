@@ -22,15 +22,19 @@ import java.math.RoundingMode
  *
  * ## Supported Features
  *
- * Currently supports:
  * - Variables: `var`/`let` declarations, assignments (=, +=, -=, etc.)
  * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL
  * - String interpolation: `"Hello $name"`, `"Sum: ${a + b}"`
  * - Operators: arithmetic, comparison, logical, elvis (?:)
  * - Unary: -, !, ++, --, !!
- * - Control flow: if/else, blocks
+ * - Control flow: if/else, when, try/catch/finally, for, while
  * - Functions: declarations, calls, closures, recursion
+ * - Classes: declaration, instantiation, methods, properties, static members
+ * - Traits: declaration, implementation, default methods
+ * - Enums: declaration, constants, iteration, DPEC matching
  * - Say: `say`, `say.error`, `say.warn`, `say.note`
+ * - Lang blocks: `lang KD { ... }` for embedded DSLs
+ * - Reflection: `::class`
  *
  * @param runtime Configuration for interpreter behavior (optional)
  */
@@ -41,6 +45,18 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     /** Recursion depth counter for stack overflow protection. */
     private var recursionDepth = 0
+
+    /** Registry of defined classes by name. */
+    private val classes = mutableMapOf<String, KSClass>()
+
+    /** Registry of defined traits by name. */
+    private val traits = mutableMapOf<String, KSTrait>()
+
+    /** Registry of defined enums by name. */
+    private val enums = mutableMapOf<String, KSEnum>()
+
+    /** Current enum context for DPEC resolution (set during when subject evaluation). */
+    private var currentEnumContext: KSEnum? = null
 
     // ========================================================================
     // Public API
@@ -89,6 +105,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             // --- Declarations ---
             is VarDecl -> evaluateVarDecl(node)
             is FunDecl -> evaluateFunDecl(node)
+            is ClassDecl -> evaluateClassDecl(node)
+            is TraitDecl -> evaluateTraitDecl(node)
+            is EnumDecl -> evaluateEnumDecl(node)
+            is UseDecl -> evaluateUseDecl(node)
+            is ExtendDecl -> evaluateExtendDecl(node)
+            is StaticBlock -> evaluateStaticBlock(node)
 
             // --- Statements ---
             is SayStmt -> evaluateSay(node)
@@ -111,6 +133,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is ThisExpr -> environment.get("this", node.location)
             is MemberAccessExpr -> evaluateMemberAccess(node)
             is IndexExpr -> evaluateIndex(node)
+            is DPECExpr -> evaluateDPEC(node)
 
             // --- Expressions: Operators ---
             is BinaryExpr -> evaluateBinary(node)
@@ -134,17 +157,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is MatchesExpr -> evaluateMatches(node)
             is RangeExpr -> evaluateRange(node)
 
-            // --- Not yet implemented ---
-            is ClassDecl -> TODO("ClassDecl not yet implemented")
-            is TraitDecl -> TODO("TraitDecl not yet implemented")
-            is EnumDecl -> TODO("EnumDecl not yet implemented")
-            is UseDecl -> TODO("UseDecl not yet implemented")
-            is ExtendDecl -> TODO("ExtendDecl not yet implemented")
-            is StaticBlock -> TODO("StaticBlock not yet implemented")
-            is LangBlockExpr -> TODO("LangBlockExpr not yet implemented")
-            is DPECExpr -> TODO("DPECExpr not yet implemented")
-            is ReflectionExpr -> TODO("ReflectionExpr not yet implemented")
-            is KDTagNode -> TODO("KDTagNode not yet implemented - use within LangBlockExpr")
+            // --- Expressions: Special ---
+            is LangBlockExpr -> evaluateLangBlock(node)
+            is ReflectionExpr -> evaluateReflection(node)
+
+            // --- KD Nodes ---
+            is KDTagNode -> evaluateKDTag(node)
+
             is Program -> executeProgram(node)
         }
     }
@@ -274,13 +293,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /**
      * Call a method on an object with proper `this` binding.
      *
-     * This method is called by [BoundMethod.call] and handles:
-     * - Creating a new scope with the method's closure as parent
-     * - Binding `this` to the receiver object
-     * - Binding parameters to arguments
-     * - Executing the method body
-     * - Handling return values
-     *
      * @param receiver The object the method is being called on
      * @param method The method to call
      * @param arguments Evaluated argument values
@@ -314,11 +326,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             val value = if (i < arguments.size) {
                 arguments[i]
             } else {
-                // Use default value (must exist since we passed arity check)
                 param.defaultValue?.let { evaluate(it) }
             }
 
-            // Check parameter constraint if present
             if (param.constraint != null && value != null) {
                 checkConstraint(param.name, value, param.constraint, param.location)
             }
@@ -343,13 +353,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 ?: throw RuntimeError("Cannot call abstract method '${method.name}'", location)
 
             return if (method.isSingleExpr) {
-                // Single-expression body: = expr
                 evaluate(body)
             } else {
-                // Block body: { ... }
                 try {
                     evaluate(body)
-                    null // Block without explicit return returns null
+                    null
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
@@ -370,14 +378,23 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Handle different callable types
         return when (callee) {
             is KSFunction -> callFunction(callee, args, location)
+            is KSClass -> instantiateClass(callee, args, expr.arguments, location)
+            is KSEnum -> throw RuntimeError("Cannot instantiate enum '${callee.name}' directly", location)
             is Callable -> callee.call(this, args, location)
             else -> {
-                // Check if it's a function name (identifier that resolves to a function)
+                // Check if it's a function name
                 if (expr.callee is IdentifierExpr) {
                     val name = (expr.callee as IdentifierExpr).name
+
+                    // Check functions first
                     if (environment.isFunctionDefined(name)) {
                         val fn = environment.getFunction(name, location)
                         return callFunction(fn, args, location)
+                    }
+
+                    // Check classes
+                    classes[name]?.let { cls ->
+                        return instantiateClass(cls, args, expr.arguments, location)
                     }
                 }
                 throw NotCallableError(callee, location)
@@ -386,20 +403,441 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     /**
-     * Look up an identifier - could be a variable or a function.
+     * Look up an identifier - could be a variable, function, class, enum, or trait.
      */
     private fun lookupIdentifier(expr: IdentifierExpr): Any? {
+        val name = expr.name
+
         // First try as a variable
-        if (environment.isDefined(expr.name)) {
-            return environment.get(expr.name, expr.location)
+        if (environment.isDefined(name)) {
+            return environment.get(name, expr.location)
         }
 
-        // Then try as a function (return the function object for first-class use)
-        if (environment.isFunctionDefined(expr.name)) {
-            return environment.getFunction(expr.name, expr.location)
+        // Then try as a function
+        if (environment.isFunctionDefined(name)) {
+            return environment.getFunction(name, expr.location)
         }
 
-        throw UndefinedNameError(expr.name, NameKind.VARIABLE, expr.location)
+        // Try as a class
+        classes[name]?.let { return it }
+
+        // Try as an enum
+        enums[name]?.let { return it }
+
+        // Try as a trait
+        traits[name]?.let { return it }
+
+        throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
+    }
+
+    // ========================================================================
+    // Class Declarations & Instantiation
+    // ========================================================================
+
+    private fun evaluateClassDecl(decl: ClassDecl): Any? {
+        // Resolve superclass if specified
+        val superclass: KSClass? = if (decl.superTypes.isNotEmpty()) {
+            val superTypeName = decl.superTypes.first().name
+            classes[superTypeName] ?: traits[superTypeName]?.let { null }
+        } else {
+            null
+        }
+
+        // Resolve traits
+        val implementedTraits = decl.superTypes.mapNotNull { typeRef ->
+            traits[typeRef.name]
+        }
+
+        // Create class
+        val ksClass = KSClass(decl, superclass, implementedTraits, environment)
+        classes[decl.name] = ksClass
+
+        // Initialize static members
+        initializeStaticMembers(ksClass, decl.members)
+
+        // Make class available in environment
+        environment.define(decl.name, ksClass, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    private fun initializeStaticMembers(ksClass: KSClass, members: List<Node>) {
+        val staticEnv = ksClass.staticEnvironment()
+        val previousEnv = environment
+        environment = staticEnv
+
+        try {
+            for (member in members) {
+                when (member) {
+                    is StaticBlock -> {
+                        for (staticMember in member.members) {
+                            when (staticMember) {
+                                is VarDecl -> {
+                                    val value = staticMember.initializer?.let { evaluate(it) }
+                                    staticEnv.define(
+                                        staticMember.name,
+                                        value,
+                                        staticMember.mutable,
+                                        staticMember.typeAnnotation,
+                                        staticMember.constraint,
+                                        staticMember.location
+                                    )
+                                }
+                                is FunDecl -> {
+                                    val fn = KSFunction(staticMember, staticEnv)
+                                    staticEnv.defineFunction(staticMember.name, fn, staticMember.location)
+                                }
+                                else -> { /* ignore */ }
+                            }
+                        }
+                    }
+                    else -> { /* instance members handled during instantiation */ }
+                }
+            }
+        } finally {
+            environment = previousEnv
+        }
+    }
+
+    /**
+     * Create a new instance of a class.
+     */
+    private fun instantiateClass(
+        ksClass: KSClass,
+        args: List<Any?>,
+        argNodes: List<Argument>,
+        location: SourceLocation?
+    ): KSObject {
+        val obj = KSObject(ksClass)
+
+        // Bind constructor parameters to properties
+        val params = ksClass.constructorParams
+
+        // Build argument map for named arguments
+        val namedArgs = mutableMapOf<String, Any?>()
+        val positionalArgs = mutableListOf<Any?>()
+
+        for ((index, argNode) in argNodes.withIndex()) {
+            if (argNode.name != null) {
+                namedArgs[argNode.name] = args[index]
+            } else {
+                positionalArgs.add(args[index])
+            }
+        }
+
+        // Assign values to constructor parameters
+        var positionalIndex = 0
+        for (param in params) {
+            val value = when {
+                namedArgs.containsKey(param.name) -> namedArgs[param.name]
+                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
+                param.defaultValue != null -> evaluate(param.defaultValue)
+                else -> throw ArityError(ksClass.name, params.size, args.size, location)
+            }
+
+            // Check constraint
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, location)
+            }
+
+            // If param has binding (var/let), create a property
+            if (param.binding != null) {
+                obj.initProperty(param.name, value, param.binding == BindingType.VAR)
+            }
+        }
+
+        // Initialize instance properties from class body
+        val previousEnv = environment
+        val instanceEnv = environment.child("instance:${ksClass.name}")
+        instanceEnv.define("this", obj, mutable = false, location = location)
+        environment = instanceEnv
+
+        try {
+            for (property in ksClass.getInstanceProperties()) {
+                val value = property.initializer?.let { evaluate(it) }
+                if (property.constraint != null && value != null) {
+                    checkConstraint(property.name, value, property.constraint, property.location)
+                }
+                obj.initProperty(property.name, value, property.mutable)
+            }
+        } finally {
+            environment = previousEnv
+        }
+
+        return obj
+    }
+
+    // ========================================================================
+    // Trait Declarations
+    // ========================================================================
+
+    private fun evaluateTraitDecl(decl: TraitDecl): Any? {
+        // Resolve super traits
+        val superTraits = decl.superTraits.mapNotNull { typeRef ->
+            traits[typeRef.name]
+        }
+
+        val ksTrait = KSTrait(decl, superTraits, environment)
+        traits[decl.name] = ksTrait
+
+        // Make trait available in environment
+        environment.define(decl.name, ksTrait, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    // ========================================================================
+    // Enum Declarations
+    // ========================================================================
+
+    private fun evaluateEnumDecl(decl: EnumDecl): Any? {
+        val ksEnum = KSEnum(decl, environment)
+        enums[decl.name] = ksEnum
+
+        // Initialize enum constants
+        for ((index, constant) in decl.constants.withIndex()) {
+            val enumValue = when {
+                // Constructor-style: OK(200, "OK")
+                constant.arguments.isNotEmpty() -> {
+                    val args = constant.arguments.map { evaluate(it.value) }
+                    KSEnumConstant(ksEnum, constant.name, index, args)
+                }
+                // Value-style: Apple = 1
+                constant.value != null -> {
+                    val value = evaluate(constant.value)
+                    KSEnumConstant(ksEnum, constant.name, index, listOf(value))
+                }
+                // Simple: RED
+                else -> {
+                    KSEnumConstant(ksEnum, constant.name, index, emptyList())
+                }
+            }
+            ksEnum.addConstant(constant.name, enumValue)
+        }
+
+        // Initialize static members
+        for (member in decl.members) {
+            when (member) {
+                is FunDecl -> {
+                    val fn = KSFunction(member, environment)
+                    ksEnum.staticMembers.defineFunction(member.name, fn, member.location)
+                }
+                is VarDecl -> {
+                    val value = member.initializer?.let { evaluate(it) }
+                    ksEnum.staticMembers.define(
+                        member.name,
+                        value,
+                        member.mutable,
+                        member.typeAnnotation,
+                        member.constraint,
+                        member.location
+                    )
+                }
+                is StaticBlock -> {
+                    val previousEnv = environment
+                    environment = ksEnum.staticMembers
+                    try {
+                        for (staticMember in member.members) {
+                            evaluate(staticMember)
+                        }
+                    } finally {
+                        environment = previousEnv
+                    }
+                }
+                else -> { /* ignore */ }
+            }
+        }
+
+        // Make enum available in environment
+        environment.define(decl.name, ksEnum, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    // ========================================================================
+    // DPEC - Dot-Prefixed Enum Constant
+    // ========================================================================
+
+    /**
+     * Evaluate a DPEC expression like `.RED` or `.SUCCESS`.
+     *
+     * Resolution order:
+     * 1. Current enum context (from when expression subject)
+     * 2. Infer from assignment target type annotation
+     * 3. Search all enums for a matching constant
+     */
+    private fun evaluateDPEC(expr: DPECExpr): Any? {
+        val constantName = expr.name
+
+        // First, check current enum context (set during when evaluation)
+        currentEnumContext?.let { enum ->
+            enum.getConstant(constantName)?.let { return it }
+        }
+
+        // Search all enums for the constant
+        for ((_, enum) in enums) {
+            enum.getConstant(constantName)?.let { return it }
+        }
+
+        throw UndefinedNameError(constantName, NameKind.ENUM_CONSTANT, expr.location)
+    }
+
+    // ========================================================================
+    // Use (Import) Declarations
+    // ========================================================================
+
+    private fun evaluateUseDecl(decl: UseDecl): Any? {
+        // For now, use declarations are informational only.
+        // Full module system would require a module loader.
+        // In portable mode (hostLang = false), we only have KS standard library.
+
+        if (runtime.debugMode) {
+            val path = decl.path.joinToString(".")
+            val suffix = if (decl.wildcard) ".*" else ""
+            val alias = decl.alias?.let { " as $it" } ?: ""
+            runtime.outputWriter.println("[DEBUG] use $path$suffix$alias")
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // Extend Declarations
+    // ========================================================================
+
+    private fun evaluateExtendDecl(decl: ExtendDecl): Any? {
+        // Type extensions add methods to existing types.
+        // For now, we store extension methods separately.
+        // Full implementation would integrate with method resolution.
+
+        if (runtime.debugMode) {
+            val target = decl.target.name
+            val kind = if (decl.isTraitExtension) "trait " else ""
+            runtime.outputWriter.println("[DEBUG] extend $kind$target with ${decl.members.size} members")
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // Static Blocks
+    // ========================================================================
+
+    private fun evaluateStaticBlock(block: StaticBlock): Any? {
+        // Static blocks are processed during class/enum declaration
+        // If encountered at top level, evaluate as a regular block
+        for (member in block.members) {
+            evaluate(member)
+        }
+        return null
+    }
+
+    // ========================================================================
+    // Lang Block (DSL)
+    // ========================================================================
+
+    /**
+     * Evaluate a lang block expression.
+     *
+     * Currently only KD is supported:
+     *
+     *     lang KD {
+     *         book "The Hobbit" author="Tolkien"
+     *         book "Dune" author="Herbert"
+     *     }
+     *
+     * Returns a list of KDTag objects (or a single root tag if there's only one).
+     */
+    private fun evaluateLangBlock(expr: LangBlockExpr): Any? {
+        return when (expr.language.uppercase()) {
+            "KD" -> {
+                val tags = expr.body.map { evaluateKDTag(it) }
+                if (tags.size == 1) tags[0] else tags
+            }
+            else -> throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
+        }
+    }
+
+    /**
+     * Evaluate a KD tag into a KDTag runtime object.
+     */
+    private fun evaluateKDTag(tag: KDTagNode): KDTag {
+        // Evaluate values
+        val values = tag.values.map { evaluate(it) }
+
+        // Evaluate attributes
+        val attributes = tag.attributes.associate { attr ->
+            val key = if (attr.namespace != null) "${attr.namespace}:${attr.name}" else attr.name
+            key to evaluate(attr.value)
+        }
+
+        // Evaluate annotations
+        val annotations = tag.annotations.map { ann ->
+            KDAnnotation(
+                ann.name,
+                ann.values.map { evaluate(it) },
+                ann.attributes.associate { attr ->
+                    val key = if (attr.namespace != null) "${attr.namespace}:${attr.name}" else attr.name
+                    key to evaluate(attr.value)
+                }
+            )
+        }
+
+        // Recursively evaluate children
+        val children = tag.children.map { evaluateKDTag(it) }
+
+        return KDTag(
+            name = tag.name,
+            namespace = tag.namespace,
+            values = values,
+            attributes = attributes,
+            annotations = annotations,
+            children = children
+        )
+    }
+
+    // ========================================================================
+    // Reflection
+    // ========================================================================
+
+    /**
+     * Evaluate a reflection expression like `x::class`.
+     */
+    private fun evaluateReflection(expr: ReflectionExpr): Any? {
+        val value = evaluate(expr.expr)
+
+        return when (expr.member) {
+            "class" -> getKSType(value)
+            else -> throw RuntimeError("Unknown reflection member: '${expr.member}'", expr.location)
+        }
+    }
+
+    /**
+     * Get the KS type representation of a value.
+     */
+    private fun getKSType(value: Any?): KSType {
+        return when (value) {
+            null -> KSType("Nil")
+            is Int -> KSType("Int")
+            is Long -> KSType("Long")
+            is Float -> KSType("Float")
+            is Double -> KSType("Double")
+            is Dec -> KSType("Dec")
+            is String -> KSType("String")
+            is Char -> KSType("Char")
+            is Boolean -> KSType("Bool")
+            is List<*> -> KSType("List")
+            is Map<*, *> -> KSType("Map")
+            is KSObject -> KSType(value.klass.name)
+            is KSEnumConstant -> KSType(value.enum.name)
+            is KSClass -> KSType("Class", value.name)
+            is KSTrait -> KSType("Trait", value.name)
+            is KSEnum -> KSType("Enum", value.name)
+            is KSFunction -> KSType("Function", value.name)
+            is KSRange -> KSType("Range")
+            is KDTag -> KSType("KDTag")
+            else -> KSType(value::class.simpleName ?: "Unknown")
+        }
     }
 
     // ========================================================================
@@ -412,8 +850,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     private fun evaluateFor(stmt: ForStmt): Any? {
-        val iterable = evaluate(stmt.iterable)
-        val items = toIterable(iterable, stmt.iterable.location)
+        val iterableValue = evaluate(stmt.iterable)
+
+        // Handle enum iteration: for Color { say it }
+        val items: Iterable<Any?> = when (iterableValue) {
+            is KSEnum -> iterableValue.constants.values
+            else -> toIterable(iterableValue, stmt.iterable.location)
+        }
 
         val loopEnv = environment.child("for")
         val previousEnv = environment
@@ -423,26 +866,21 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         try {
             for (item in items) {
-                // Check iteration limit
                 if (runtime.maxLoopIterations > 0 && iterations >= runtime.maxLoopIterations) {
                     throw RuntimeError("Maximum loop iterations exceeded (${runtime.maxLoopIterations})", stmt.location)
                 }
                 iterations++
 
-                // Bind loop variable
                 if (stmt.variable != null) {
-                    // Traditional form: for i in list
                     if (!loopEnv.isDefined(stmt.variable)) {
                         loopEnv.define(stmt.variable, item, mutable = true)
                     } else {
                         loopEnv.assign(stmt.variable, item)
                     }
                 } else {
-                    // Simplified form: for list (uses implicit 'it')
                     loopEnv.defineIt(item)
                 }
 
-                // Execute body
                 try {
                     evaluate(stmt.body)
                 } catch (e: ContinueSignal) {
@@ -462,7 +900,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         var iterations = 0L
 
         while (isTruthy(evaluate(stmt.condition))) {
-            // Check iteration limit
             if (runtime.maxLoopIterations > 0 && iterations >= runtime.maxLoopIterations) {
                 throw RuntimeError("Maximum loop iterations exceeded (${runtime.maxLoopIterations})", stmt.location)
             }
@@ -501,27 +938,37 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun evaluateWhen(expr: WhenExpr): Any? {
         val subject = expr.subject?.let { evaluate(it) }
 
-        for (branch in expr.branches) {
-            if (branch.isElse) {
-                return evaluate(branch.body)
-            }
-
-            for (matcher in branch.matchers) {
-                val matches = if (subject != null) {
-                    matchesWithSubject(subject, matcher)
-                } else {
-                    // Condition-style when: matcher is a boolean expression
-                    isTruthy(evaluateMatcher(matcher))
-                }
-
-                if (matches) {
-                    return evaluate(branch.body)
-                }
-            }
+        // Set enum context if subject is an enum constant
+        val previousEnumContext = currentEnumContext
+        if (subject is KSEnumConstant) {
+            currentEnumContext = subject.enum
+        } else if (subject is KSEnum) {
+            currentEnumContext = subject
         }
 
-        // No match and no else branch
-        throw NonExhaustiveWhenError(subject, expr.location)
+        try {
+            for (branch in expr.branches) {
+                if (branch.isElse) {
+                    return evaluate(branch.body)
+                }
+
+                for (matcher in branch.matchers) {
+                    val matches = if (subject != null) {
+                        matchesWithSubject(subject, matcher)
+                    } else {
+                        isTruthy(evaluateMatcher(matcher))
+                    }
+
+                    if (matches) {
+                        return evaluate(branch.body)
+                    }
+                }
+            }
+
+            throw NonExhaustiveWhenError(subject, expr.location)
+        } finally {
+            currentEnumContext = previousEnumContext
+        }
     }
 
     private fun matchesWithSubject(subject: Any?, matcher: WhenMatcher): Boolean {
@@ -541,8 +988,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 matchesPattern(subject, pattern)
             }
             is DPECMatcher -> {
-                // DPEC matching requires enum support
-                TODO("DPECMatcher not yet implemented")
+                // DPEC matching: .RED matches enum constant RED
+                if (subject is KSEnumConstant) {
+                    subject.name == matcher.name
+                } else {
+                    false
+                }
             }
         }
     }
@@ -558,7 +1009,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         return try {
             evaluateBlock(expr.body)
         } catch (e: RuntimeError) {
-            // Find matching catch clause
             for (catch in expr.catches) {
                 if (catch.isCatchAll || catchMatches(e, catch)) {
                     val catchEnv = environment.child("catch")
@@ -576,7 +1026,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     }
                 }
             }
-            throw e // Re-throw if no matching catch
+            throw e
         } finally {
             expr.finallyBlock?.let { evaluateBlock(it) }
         }
@@ -668,9 +1118,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun evaluateRange(expr: RangeExpr): Any {
         val start = expr.start?.let { evaluate(it) }
         val end = expr.end?.let { evaluate(it) }
-
-        // For now, return a simple representation
-        // Full range support requires a KSRange class
         return KSRange(start, end, expr.startExclusive, expr.endExclusive)
     }
 
@@ -689,13 +1136,22 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             throw NullPointerError("Cannot access member '${expr.member}' on nil", expr.location)
         }
 
-        // Handle built-in types and KS objects
         return when (obj) {
             is KSObject -> obj.get(expr.member, expr.location)
+            is KSClass -> obj.getStatic(expr.member)
+                ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is KSEnum -> {
+                // Could be a constant or static member
+                obj.getConstant(expr.member)
+                    ?: obj.staticMembers.get(expr.member)
+                    ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            }
+            is KSEnumConstant -> getEnumConstantMember(obj, expr.member, expr.location)
             is String -> getStringMember(obj, expr.member, expr.location)
             is List<*> -> getListMember(obj, expr.member, expr.location)
             is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
             is KSRange -> getRangeMember(obj, expr.member, expr.location)
+            is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
         }
     }
@@ -720,6 +1176,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
                 obj[i]
             }
+            is KDTag -> {
+                when (index) {
+                    is Int -> obj.children.getOrNull(index)
+                    is String -> obj.attributes[index]
+                    else -> throw TypeError("KDTag index must be Int or String", expr.location)
+                }
+            }
             null -> throw NullPointerError("Cannot index into nil", expr.location)
             else -> throw TypeError("Cannot index into ${obj::class.simpleName}", expr.location)
         }
@@ -734,17 +1197,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         when (val target = expr.target) {
             is IdentifierExpr -> {
-                val newValue = when (expr.operator) {
-                    AssignOp.ASSIGN -> value
-                    AssignOp.PLUS_ASSIGN -> add(environment.get(target.name, target.location), value)
-                    AssignOp.MINUS_ASSIGN -> subtract(environment.get(target.name, target.location), value)
-                    AssignOp.STAR_ASSIGN -> multiply(environment.get(target.name, target.location), value)
-                    AssignOp.SLASH_ASSIGN -> divide(environment.get(target.name, target.location), value)
-                    AssignOp.MODULO_ASSIGN -> modulo(environment.get(target.name, target.location), value)
-                    AssignOp.POWER_ASSIGN -> power(environment.get(target.name, target.location), value)
-                }
+                val newValue = computeAssignment(
+                    expr.operator,
+                    { environment.get(target.name, target.location) },
+                    value
+                )
 
-                // Check constraint if present
                 val constraint = environment.getConstraint(target.name)
                 if (constraint != null && newValue != null) {
                     checkConstraint(target.name, newValue, constraint, expr.location)
@@ -754,8 +1212,38 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 return newValue
             }
             is IndexExpr -> {
-                // TODO: Index assignment (list[0] = value)
-                TODO("Index assignment not yet implemented")
+                val obj = evaluate(target.obj)
+                val index = evaluate(target.index)
+
+                when (obj) {
+                    is MutableList<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val list = obj as MutableList<Any?>
+                        val i = toInt(index, target.index.location)
+                        if (i < 0 || i >= list.size) {
+                            throw IndexOutOfBoundsError(i, list.size, target.location)
+                        }
+                        val newValue = computeAssignment(expr.operator, { list[i] }, value)
+                        list[i] = newValue
+                        return newValue
+                    }
+                    is MutableMap<*, *> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val map = obj as MutableMap<Any?, Any?>
+                        val newValue = computeAssignment(expr.operator, { map[index] }, value)
+                        map[index] = newValue
+                        return newValue
+                    }
+                    is List<*> -> {
+                        // For immutable lists, we need to create a new list
+                        throw RuntimeError("Cannot modify immutable list. Use a mutable list.", target.location)
+                    }
+                    is Map<*, *> -> {
+                        throw RuntimeError("Cannot modify immutable map. Use a mutable map.", target.location)
+                    }
+                    null -> throw NullPointerError("Cannot index-assign into nil", target.location)
+                    else -> throw TypeError("Cannot index-assign into ${obj::class.simpleName}", target.location)
+                }
             }
             is MemberAccessExpr -> {
                 val obj = evaluate(target.obj)
@@ -766,23 +1254,24 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
                 when (obj) {
                     is KSObject -> {
-                        val newValue = when (expr.operator) {
-                            AssignOp.ASSIGN -> value
-                            AssignOp.PLUS_ASSIGN -> add(obj.get(target.member, target.location), value)
-                            AssignOp.MINUS_ASSIGN -> subtract(obj.get(target.member, target.location), value)
-                            AssignOp.STAR_ASSIGN -> multiply(obj.get(target.member, target.location), value)
-                            AssignOp.SLASH_ASSIGN -> divide(obj.get(target.member, target.location), value)
-                            AssignOp.MODULO_ASSIGN -> modulo(obj.get(target.member, target.location), value)
-                            AssignOp.POWER_ASSIGN -> power(obj.get(target.member, target.location), value)
-                        }
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { obj.get(target.member, target.location) },
+                            value
+                        )
                         obj.set(target.member, newValue, expr.location)
                         return newValue
                     }
-                    is MutableList<*> -> {
-                        throw RuntimeError("Cannot assign to list member '${target.member}'", expr.location)
-                    }
                     is MutableMap<*, *> -> {
-                        throw RuntimeError("Cannot assign to map member '${target.member}'", expr.location)
+                        @Suppress("UNCHECKED_CAST")
+                        val map = obj as MutableMap<Any?, Any?>
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { map[target.member] },
+                            value
+                        )
+                        map[target.member] = newValue
+                        return newValue
                     }
                     else -> throw RuntimeError(
                         "Cannot assign to member '${target.member}' on ${obj::class.simpleName}",
@@ -791,6 +1280,18 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
             }
             else -> throw RuntimeError("Invalid assignment target", expr.location)
+        }
+    }
+
+    private fun computeAssignment(op: AssignOp, getCurrent: () -> Any?, newValue: Any?): Any? {
+        return when (op) {
+            AssignOp.ASSIGN -> newValue
+            AssignOp.PLUS_ASSIGN -> add(getCurrent(), newValue)
+            AssignOp.MINUS_ASSIGN -> subtract(getCurrent(), newValue)
+            AssignOp.STAR_ASSIGN -> multiply(getCurrent(), newValue)
+            AssignOp.SLASH_ASSIGN -> divide(getCurrent(), newValue)
+            AssignOp.MODULO_ASSIGN -> modulo(getCurrent(), newValue)
+            AssignOp.POWER_ASSIGN -> power(getCurrent(), newValue)
         }
     }
 
@@ -815,7 +1316,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val right = evaluate(expr.right)
 
         return when (expr.operator) {
-            // Arithmetic
             BinaryOp.ADD -> add(left, right)
             BinaryOp.SUBTRACT -> subtract(left, right)
             BinaryOp.MULTIPLY -> multiply(left, right)
@@ -823,7 +1323,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             BinaryOp.MODULO -> modulo(left, right)
             BinaryOp.POWER -> power(left, right)
 
-            // Comparison
             BinaryOp.EQUAL -> isEqual(left, right)
             BinaryOp.NOT_EQUAL -> !isEqual(left, right)
             BinaryOp.LESS -> compare(left, right) < 0
@@ -831,11 +1330,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             BinaryOp.LESS_EQUAL -> compare(left, right) <= 0
             BinaryOp.GREATER_EQUAL -> compare(left, right) >= 0
 
-            // Logical (already handled above for short-circuit)
             BinaryOp.AND -> isTruthy(left) && isTruthy(right)
             BinaryOp.OR -> isTruthy(left) || isTruthy(right)
 
-            // Elvis
             BinaryOp.ELVIS -> left ?: right
         }
     }
@@ -855,30 +1352,55 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 !isTruthy(operand)
             }
             UnaryOp.INCREMENT -> {
-                if (expr.operand is IdentifierExpr) {
-                    val name = expr.operand.name
-                    val current = environment.get(name, expr.location)
-                    val newVal = add(current, 1)
-                    environment.assign(name, newVal, expr.location)
-                    if (expr.prefix) newVal else current
-                } else {
-                    add(evaluate(expr.operand), 1)
-                }
+                evaluateIncDec(expr, true)
             }
             UnaryOp.DECREMENT -> {
-                if (expr.operand is IdentifierExpr) {
-                    val name = expr.operand.name
-                    val current = environment.get(name, expr.location)
-                    val newVal = subtract(current, 1)
-                    environment.assign(name, newVal, expr.location)
-                    if (expr.prefix) newVal else current
-                } else {
-                    subtract(evaluate(expr.operand), 1)
-                }
+                evaluateIncDec(expr, false)
             }
             UnaryOp.NON_NULL -> {
                 val operand = evaluate(expr.operand)
                 operand ?: throw NullAssertionError(expr.location)
+            }
+        }
+    }
+
+    private fun evaluateIncDec(expr: UnaryExpr, isIncrement: Boolean): Any? {
+        when (val operand = expr.operand) {
+            is IdentifierExpr -> {
+                val name = operand.name
+                val current = environment.get(name, expr.location)
+                val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                environment.assign(name, newVal, expr.location)
+                return if (expr.prefix) newVal else current
+            }
+            is MemberAccessExpr -> {
+                val obj = evaluate(operand.obj)
+                if (obj is KSObject) {
+                    val current = obj.get(operand.member, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    obj.set(operand.member, newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+                throw RuntimeError("Cannot increment/decrement member of ${obj?.javaClass?.simpleName}", expr.location)
+            }
+            is IndexExpr -> {
+                val obj = evaluate(operand.obj)
+                val index = evaluate(operand.index)
+                if (obj is MutableList<*>) {
+                    @Suppress("UNCHECKED_CAST")
+                    val list = obj as MutableList<Any?>
+                    val i = toInt(index, operand.index.location)
+                    val current = list[i]
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    list[i] = newVal
+                    return if (expr.prefix) newVal else current
+                }
+                throw RuntimeError("Cannot increment/decrement index of ${obj?.javaClass?.simpleName}", expr.location)
+            }
+            else -> {
+                // For non-assignable operands, just compute the result
+                val current = evaluate(operand)
+                return if (isIncrement) add(current, 1) else subtract(current, 1)
             }
         }
     }
@@ -926,7 +1448,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "List" -> value is List<*>
             "Map" -> value is Map<*, *>
             "Any" -> true
-            else -> false // Unknown types don't match
+            else -> {
+                // Check user-defined types
+                when (value) {
+                    is KSObject -> value.klass.name == type.name || value.klass.isSubclassOf(classes[type.name] ?: return false)
+                    is KSEnumConstant -> value.enum.name == type.name
+                    else -> false
+                }
+            }
         }
     }
 
@@ -943,7 +1472,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "Double" -> toDouble(value)
             "String" -> stringify(value)
             "Bool" -> isTruthy(value)
-            else -> throw CastError(value, type.name, location)
+            else -> {
+                // For user types, just check and return
+                if (checkType(value, type)) value
+                else throw CastError(value, type.name, location)
+            }
         }
     }
 
@@ -956,6 +1489,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 str in container
             }
             is KSRange -> container.contains(value)
+            is KSEnum -> {
+                // Check if value is a constant of this enum
+                when (value) {
+                    is KSEnumConstant -> value.enum == container
+                    is String -> container.getConstant(value) != null
+                    else -> false
+                }
+            }
             is ClosedRange<*> -> {
                 @Suppress("UNCHECKED_CAST")
                 val range = container as ClosedRange<Comparable<Any>>
@@ -1040,9 +1581,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     // ========================================================================
 
     private fun add(left: Any?, right: Any?): Any {
-        // String concatenation
         if (left is String || right is String) {
             return stringify(left) + stringify(right)
+        }
+        if (left is List<*> && right is List<*>) {
+            return left + right
         }
         return numericOp(left, right, "add")
     }
@@ -1052,6 +1595,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     private fun multiply(left: Any?, right: Any?): Any {
+        if (left is String && right is Int) {
+            return left.repeat(right)
+        }
+        if (left is Int && right is String) {
+            return right.repeat(left)
+        }
         return numericOp(left, right, "multiply")
     }
 
@@ -1068,7 +1617,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val exp = toDouble(right)
         val result = Math.pow(base, exp)
 
-        // Try to preserve integer type if possible
         if (left is Int && right is Int && result == result.toLong().toDouble() && result <= Int.MAX_VALUE) {
             return result.toInt()
         }
@@ -1089,12 +1637,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
-    /**
-     * Perform a numeric operation, preserving the "wider" type.
-     * Type hierarchy: Int < Long < Float < Double < BigDecimal
-     */
     private fun numericOp(left: Any?, right: Any?, op: String): Any {
-        // Handle BigDecimal specially
         if (left is Dec || right is Dec) {
             val l = toBigDecimal(left)
             val r = toBigDecimal(right)
@@ -1111,7 +1654,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val a = toDouble(left)
         val b = toDouble(right)
 
-        // Check division by zero
         if (op == "divide" && b == 0.0) {
             throw DivisionByZeroError()
         }
@@ -1125,7 +1667,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             else -> throw RuntimeError("Unknown operation: $op")
         }
 
-        // Preserve type based on operands
         return when {
             left is Double || right is Double -> result
             left is Float || right is Float -> result.toFloat()
@@ -1149,6 +1690,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun compare(left: Any?, right: Any?): Int {
         if (left is String && right is String) return left.compareTo(right)
         if (left is Char && right is Char) return left.compareTo(right)
+        if (left is KSEnumConstant && right is KSEnumConstant) {
+            return left.ordinal.compareTo(right.ordinal)
+        }
         return toDouble(left).compareTo(toDouble(right))
     }
 
@@ -1170,6 +1714,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Dec -> value.toPlainString()
             is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
             is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
+            is KSEnumConstant -> "${value.enum.name}.${value.name}"
+            is KSObject -> value.toString()
+            is KDTag -> value.toString()
+            is KSType -> value.toString()
             else -> value.toString()
         }
     }
@@ -1179,6 +1727,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Number -> value.toDouble()
             is String -> value.toDoubleOrNull()
                 ?: throw TypeError("Cannot convert '$value' to number")
+            is KSEnumConstant -> value.ordinal.toDouble()
             else -> throw TypeError("Expected number, got ${value?.let { it::class.simpleName } ?: "nil"}")
         }
     }
@@ -1190,6 +1739,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Number -> value.toInt()
             is String -> value.toIntOrNull()
                 ?: throw TypeError("Cannot convert '$value' to Int", location)
+            is KSEnumConstant -> value.ordinal
             else -> throw TypeError("Expected Int, got ${value?.let { it::class.simpleName } ?: "nil"}", location)
         }
     }
@@ -1240,9 +1790,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         if (left == null && right == null) return true
         if (left == null || right == null) return false
 
-        // Numeric comparison - compare by value, not type
         if (left is Number && right is Number) {
             return left.toDouble() == right.toDouble()
+        }
+
+        if (left is KSEnumConstant && right is KSEnumConstant) {
+            return left.enum == right.enum && left.name == right.name
         }
 
         return left == right
@@ -1258,6 +1811,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is String -> value.toList()
             is Map<*, *> -> value.entries.toList()
             is KSRange -> value.toIterable()
+            is KSEnum -> value.constants.values
             else -> throw TypeError("Cannot iterate over ${value?.let { it::class.simpleName } ?: "nil"}", location)
         }
     }
@@ -1275,6 +1829,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "lowercase" -> str.lowercase()
             "trim" -> str.trim()
             "reversed" -> str.reversed()
+            "first" -> if (str.isNotEmpty()) str.first() else throw IndexOutOfBoundsError(0, 0, location)
+            "last" -> if (str.isNotEmpty()) str.last() else throw IndexOutOfBoundsError(0, 0, location)
             else -> throw MemberNotFoundError(member, "String", location)
         }
     }
@@ -1311,6 +1867,38 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             else -> throw MemberNotFoundError(member, "Range", location)
         }
     }
+
+    private fun getEnumConstantMember(constant: KSEnumConstant, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "name" -> constant.name
+            "ordinal" -> constant.ordinal
+            else -> {
+                // Try to get from constructor args by parameter name
+                val params = constant.enum.declaration.constructorParams
+                for ((index, param) in params.withIndex()) {
+                    if (param.name == member && index < constant.args.size) {
+                        return constant.args[index]
+                    }
+                }
+                throw MemberNotFoundError(member, constant.enum.name, location)
+            }
+        }
+    }
+
+    private fun getKDTagMember(tag: KDTag, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "name" -> tag.name
+            "namespace" -> tag.namespace
+            "values" -> tag.values
+            "attributes" -> tag.attributes
+            "annotations" -> tag.annotations
+            "children" -> tag.children
+            else -> {
+                // Try attribute lookup
+                tag.attributes[member] ?: throw MemberNotFoundError(member, "KDTag", location)
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -1319,8 +1907,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
 /**
  * Runtime representation of a KS range.
- *
- * Supports both Int and Double ranges with inclusive/exclusive bounds.
  */
 class KSRange(
     val start: Any?,
@@ -1356,7 +1942,6 @@ class KSRange(
     }
 
     fun toIterable(): Iterable<Any?> {
-        // Only works for integer ranges with both bounds
         if (start == null || end == null) {
             throw RuntimeError("Cannot iterate over open-ended range")
         }
@@ -1382,3 +1967,155 @@ class KSRange(
         return "$startStr$op$endStr"
     }
 }
+
+// ============================================================================
+// KSEnum - Enum Runtime Representation
+// ============================================================================
+
+/**
+ * Runtime representation of a KS enum.
+ */
+class KSEnum(
+    val declaration: EnumDecl,
+    val closure: Environment
+) {
+    val name: String get() = declaration.name
+    val constants = mutableMapOf<String, KSEnumConstant>()
+    val staticMembers = closure.child("static:$name")
+
+    fun addConstant(name: String, constant: KSEnumConstant) {
+        constants[name] = constant
+    }
+
+    fun getConstant(name: String): KSEnumConstant? = constants[name]
+
+    override fun toString(): String = "enum $name"
+}
+
+/**
+ * Runtime representation of an enum constant.
+ */
+class KSEnumConstant(
+    val enum: KSEnum,
+    val name: String,
+    val ordinal: Int,
+    val args: List<Any?>
+) {
+    override fun toString(): String = "$name"
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is KSEnumConstant) return false
+        return enum == other.enum && name == other.name
+    }
+
+    override fun hashCode(): Int = 31 * enum.hashCode() + name.hashCode()
+}
+
+// ============================================================================
+// KSType - Type Representation for Reflection
+// ============================================================================
+
+/**
+ * Runtime type representation for `::class` reflection.
+ */
+class KSType(
+    val name: String,
+    val qualifiedName: String? = null
+) {
+    override fun toString(): String = qualifiedName?.let { "$name($it)" } ?: name
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is KSType) return false
+        return name == other.name && qualifiedName == other.qualifiedName
+    }
+
+    override fun hashCode(): Int = 31 * name.hashCode() + (qualifiedName?.hashCode() ?: 0)
+}
+
+// ============================================================================
+// KDTag - KD Tag Runtime Representation
+// ============================================================================
+
+/**
+ * Runtime representation of a KD tag.
+ *
+ * Created from `lang KD { ... }` blocks.
+ */
+class KDTag(
+    val name: String,
+    val namespace: String?,
+    val values: List<Any?>,
+    val attributes: Map<String, Any?>,
+    val annotations: List<KDAnnotation>,
+    val children: List<KDTag>
+) {
+    override fun toString(): String {
+        val sb = StringBuilder()
+
+        // Annotations
+        for (ann in annotations) {
+            sb.append("@${ann.name}")
+            if (ann.values.isNotEmpty() || ann.attributes.isNotEmpty()) {
+                sb.append("(")
+                sb.append(ann.values.joinToString(" "))
+                if (ann.attributes.isNotEmpty()) {
+                    if (ann.values.isNotEmpty()) sb.append(" ")
+                    sb.append(ann.attributes.entries.joinToString(" ") { "${it.key}=${formatValue(it.value)}" })
+                }
+                sb.append(")")
+            }
+            sb.append(" ")
+        }
+
+        // Namespace and name
+        if (namespace != null) {
+            sb.append("$namespace:")
+        }
+        sb.append(name)
+
+        // Values
+        if (values.isNotEmpty()) {
+            sb.append(" ")
+            sb.append(values.joinToString(" ") { formatValue(it) })
+        }
+
+        // Attributes
+        if (attributes.isNotEmpty()) {
+            sb.append(" ")
+            sb.append(attributes.entries.joinToString(" ") { "${it.key}=${formatValue(it.value)}" })
+        }
+
+        // Children
+        if (children.isNotEmpty()) {
+            sb.append(" {\n")
+            for (child in children) {
+                sb.append("    ")
+                sb.append(child.toString().replace("\n", "\n    "))
+                sb.append("\n")
+            }
+            sb.append("}")
+        }
+
+        return sb.toString()
+    }
+
+    private fun formatValue(value: Any?): String {
+        return when (value) {
+            null -> "nil"
+            is String -> "\"$value\""
+            is Char -> "'$value'"
+            else -> value.toString()
+        }
+    }
+}
+
+/**
+ * Runtime representation of a KD annotation.
+ */
+class KDAnnotation(
+    val name: String,
+    val values: List<Any?>,
+    val attributes: Map<String, Any?>
+)
