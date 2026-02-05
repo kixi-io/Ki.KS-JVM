@@ -135,7 +135,7 @@ data class TraitDecl(
 data class EnumDecl(
     val name: String,
     val valueType: TypeRef?,                 // e.g. Int in `enum Fruit: Int`
-    val constructorParams: List<Parameter>,  // e.g. (code: Int, msg: String)
+    val constructorParams: List<ConstructorParam>,  // e.g. (code: Int, msg: String)
     val constants: List<EnumConstant>,
     val members: List<Node>,                 // methods, properties, static blocks
     override val location: SourceLocation

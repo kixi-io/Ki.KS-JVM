@@ -244,6 +244,18 @@ let maxConnections = 100
 
 var config = lang KD {
     @version(1 0 0)
+    configuration name="ConfigDemo" {
+        http port=3000
+        limits {
+            maxConnections 100
+            // timeout $(30 * 60)
+        }
+    }
+}
+
+/* TODO: fix interpolation
+var config = lang KD {
+    @version(1 0 0)
     configuration name=$appName {
         http port=$serverPort
         limits {
@@ -252,6 +264,7 @@ var config = lang KD {
         }
     }
 }
+*/
 
 say "KD with computed values (interpolation):"
 say config

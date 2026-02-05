@@ -69,12 +69,22 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * @return The result of the last evaluated expression/statement
      */
     fun execute(source: String): Any? {
-        val lexer = Lexer(source)
-        val tokens = lexer.tokenize()
-        val parser = Parser(tokens)
-        val program = parser.parse()
+        println("executing: $source")
 
-        return executeProgram(program)
+        try {
+            val lexer = Lexer(source)
+            println("Lexer initialized")
+
+            val tokens = lexer.tokenize()
+            val parser = Parser(tokens)
+            val program = parser.parse()
+
+            return executeProgram(program)
+        } catch (e: Exception) {
+            println("Exception: ${e.message}")
+            e.printStackTrace()
+            return null
+        }
     }
 
     /**
@@ -427,9 +437,22 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Try as a trait
         traits[name]?.let { return it }
 
+        // If in a method context, try implicit 'this' property access
+        if (environment.isDefined("this")) {
+            val thisObj = environment.get("this") as? KSObject
+            if (thisObj != null) {
+                if (thisObj.hasProperty(name)) {
+                    return thisObj.get(name, expr.location)
+                }
+                // Also check for methods
+                thisObj.klass.findMethod(name)?.let { method ->
+                    return BoundMethod(thisObj, method)
+                }
+            }
+        }
+
         throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
     }
-
     // ========================================================================
     // Class Declarations & Instantiation
     // ========================================================================
@@ -872,13 +895,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 iterations++
 
                 if (stmt.variable != null) {
-                    if (!loopEnv.isDefined(stmt.variable)) {
+                    if (iterations == 1L) {
+                        // First iteration: define new variable in loop scope (shadows any outer variable)
                         loopEnv.define(stmt.variable, item, mutable = true)
                     } else {
                         loopEnv.assign(stmt.variable, item)
                     }
-                } else {
-                    loopEnv.defineIt(item)
                 }
 
                 try {
@@ -1197,19 +1219,39 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         when (val target = expr.target) {
             is IdentifierExpr -> {
-                val newValue = computeAssignment(
-                    expr.operator,
-                    { environment.get(target.name, target.location) },
-                    value
-                )
+                // Check if this is a variable in scope
+                if (environment.isDefined(target.name)) {
+                    val newValue = computeAssignment(
+                        expr.operator,
+                        { environment.get(target.name, target.location) },
+                        value
+                    )
 
-                val constraint = environment.getConstraint(target.name)
-                if (constraint != null && newValue != null) {
-                    checkConstraint(target.name, newValue, constraint, expr.location)
+                    val constraint = environment.getConstraint(target.name)
+                    if (constraint != null && newValue != null) {
+                        checkConstraint(target.name, newValue, constraint, expr.location)
+                    }
+
+                    environment.assign(target.name, newValue, expr.location)
+                    return newValue
                 }
 
-                environment.assign(target.name, newValue, expr.location)
-                return newValue
+                // If not in scope but we're in a method, try implicit 'this' property
+                if (environment.isDefined("this")) {
+                    val thisObj = environment.get("this") as? KSObject
+                    if (thisObj != null && thisObj.hasProperty(target.name)) {
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { thisObj.get(target.name, target.location) },
+                            value
+                        )
+                        thisObj.set(target.name, newValue, expr.location)
+                        return newValue
+                    }
+                }
+
+                // Not found anywhere
+                throw UndefinedNameError(target.name, NameKind.VARIABLE, expr.location)
             }
             is IndexExpr -> {
                 val obj = evaluate(target.obj)

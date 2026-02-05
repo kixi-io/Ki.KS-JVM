@@ -232,7 +232,7 @@ class DeclarationParser(internal val p: Parser) {
         // Optional constructor parameters: (code: Int, msg: String)
         val constructorParams = if (p.check(LPAREN)) {
             p.advance() // consume (
-            val params = p.types.parseParameterList()
+            val params = p.types.parseConstructorParamList()
             p.expect(RPAREN, "Expected ')' after enum constructor parameters")
             params
         } else {
@@ -250,6 +250,7 @@ class DeclarationParser(internal val p: Parser) {
             // Parse constants (identifiers at the start of the body)
             while (!p.check(RBRACE) && !p.isAtEnd() && isEnumConstantStart()) {
                 constants.add(parseEnumConstant())
+                p.match(COMMA)  // consume optional comma between constants
                 p.skipSeparators()
             }
 

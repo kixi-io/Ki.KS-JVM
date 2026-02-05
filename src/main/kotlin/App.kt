@@ -16,68 +16,26 @@ import java.io.File
  * If no script is provided, runs the default Demo.ks from the source directory.
  */
 fun main() { // args: Array<String>
-
-    println("begin")
-
-    var demoPath = "src/Demo.ks"
-    // var demoPath = "src/main/kotlin/Demo.ks"
-
-    // var args = arrayOf<String>()
-
-    var demoFile = File(demoPath)
-
-    println("demoFile: ${demoFile.exists()}")
-
-    if(demoFile.exists()) {
-
-    }
-
-    try {
-        val runtime = KSRuntime(
-            colorOutput = true,
-            debugMode = false
-        )
-        val interpreter = Interpreter(runtime)
-
-        // Determine script file
-        val scriptFile = when {
-            // args.isNotEmpty() -> File(args[0])
-            !demoFile.exists() -> demoFile
-            else -> findDemoScript()
-        }
-
-        if (scriptFile == null || !scriptFile.exists()) {
-            runInteractiveDemo(interpreter)
-            return
-        }
-
-        runScript(interpreter, scriptFile)
-    } catch (e: Exception) {
-        println(e.message)
-        e.printStackTrace()
-    }
-}
-
-/**
- * Find the Demo.ks script in common locations.
- */
-private fun findDemoScript(): File? {
-    val candidates = listOf(
-        "src/main/kotlin/Demo.ks",
-        "src/Demo.ks",
-        "Demo.ks",
-        "../Demo.ks"
+    val runtime = KSRuntime(
+        colorOutput = true,
+        debugMode = false
     )
 
-    for (path in candidates) {
-        val file = File(path)
-        if (file.exists()) {
-            println("Found Demo.ks at ${file.absolutePath}")
-            return file
-        }
-    }
+    val interpreter = Interpreter(runtime)
 
-    return null
+    println("Begin")
+    var demoPath = "src/main/kotlin/Demo.ks"
+    // var demoPath = "smurf/Demo.ks"
+    var demoFile = File(demoPath)
+    println("Demo file accessed? ${demoFile.exists()}")
+
+    if(!demoFile.exists()) {
+        println("Falling back to App internal gallery.")
+        runInteractiveDemo(interpreter)
+        return
+    } else {
+        runScript(interpreter, demoFile)
+    }
 }
 
 /**
@@ -91,6 +49,27 @@ private fun runScript(interpreter: Interpreter, scriptFile: File) {
     println("${ANSI.BOLD}${ANSI.CYAN}└──────────────────────────────────────────────────────────────────┘${ANSI.RESET}")
     println()
 
+    try {
+        val source = scriptFile.readText()
+        val startTime = System.currentTimeMillis()
+
+        interpreter.execute(source)
+    } catch (e: RuntimeError) {
+        System.err.println()
+        System.err.println("${ANSI.RED}${ANSI.BOLD}Error:${ANSI.RESET} ${e.message}")
+        if (e.location != null) {
+            System.err.println("       at ${e.location}")
+        }
+        System.exit(1)
+    } catch (e: Throwable) {
+        System.err.println()
+        System.err.println("${ANSI.RED}${ANSI.BOLD}Internal Error - Exception:${ANSI.RESET} ${e.message}")
+        e.printStackTrace()
+        System.exit(1)
+    }
+
+
+    /*
     try {
         val source = scriptFile.readText()
         val startTime = System.currentTimeMillis()
@@ -116,6 +95,7 @@ private fun runScript(interpreter: Interpreter, scriptFile: File) {
         e.printStackTrace()
         System.exit(1)
     }
+    */
 }
 
 /**
