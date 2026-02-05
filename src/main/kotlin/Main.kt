@@ -1,16 +1,37 @@
-package io.kixi.lib
+package io.kixi.ks
 
-//TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or
-// click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
-fun main() {
-    val name = "Kotlin"
-    //TIP Press <shortcut actionId="ShowIntentionActions"/> with your caret at the highlighted text
-    // to see how IntelliJ IDEA suggests fixing it.
-    println("Hello, " + name + "!")
+import io.kixi.ks.interp.Interpreter
+import java.io.File
 
-    for (i in 1..5) {
-        //TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-        // for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-        println("i = $i")
+fun main(args: Array<String>) {
+    val interpreter = Interpreter()
+
+    // Use first argument, or default to Demo.ks in src/main/kotlin/
+    val scriptFile = if (args.isNotEmpty()) {
+        File(args[0])
+    } else {
+        File("src/main/kotlin/Demo.ks")
+    }
+
+    if (scriptFile.exists()) {
+        println("Running: ${scriptFile.absolutePath}")
+        println("=".repeat(50))
+        println()
+        try {
+            val source = scriptFile.readText()
+            interpreter.execute(source)
+        } catch (e: Exception) {
+            System.err.println("Error: ${e.message}")
+            e.printStackTrace()
+        }
+    } else {
+        // Fallback to inline demo
+        println("=== KS Interpreter ===")
+        println("(Demo.ks not found at: ${scriptFile.absolutePath})")
+        println()
+        interpreter.execute("""say "Aloha world!" """)
+        interpreter.execute("""say.note "This is a note" """)
+        interpreter.execute("""say.warn "This is a warning" """)
+        interpreter.execute("""say.error "This is an error" """)
     }
 }

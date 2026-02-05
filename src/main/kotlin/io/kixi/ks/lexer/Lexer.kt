@@ -794,9 +794,13 @@ class Lexer(private val source: String) {
         return remaining.startsWith("http://") ||
                 remaining.startsWith("https://") ||
                 remaining.startsWith("ftp://") ||
+                remaining.startsWith("sftp://") ||
+                remaining.startsWith("ftps://") ||
                 remaining.startsWith("ldap://") ||
                 remaining.startsWith("file://") ||
-                remaining.startsWith("mailto:")
+                remaining.startsWith("mailto:") ||
+                remaining.startsWith("data://") ||
+                remaining.startsWith("blob://")
     }
 
     /**

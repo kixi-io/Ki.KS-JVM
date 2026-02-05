@@ -4,6 +4,7 @@ plugins {
     kotlin("jvm") version "2.3.0"
     `java-library`
     `maven-publish`
+    application  // Just the plugin ID here - nothing else!
     id("org.jetbrains.dokka") version "2.1.0"
     signing
 }
@@ -11,6 +12,11 @@ plugins {
 group = "io.kixi"
 version = "1.0.0"
 description = "ki-ks"
+
+// Application config goes HERE - outside plugins block
+application {
+    mainClass.set("MainKt")
+}
 
 repositories {
     mavenCentral()
@@ -40,24 +46,10 @@ kotlin {
     compilerOptions {
         allWarningsAsErrors.set(false)
     }
-
-    /*
-    jvmToolchain(21)
-
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
-        allWarningsAsErrors.set(false)
-    }
-    */
 }
 
 java {
     withSourcesJar()
-    /*
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
-    withSourcesJar()
-    */
 }
 
 // ============================================================================
@@ -70,6 +62,15 @@ tasks.test {
         events("passed", "skipped", "failed")
         showStandardStreams = true
     }
+}
+
+// ============================================================================
+// Run Configuration - also outside plugins block!
+// ============================================================================
+
+tasks.named<JavaExec>("run") {
+    workingDir = project.projectDir
+    standardInput = System.`in`
 }
 
 // ============================================================================
@@ -131,11 +132,6 @@ publishing {
         }
     }
 }
-
-// Uncomment when ready to publish to Maven Central (requires GPG key setup)
-// signing {
-//     sign(publishing.publications["mavenJava"])
-// }
 
 // ============================================================================
 // Convenience Tasks

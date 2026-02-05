@@ -94,15 +94,15 @@ class StatementParser(internal val p: Parser) {
      *     say "hello"                          // standard
      *     say.error "oops"                     // error variant (red)
      *     say.warn "caution"                   // warning variant (orange)
-     *     say.info "note"                      // info variant (bold)
-     *     say.info("note", bold=true)          // parenthesized args
+     *     say.note "note"                      // note variant (bold)
+     *     say.note("note", bold=true)          // parenthesized args
      *     say "Sum: " + a + b                  // expression argument
      *
      * The lexer tokenizes `say` as [SAY], `.` as [DOT], and `error`/`warn`/`info`
      * as [IDENTIFIER]. Parentheses are optional — without them, a single
      * expression is parsed as the sole argument.
      *
-     * Recognized variants: "error", "warn", "info". Any other dot-accessed
+     * Recognized variants: "error", "warn", "note". Any other dot-accessed
      * identifier after `say` is an error.
      */
     fun parseSayStmt(): SayStmt {
@@ -111,10 +111,10 @@ class StatementParser(internal val p: Parser) {
         // Check for variant: say.error, say.warn, say.info
         val variant: String? = if (p.check(DOT)) {
             p.advance() // consume .
-            val variantToken = p.expect(IDENTIFIER, "Expected say variant (error, warn, info)")
+            val variantToken = p.expect(IDENTIFIER, "Expected say variant (error, warn, note)")
             val v = variantToken.value
-            if (v != "error" && v != "warn" && v != "info") {
-                p.errorAt(variantToken, "Unknown say variant '$v'. Use 'error', 'warn', or 'info'")
+            if (v != "error" && v != "warn" && v != "note") {
+                p.errorAt(variantToken, "Unknown say variant '$v'. Use 'error', 'warn', or 'note'")
             }
             v
         } else {

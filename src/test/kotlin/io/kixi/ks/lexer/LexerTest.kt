@@ -1067,9 +1067,9 @@ class LexerTest : FunSpec({
             toks[2].value shouldBe "warn"
         }
 
-        test("say.info tokenizes as SAY DOT IDENTIFIER") {
-            val toks = tokens("""say.info "note"""")
-            toks[2].value shouldBe "info"
+        test("say.note tokenizes as SAY DOT IDENTIFIER") {
+            val toks = tokens("""say.note "note"""")
+            toks[2].value shouldBe "note"
         }
     }
 

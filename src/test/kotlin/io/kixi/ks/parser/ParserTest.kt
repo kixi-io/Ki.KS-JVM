@@ -1370,14 +1370,14 @@ class ParserTest : FunSpec({
             stmt.variant shouldBe "warn"
         }
 
-        test("say.info variant") {
-            val stmt = parseFirst("say.info \"note\"") as SayStmt
-            stmt.variant shouldBe "info"
+        test("say.note variant") {
+            val stmt = parseFirst("say.note \"note\"") as SayStmt
+            stmt.variant shouldBe "note"
         }
 
         test("say.info with parentheses and named args") {
             val stmt = parseFirst("say.info(\"note\", bold = true)") as SayStmt
-            stmt.variant shouldBe "info"
+            stmt.variant shouldBe "note"
             stmt.arguments shouldHaveSize 2
             stmt.arguments[1].name shouldBe "bold"
         }

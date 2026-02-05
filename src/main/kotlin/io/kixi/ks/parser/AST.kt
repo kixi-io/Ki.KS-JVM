@@ -221,9 +221,9 @@ data class ThrowStmt(
  *     say "hello"                             // standard
  *     say.error "oops"                        // error (red)
  *     say.warn "caution"                      // warning (orange)
- *     say.info("note", bold=true)             // info (bold)
+ *     say.note("note", bold=true)             // note (bold)
  *
- * Variant is "error" | "warn" | "info" | null.
+ * Variant is "error" | "warn" | "note" | null.
  * Parentheses are optional for say arguments.
  */
 data class SayStmt(
