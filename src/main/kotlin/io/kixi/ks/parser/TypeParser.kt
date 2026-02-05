@@ -114,16 +114,22 @@ class TypeParser(internal val p: Parser) {
      *     >= 18           ComparisonConstraint (GTE)
      *     < 100           ComparisonConstraint (LT)
      *     <= 50           ComparisonConstraint (LTE)
-     *     == 0            ComparisonConstraint (EQ)
      *     != -1           ComparisonConstraint (NEQ)
      *     1..100          RangeConstraint (parsed as expression)
      *     0.0..<1.0       RangeConstraint
      *     in [1, 2, 3]    InConstraint
      *     matches "[A-Z]+"  MatchesConstraint
      *
+     * Note: `== value` is intentionally not supported as a constraint because
+     * it's semantically meaningless — if a variable must equal exactly one value,
+     * just use the literal directly.
+     *
      * Disambiguation: a number literal directly after a type (without separator)
      * is treated as the start of a range constraint expression. The expression
      * parser will produce a [RangeExpr] which we wrap in [RangeConstraint].
+     *
+     * All constraint value parsing uses [parseNonAssignmentExpression] to avoid
+     * consuming the `=` that may follow for variable initialization.
      */
     fun tryParseConstraint(): Constraint? {
         val loc = p.currentLocation()
@@ -132,47 +138,43 @@ class TypeParser(internal val p: Parser) {
             // Comparison operators
             p.check(GREATER) && !p.checkNext(GREATER) -> {
                 p.advance() // consume >
-                val value = p.expr.parseExpression()
+                val value = p.expr.parseNonAssignmentExpression()
                 ComparisonConstraint(ComparisonOp.GT, value, loc)
             }
             p.match(GREATER_EQUAL) -> {
-                val value = p.expr.parseExpression()
+                val value = p.expr.parseNonAssignmentExpression()
                 ComparisonConstraint(ComparisonOp.GTE, value, loc)
             }
             p.check(LESS) && !p.checkNext(DOT) -> {
                 p.advance() // consume <
-                val value = p.expr.parseExpression()
+                val value = p.expr.parseNonAssignmentExpression()
                 ComparisonConstraint(ComparisonOp.LT, value, loc)
             }
             p.match(LESS_EQUAL) -> {
-                val value = p.expr.parseExpression()
+                val value = p.expr.parseNonAssignmentExpression()
                 ComparisonConstraint(ComparisonOp.LTE, value, loc)
             }
-            p.match(EQUAL_EQUAL) -> {
-                val value = p.expr.parseExpression()
-                ComparisonConstraint(ComparisonOp.EQ, value, loc)
-            }
             p.match(BANG_EQUAL) -> {
-                val value = p.expr.parseExpression()
+                val value = p.expr.parseNonAssignmentExpression()
                 ComparisonConstraint(ComparisonOp.NEQ, value, loc)
             }
 
             // in [...] or in expr
             p.match(IN) -> {
-                val collection = p.expr.parseExpression()
+                val collection = p.expr.parseNonAssignmentExpression()
                 InConstraint(collection, loc)
             }
 
             // matches "pattern"
             p.match(MATCHES) -> {
-                val pattern = p.expr.parseExpression()
+                val pattern = p.expr.parseNonAssignmentExpression()
                 MatchesConstraint(pattern, loc)
             }
 
             // Range constraint: a number or expression starting a range
             // e.g. `Int 1..100`, `Double -40.0..60.0`
             isRangeConstraintStart() -> {
-                val range = p.expr.parseExpression()
+                val range = p.expr.parseNonAssignmentExpression()
                 RangeConstraint(range, loc)
             }
 

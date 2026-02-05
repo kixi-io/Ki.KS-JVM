@@ -4,7 +4,7 @@ import io.kixi.ks.SourceLocation
 
 /*
  * ============================================================================
- * KS Language — Abstract Syntax Tree
+ * KS Language â€” Abstract Syntax Tree
  * ============================================================================
  *
  * Sealed hierarchy enabling exhaustive pattern matching in Kotlin `when`.
@@ -169,7 +169,7 @@ data class StaticBlock(
 ) : Decl
 
 /**
- * Type extension (future-proofed — syntax TBD).
+ * Type extension (future-proofed â€” syntax TBD).
  *
  *     extend trait Comparable
  *     extend String { fun isPalindrome(): Bool = ... }
@@ -233,12 +233,12 @@ data class SayStmt(
 ) : Stmt
 
 /**
- * For loop — two forms:
+ * For loop â€” two forms:
  *
- * Traditional:  `for i in list { ... }`   → variable = "i"
- * Simplified:   `for list { ... }`        → variable = null (uses implicit `it`)
- *               `for list say it`         → single-statement body
- *               `for Color { say it }`    → enum iteration
+ * Traditional:  `for i in list { ... }`   â†’ variable = "i"
+ * Simplified:   `for list { ... }`        â†’ variable = null (uses implicit `it`)
+ *               `for list say it`         â†’ single-statement body
+ *               `for Color { say it }`    â†’ enum iteration
  */
 data class ForStmt(
     val variable: String?,          // null for simplified (implicit `it`)
@@ -289,7 +289,7 @@ enum class LiteralKind {
  *
  * The parser splits the raw string into alternating literal text segments
  * and embedded expression segments. Verbatim and backtick strings are never
- * templates — they always become plain [LiteralExpr].
+ * templates â€” they always become plain [LiteralExpr].
  */
 data class StringTemplateExpr(
     val parts: List<StringPart>,
@@ -473,7 +473,7 @@ data class RangeExpr(
 ) : Expr
 
 /**
- * If expression — returns a value (like Kotlin).
+ * If expression â€” returns a value (like Kotlin).
  *
  *     if condition { thenBlock }
  *     if condition { thenBlock } else { elseBlock }
@@ -487,7 +487,7 @@ data class IfExpr(
 ) : Expr
 
 /**
- * When expression — Kotlin-style exhaustive branching.
+ * When expression â€” Kotlin-style exhaustive branching.
  *
  *     when subject { matchers -> body; else -> body }
  *     when { condition -> body }                      // no subject
@@ -499,7 +499,7 @@ data class WhenExpr(
 ) : Expr
 
 /**
- * Try expression — returns the value of the body or catch block.
+ * Try expression â€” returns the value of the body or catch block.
  *
  *     try { expr } catch(e: Type) { handler } finally { cleanup }
  *     try { expr } catch(*) { handler }
@@ -616,7 +616,7 @@ data class Parameter(
 )
 
 /**
- * Primary constructor parameter — may declare a property with var/let.
+ * Primary constructor parameter â€” may declare a property with var/let.
  *
  *     let name: String                immutable property
  *     var age: Int = 0                mutable property with default
@@ -635,7 +635,7 @@ data class ConstructorParam(
 enum class BindingType { VAR, LET }
 
 /**
- * Call argument — positional or named.
+ * Call argument â€” positional or named.
  *
  *     42                   positional (name = null)
  *     color = "purple"     named
@@ -672,8 +672,8 @@ data class EnumConstant(
  *     String?              nullable
  *     List<Int>            generic
  *     Map<String, Any?>    multi-param generic
- *     [Int]                list shorthand → List<Int>
- *     [String:Int]         map shorthand  → Map<String, Int>
+ *     [Int]                list shorthand â†’ List<Int>
+ *     [String:Int]         map shorthand  â†’ Map<String, Int>
  *     (Int, Int) -> Int    function type (future)
  */
 data class TypeRef(
@@ -683,11 +683,11 @@ data class TypeRef(
     val location: SourceLocation = SourceLocation()
 ) {
     companion object {
-        /** `[Int]` → `List<Int>` */
+        /** `[Int]` â†’ `List<Int>` */
         fun listOf(element: TypeRef, loc: SourceLocation) =
             TypeRef("List", listOf(element), false, loc)
 
-        /** `[String:Int]` → `Map<String, Int>` */
+        /** `[String:Int]` â†’ `Map<String, Int>` */
         fun mapOf(key: TypeRef, value: TypeRef, loc: SourceLocation) =
             TypeRef("Map", listOf(key, value), false, loc)
     }
@@ -696,7 +696,7 @@ data class TypeRef(
 // --- When Branches & Matchers ---
 
 /**
- * A branch in a when expression: matchers → body.
+ * A branch in a when expression: matchers â†’ body.
  *
  *     in 90..100 -> say "A"
  *     .SUCCESS, .WARNING -> "Good or warning"
@@ -786,9 +786,9 @@ data class ComparisonConstraint(
     override val location: SourceLocation
 ) : Constraint
 
-enum class ComparisonOp { GT, LT, GTE, LTE, EQ, NEQ }
+enum class ComparisonOp { GT, LT, GTE, LTE, NEQ }
 
-/** `1..100`, `0.0..<1.0` — a range expression as constraint */
+/** `1..100`, `0.0..<1.0` â€” a range expression as constraint */
 data class RangeConstraint(
     val range: Expr,                // should be a RangeExpr
     override val location: SourceLocation

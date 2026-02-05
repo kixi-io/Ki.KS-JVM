@@ -7,14 +7,14 @@ import io.kixi.ks.lexer.TokenType.*
  * Declaration parser for the KS language.
  *
  * Handles all top-level and member declarations:
- *   - `var` / `let`   — mutable and immutable variable bindings
- *   - `fun`           — function declarations (block body, single-expr, abstract)
- *   - `class`         — class declarations with optional primary constructor
- *   - `trait`         — trait declarations with optional super-traits
- *   - `enum`          — enum declarations (simple, valued, constructor-style)
- *   - `use`           — import declarations with optional wildcard and alias
- *   - `extend`        — type extension declarations
- *   - `static`        — static blocks inside class/enum
+ *   - `var` / `let`   â€” mutable and immutable variable bindings
+ *   - `fun`           â€” function declarations (block body, single-expr, abstract)
+ *   - `class`         â€” class declarations with optional primary constructor
+ *   - `trait`         â€” trait declarations with optional super-traits
+ *   - `enum`          â€” enum declarations (simple, valued, constructor-style)
+ *   - `use`           â€” import declarations with optional wildcard and alias
+ *   - `extend`        â€” type extension declarations
+ *   - `static`        â€” static blocks inside class/enum
  *
  * @param p Reference to the parent [Parser] for token stream access.
  */
@@ -74,7 +74,7 @@ class DeclarationParser(internal val p: Parser) {
      *     fun factorial(n: Int): Int = if n <= 1 1 else n * factorial(n - 1)
      *
      * A function with `= expr` is marked as [FunDecl.isSingleExpr] = true.
-     * A function with no body at all (no `{` and no `=`) is abstract — valid
+     * A function with no body at all (no `{` and no `=`) is abstract â€” valid
      * only inside a trait.
      */
     fun parseFunDecl(): FunDecl {
@@ -101,9 +101,14 @@ class DeclarationParser(internal val p: Parser) {
                 body = p.parseBlock()
                 isSingleExpr = false
             }
-            // Single-expression body: = expr
+            // Single-expression body: = expr (or = say ...)
             p.match(EQUAL) -> {
-                body = p.expr.parseExpression()
+                // Handle `say` specially since it's a statement, not an expression
+                body = if (p.check(SAY)) {
+                    p.stmt.parseSayStmt()
+                } else {
+                    p.expr.parseExpression()
+                }
                 isSingleExpr = true
             }
             // Abstract (no body)
@@ -150,8 +155,10 @@ class DeclarationParser(internal val p: Parser) {
 
         // Optional body: { members }
         p.skipNewlines()
-        val members = if (p.check(LBRACE)) {
-            p.parseBlockBody()
+        val members = if (p.match(LBRACE)) {
+            val body = p.parseBlockBody()
+            p.expect(RBRACE, "Expected '}' to close class body")
+            body
         } else {
             emptyList()
         }
@@ -181,8 +188,10 @@ class DeclarationParser(internal val p: Parser) {
 
         // Body: { members }
         p.skipNewlines()
-        val members = if (p.check(LBRACE)) {
-            p.parseBlockBody()
+        val members = if (p.match(LBRACE)) {
+            val body = p.parseBlockBody()
+            p.expect(RBRACE, "Expected '}' to close trait body")
+            body
         } else {
             emptyList()
         }
@@ -361,8 +370,10 @@ class DeclarationParser(internal val p: Parser) {
 
         // Optional body: { members }
         p.skipNewlines()
-        val members = if (p.check(LBRACE)) {
-            p.parseBlockBody()
+        val members = if (p.match(LBRACE)) {
+            val body = p.parseBlockBody()
+            p.expect(RBRACE, "Expected '}' to close extend body")
+            body
         } else {
             emptyList()
         }
@@ -385,7 +396,9 @@ class DeclarationParser(internal val p: Parser) {
     fun parseStaticBlock(): StaticBlock {
         val loc = p.advance().location // consume STATIC
         p.skipNewlines()
+        p.expect(LBRACE, "Expected '{' after 'static'")
         val members = p.parseBlockBody()
+        p.expect(RBRACE, "Expected '}' to close static block")
         return StaticBlock(members, loc)
     }
 
