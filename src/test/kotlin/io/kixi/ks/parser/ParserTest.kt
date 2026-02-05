@@ -1375,8 +1375,8 @@ class ParserTest : FunSpec({
             stmt.variant shouldBe "note"
         }
 
-        test("say.info with parentheses and named args") {
-            val stmt = parseFirst("say.info(\"note\", bold = true)") as SayStmt
+        test("say.note with parentheses and named args") {
+            val stmt = parseFirst("say.note(\"note\", bold = true)") as SayStmt
             stmt.variant shouldBe "note"
             stmt.arguments shouldHaveSize 2
             stmt.arguments[1].name shouldBe "bold"

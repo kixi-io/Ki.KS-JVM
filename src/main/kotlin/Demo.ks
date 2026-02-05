@@ -48,7 +48,7 @@ say "Hex 0xFF = " + hex
 say "Binary 0b1010 = " + bin
 
 # --- Arithmetic ---
-        say "--- Arithmetic ---"
+say "--- Arithmetic ---"
 say "2 + 3 = " + (2 + 3)
 say "10 - 4 = " + (10 - 4)
 say "6 * 7 = " + (6 * 7)
@@ -57,7 +57,7 @@ say "17 % 5 = " + (17 % 5)
 say "2 ** 10 = " + (2 ** 10)
 
 # Negative numbers
-        say "-5 + 3 = " + (-5 + 3)
+say "-5 + 3 = " + (-5 + 3)
 
 # --- Comparison ---
         say "--- Comparison ---"
@@ -69,7 +69,7 @@ say "5 >= 5: " + (5 >= 5)
 say "5 <= 4: " + (5 <= 4)
 
 # --- Logical ---
-        say "--- Logical ---"
+say "--- Logical ---"
 say "true && true: " + (true && true)
 say "true && false: " + (true && false)
 say "false || true: " + (false || true)
