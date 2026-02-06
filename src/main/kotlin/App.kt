@@ -21,21 +21,17 @@ fun main() { // args: Array<String>
         debugMode = false
     )
 
-    val interpreter = Interpreter(runtime)
-
-    println("Begin")
+    val demoInterp = Interpreter(runtime)
     var demoPath = "src/main/kotlin/Demo.ks"
-    // var demoPath = "smurf/Demo.ks"
-    var demoFile = File(demoPath)
-    println("Demo file accessed? ${demoFile.exists()}")
 
-    if(!demoFile.exists()) {
-        println("Falling back to App internal gallery.")
-        runInteractiveDemo(interpreter)
-        return
-    } else {
-        runScript(interpreter, demoFile)
-    }
+    var demoFile = File(demoPath)
+    runScript(demoInterp, demoFile)
+
+    val stringDemoInterp = Interpreter(runtime)
+    var stringDemoPath = "src/main/kotlin/StringDemo.ks"
+
+    var stringDemoFile = File(stringDemoPath)
+    runScript(stringDemoInterp, stringDemoFile)
 }
 
 /**
