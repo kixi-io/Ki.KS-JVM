@@ -774,13 +774,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      *         book "Dune" author="Herbert"
      *     }
      *
-     * Returns a list of KDTag objects (or a single root tag if there's only one).
+     * Returns a KDTag if there's a single root tag, or a KDDocument for multiple root tags.
      */
     private fun evaluateLangBlock(expr: LangBlockExpr): Any? {
         return when (expr.language.uppercase()) {
             "KD" -> {
                 val tags = expr.body.map { evaluateKDTag(it) }
-                if (tags.size == 1) tags[0] else tags
+                if (tags.size == 1) tags[0] else KDDocument(tags)
             }
             else -> throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
         }
@@ -865,6 +865,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSFunction -> KSType("Function", value.name)
             is KSRange -> KSType("Range")
             is KDTag -> KSType("KDTag")
+            is KDDocument -> KSType("KDDocument")
             else -> KSType(value::class.simpleName ?: "Unknown")
         }
     }
@@ -1247,6 +1248,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSRange -> getRangeMember(obj, expr.member, expr.location)
             is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
+            is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
             else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
         }
     }
@@ -1276,6 +1278,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     is Int -> obj.children.getOrNull(index)
                     is String -> obj.attributes[index]
                     else -> throw TypeError("KDTag index must be Int or String", expr.location)
+                }
+            }
+            is KDDocument -> {
+                when (index) {
+                    is Int -> obj.tags.getOrNull(index)
+                    is String -> obj.tags.firstOrNull { it.name == index }
+                    else -> throw TypeError("KDDocument index must be Int or String", expr.location)
                 }
             }
             null -> throw NullPointerError("Cannot index into nil", expr.location)
@@ -1999,6 +2008,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSEnumConstant -> "${value.enum.name}.${value.name}"
             is KSObject -> value.toString()
             is KDTag -> value.toString()
+            is KDDocument -> value.toString()
             is KSType -> value.toString()
             else -> value.toString()
         }
@@ -2200,6 +2210,18 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             else -> {
                 // Try attribute lookup
                 tag.attributes[member] ?: throw MemberNotFoundError(member, "KDTag", location)
+            }
+        }
+    }
+
+    private fun getKDDocumentMember(doc: KDDocument, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "tags" -> doc.tags
+            "size" -> doc.tags.size
+            else -> {
+                // Try finding a root tag by name
+                doc.tags.firstOrNull { it.name == member }
+                    ?: throw MemberNotFoundError(member, "KDDocument", location)
             }
         }
     }
@@ -2423,3 +2445,15 @@ class KDAnnotation(
     val values: List<Any?>,
     val attributes: Map<String, Any?>
 )
+
+/**
+ * Runtime representation of a KD document with multiple root tags.
+ *
+ * Created from `lang KD { ... }` blocks that contain more than one
+ * top-level tag. Provides indexed and named access to root tags.
+ */
+class KDDocument(val tags: List<KDTag>) {
+    override fun toString(): String {
+        return tags.joinToString("\n") { it.toString() }
+    }
+}

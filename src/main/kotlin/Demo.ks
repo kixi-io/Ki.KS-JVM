@@ -264,9 +264,9 @@ var config2 = lang KD {
             maxConnections $maxConnections
             timeout $(30 * 3 * more)
         }
-    }
-    Hi {
-        Bula "Hello, world!"
+        Hi {
+            Bula "Hello, world!"
+        }
     }
 }
 
