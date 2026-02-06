@@ -51,7 +51,7 @@ class ExpressionParser(internal val p: Parser) {
      *     arr[0] -= 2     MINUS_ASSIGN
      *     obj.f **= 3     POWER_ASSIGN
      *
-     * Assignment is right-associative: `a = b = c` Ã¢â€ â€™ `a = (b = c)`.
+     * Assignment is right-associative: `a = b = c` → `a = (b = c)`.
      * The left side must be a valid target: [IdentifierExpr], [MemberAccessExpr],
      * or [IndexExpr].
      */
@@ -331,7 +331,7 @@ class ExpressionParser(internal val p: Parser) {
     // 12. Exponentiation: ** (right-associative)
     // ====================================================================
 
-    /** Right-associative: `2**3**4` Ã¢â€ â€™ `2**(3**4)`. */
+    /** Right-associative: `2**3**4` → `2**(3**4)`. */
     private fun parsePower(): Expr {
         val base = parseUnaryPrefix()
         if (p.match(STAR_STAR)) {
@@ -449,7 +449,7 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     /**
-     * Parse a primary expression Ã¢â‚¬â€ the atoms of the expression grammar.
+     * Parse a primary expression — the atoms of the expression grammar.
      *
      * Handles: literals, identifiers, `this`, grouping `(expr)`, collections
      * `[...]`, DPEC `.NAME`, quantities (`23cm`, `$50.25`), open-left ranges
@@ -504,6 +504,25 @@ class ExpressionParser(internal val p: Parser) {
                 val t = p.advance()
                 if (t.value == "this") ThisExpr(t.location)
                 else IdentifierExpr(t.value, t.location)
+            }
+
+            // --- Interpolation reference: $var, ${expr}, or $(expr) (used in KD blocks) ---
+            DOLLAR -> {
+                p.advance() // consume $
+                if (p.match(LBRACE)) {
+                    // ${expr} form
+                    val expr = parseExpression()
+                    p.expect(RBRACE, "Expected '}' after interpolation expression")
+                    expr
+                } else if (p.match(LPAREN)) {
+                    // $(expr) form
+                    val expr = parseExpression()
+                    p.expect(RPAREN, "Expected ')' after interpolation expression")
+                    expr
+                } else {
+                    val name = p.expectIdentifier("Expected identifier after '\$'")
+                    IdentifierExpr(name, loc)
+                }
             }
 
             // --- Parenthesized expression ---
@@ -598,12 +617,12 @@ class ExpressionParser(internal val p: Parser) {
             if (text[i] == '$' && i + 1 < text.length) {
                 val next = text[i + 1]
                 when {
-                    // ${expr} Ã¢â‚¬â€ complex interpolation
+                    // ${expr} — complex interpolation
                     next == '{' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val closeIdx = findMatchingBrace(text, i + 2)
                         if (closeIdx == -1) {
-                            // Malformed Ã¢â‚¬â€ treat rest as literal
+                            // Malformed — treat rest as literal
                             sb.append(text.substring(i))
                             i = text.length
                         } else {
@@ -613,7 +632,7 @@ class ExpressionParser(internal val p: Parser) {
                             i = closeIdx + 1
                         }
                     }
-                    // $identifier Ã¢â‚¬â€ simple interpolation
+                    // $identifier — simple interpolation
                     next.isLetter() || next == '_' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val start = i + 1
@@ -624,7 +643,7 @@ class ExpressionParser(internal val p: Parser) {
                         i = end
                     }
                     else -> {
-                        // $ followed by something unexpected Ã¢â‚¬â€ treat as literal $
+                        // $ followed by something unexpected — treat as literal $
                         sb.append('$')
                         i++
                     }
@@ -700,7 +719,7 @@ class ExpressionParser(internal val p: Parser) {
         val elseBranch = if (p.match(ELSE)) {
             p.skipNewlines()
             if (p.check(IF)) {
-                // else if chain Ã¢â‚¬â€ parse as another IfExpr
+                // else if chain — parse as another IfExpr
                 parseIfExpr()
             } else {
                 p.parseSingleOrBlock()
@@ -760,7 +779,7 @@ class ExpressionParser(internal val p: Parser) {
 
         while (!p.check(RBRACE) && !p.isAtEnd()) {
             if (p.check(ELSE)) {
-                // Else branch Ã¢â‚¬â€ must be last
+                // Else branch — must be last
                 val elseLoc = p.advance().location
                 p.expect(ARROW, "Expected '->' after 'else' in when")
                 val body = p.parseSingleOrBlock()
@@ -891,7 +910,7 @@ class ExpressionParser(internal val p: Parser) {
             p.expect(LPAREN, "Expected '(' after 'catch'")
 
             if (p.match(STAR)) {
-                // catch(*) Ã¢â‚¬â€ wildcard catch-all
+                // catch(*) — wildcard catch-all
                 p.expect(RPAREN, "Expected ')' after '*' in catch")
                 p.skipNewlines()
                 val catchBody = p.parseBlock()
@@ -1043,7 +1062,7 @@ class ExpressionParser(internal val p: Parser) {
      * Parse a comma/newline-separated argument list (inside parentheses).
      *
      * The opening `(` must already be consumed. The closing `)` is NOT
-     * consumed here Ã¢â‚¬â€ the caller handles it.
+     * consumed here — the caller handles it.
      *
      * Arguments can be positional or named:
      *     foo(1, 2, 3)
@@ -1074,7 +1093,7 @@ class ExpressionParser(internal val p: Parser) {
     /**
      * Parse a single argument (positional or named).
      *
-     * Named argument: `name = value` Ã¢â‚¬â€ disambiguated from assignment by
+     * Named argument: `name = value` — disambiguated from assignment by
      * checking IDENTIFIER followed by single `=` (not `==`).
      */
     private fun parseArgument(): Argument {

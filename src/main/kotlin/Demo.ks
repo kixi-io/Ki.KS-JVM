@@ -248,26 +248,32 @@ var config = lang KD {
         http port=3000
         limits {
             maxConnections 100
-            // timeout $(30 * 60)
+            timeout $(30 * 60)
         }
     }
 }
 
-//* TODO: fix interpolation
-var config = lang KD {
+var more = 2
+
+// Fix interpolation
+var config2 = lang KD {
     @version(1 0 0)
     configuration name=$appName {
         http port=$serverPort
         limits {
             maxConnections $maxConnections
-            timeout $(30 * 60)
+            timeout $(30 * 3 * more)
         }
     }
+    Hi {
+        Bula "Hello, world!"
+    }
 }
-//*/
+
+
 
 say "KD with computed values (interpolation):"
-say config
+say config2
 say ""
 
 # --- Accessing KD Tag Properties ---

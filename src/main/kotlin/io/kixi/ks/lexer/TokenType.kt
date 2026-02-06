@@ -113,6 +113,7 @@ enum class TokenType {
     AT,                     // @
     UNDERSCORE,             // _
     COLON_COLON,            // ::
+    DOLLAR,                 // $ (interpolation prefix in KD blocks: $var, ${expr})
 
     // --- Keywords: Declarations ---
     VAR,                    // var

@@ -11,7 +11,7 @@ import io.kixi.ks.lexer.TokenType.*
  * Recursive descent parser that transforms a token stream from the [Lexer][io.kixi.ks.lexer.Lexer]
  * into an Abstract Syntax Tree defined in AST.kt.
  *
- * Architecture â€” the parser is split across six files for maintainability:
+ * Architecture — the parser is split across six files for maintainability:
  *
  *   - **Parser.kt** (this file)
  *     Core infrastructure: token stream utilities, entry point, top-level dispatch,
@@ -45,7 +45,7 @@ import io.kixi.ks.lexer.TokenType.*
  *   - Newlines are significant statement separators (Kotlin-style); the lexer
  *     already filters non-significant newlines
  *   - Commas are optional in lists, maps, and argument lists
- *   - `this` is recognized by checking identifier name â€” no dedicated keyword token
+ *   - `this` is recognized by checking identifier name — no dedicated keyword token
  *   - DPEC (`.SUCCESS`) is parsed as a dot followed by an identifier in expression context
  *
  * Compatibility: Kotlin 1.3+ (no deprecated APIs). Trivially portable to 2.3.0.
@@ -96,7 +96,7 @@ class Parser(private val tokens: List<Token>) {
     }
 
     // ====================================================================
-    // Item Parsing â€” top-level and inside blocks
+    // Item Parsing — top-level and inside blocks
     // ====================================================================
 
     /**
@@ -151,7 +151,7 @@ class Parser(private val tokens: List<Token>) {
     // ====================================================================
 
     /**
-     * Parse a brace-delimited block: `{ item1; item2; â€¦ }`
+     * Parse a brace-delimited block: `{ item1; item2; … }`
      *
      * Returns a [BlockExpr] whose value is its last expression (if any).
      * Used for function bodies, class/trait bodies, if/else branches, etc.
@@ -182,7 +182,7 @@ class Parser(private val tokens: List<Token>) {
     }
 
     /**
-     * Parse either a block `{ â€¦ }` or a single statement/expression.
+     * Parse either a block `{ … }` or a single statement/expression.
      *
      * Used for constructs that accept both forms:
      *
@@ -208,7 +208,7 @@ class Parser(private val tokens: List<Token>) {
     }
 
     // ====================================================================
-    // Token Utilities â€” Inspection
+    // Token Utilities — Inspection
     // ====================================================================
 
     /** Current token without advancing. */
@@ -241,7 +241,7 @@ class Parser(private val tokens: List<Token>) {
         peekNext().type == type
 
     // ====================================================================
-    // Token Utilities â€” Consuming
+    // Token Utilities — Consuming
     // ====================================================================
 
     /** Consume and return the current token. */
@@ -331,7 +331,7 @@ class Parser(private val tokens: List<Token>) {
     /**
      * Returns `true` if the current token could begin an expression.
      *
-     * Used for optional-expression parsing â€” e.g. `return` can be bare or
+     * Used for optional-expression parsing — e.g. `return` can be bare or
      * followed by a value, so the parser checks [canStartExpression] to decide.
      * Also used by the `for` statement to detect simplified form (no `in` keyword).
      *
@@ -347,6 +347,9 @@ class Parser(private val tokens: List<Token>) {
 
         // Identifiers
         IDENTIFIER -> true
+
+        // Interpolation reference: $var (used in KD blocks)
+        DOLLAR -> true
 
         // Prefix operators
         MINUS, BANG, PLUS_PLUS, MINUS_MINUS -> true

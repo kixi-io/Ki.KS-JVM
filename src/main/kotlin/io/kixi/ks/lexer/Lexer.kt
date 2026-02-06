@@ -23,12 +23,12 @@ import io.kixi.ks.SourceLocation
  *
  * Design notes:
  * - All types are reference types (like Kotlin)
- * - Reified generics â€” no type erasure
+ * - Reified generics — no type erasure
  * - Commas are optional in lists, maps, and arguments
  * - Constraints are separate from types (runtime guards, compile-time where provable)
  *
  * Compatibility: Written for Kotlin 1.3+ (the version on this system). Clean enough
- * to port to Kotlin 2.3.0 trivially â€” no deprecated APIs used.
+ * to port to Kotlin 2.3.0 trivially — no deprecated APIs used.
  *
  * @param source The KS source code to tokenize
  */
@@ -312,6 +312,9 @@ class Lexer(private val source: String) {
             '$', '€', '¥', '£', '₿', 'Ξ' -> {
                 if (isDigit(peek())) {
                     scanCurrencyQuantity()
+                } else if (c == '$') {
+                    // $ not followed by a digit = interpolation reference (used in KD blocks)
+                    addToken(TokenType.DOLLAR)
                 } else {
                     error("Currency symbol '${c}' must be followed by a digit (e.g., ${c}100)")
                 }
@@ -1189,7 +1192,7 @@ class Lexer(private val source: String) {
      *
      * Algorithm:
      * 1. Strip the leading newline (the one immediately after opening """)
-     * 2. The last line (before closing """) must be whitespace-only â€” that
+     * 2. The last line (before closing """) must be whitespace-only — that
      *    whitespace is the base indentation level
      * 3. Strip the base indentation from the start of every content line
      * 4. If a non-blank line does not start with the base indentation, error
@@ -1205,11 +1208,11 @@ class Lexer(private val source: String) {
         // If empty after stripping, return empty
         if (content.isEmpty()) return ""
 
-        // Step 2: Find the last line â€” this determines base indentation
+        // Step 2: Find the last line — this determines base indentation
         val lastNewline = content.lastIndexOf('\n')
 
         if (lastNewline == -1) {
-            // No newlines in content â€” single line between """ markers
+            // No newlines in content — single line between """ markers
             // No dedenting needed, just return trimmed
             return content.trimEnd()
         }
@@ -1221,7 +1224,7 @@ class Lexer(private val source: String) {
         val baseIndent = if (lastLine.all { it == ' ' || it == '\t' }) {
             lastLine
         } else {
-            // Closing """ is on a line with content â€” no dedenting
+            // Closing """ is on a line with content — no dedenting
             return content
         }
 
@@ -1236,7 +1239,7 @@ class Lexer(private val source: String) {
                 // Blank lines are preserved as empty
                 ""
             } else {
-                // Line has less indentation than base â€” this is an error (Swift behavior)
+                // Line has less indentation than base — this is an error (Swift behavior)
                 error("Insufficient indentation in multiline string literal")
             }
         }
