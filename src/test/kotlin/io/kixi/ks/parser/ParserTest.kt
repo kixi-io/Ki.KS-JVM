@@ -1,6 +1,5 @@
 package io.kixi.ks.parser
 
-import io.kixi.ks.SourceLocation
 import io.kixi.ks.lexer.Lexer
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
@@ -868,7 +867,7 @@ class ParserTest : FunSpec({
                 """.trimIndent()) as WhenExpr
                 val matcher = expr.branches[0].matchers[0]
                 matcher.shouldBeInstanceOf<DPECMatcher>()
-                (matcher as DPECMatcher).name shouldBe "SUCCESS"
+                (matcher).name shouldBe "SUCCESS"
             }
 
             test("type matcher (is)") {
@@ -881,7 +880,7 @@ class ParserTest : FunSpec({
                 """.trimIndent()) as WhenExpr
                 val matcher = expr.branches[0].matchers[0]
                 matcher.shouldBeInstanceOf<TypeMatcher>()
-                (matcher as TypeMatcher).negated shouldBe false
+                (matcher).negated shouldBe false
             }
 
             test("negated type matcher (!is)") {
@@ -1085,7 +1084,7 @@ class ParserTest : FunSpec({
         test("var with comparison constraint") {
             val decl = parseFirst("let score: Int > 0 = 100") as VarDecl
             decl.constraint.shouldBeInstanceOf<ComparisonConstraint>()
-            (decl.constraint as ComparisonConstraint).operator shouldBe ComparisonOp.GT
+            decl.constraint.operator shouldBe ComparisonOp.GT
         }
 
         test("var with range constraint") {
@@ -1642,25 +1641,25 @@ class ParserTest : FunSpec({
 
     context("Parse errors") {
         test("unclosed brace throws error") {
-            shouldThrow<ParseError> {
+            shouldThrow<ParseException> {
                 parse("if x > 0 {")
             }
         }
 
         test("unclosed parenthesis throws error") {
-            shouldThrow<ParseError> {
+            shouldThrow<ParseException> {
                 parse("foo(1, 2")
             }
         }
 
         test("missing expression after operator throws error") {
-            shouldThrow<ParseError> {
+            shouldThrow<ParseException> {
                 parse("x +")
             }
         }
 
         test("invalid assignment target throws error") {
-            shouldThrow<ParseError> {
+            shouldThrow<ParseException> {
                 parse("1 + 2 = 3")
             }
         }

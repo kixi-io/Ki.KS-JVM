@@ -4,7 +4,7 @@ import io.kixi.ks.SourceLocation
 
 /*
  * ============================================================================
- * KS Language â€” Abstract Syntax Tree
+ * KS Language Ã¢â‚¬â€ Abstract Syntax Tree
  * ============================================================================
  *
  * Sealed hierarchy enabling exhaustive pattern matching in Kotlin `when`.
@@ -169,7 +169,7 @@ data class StaticBlock(
 ) : Decl
 
 /**
- * Type extension (future-proofed â€” syntax TBD).
+ * Type extension (future-proofed Ã¢â‚¬â€ syntax TBD).
  *
  *     extend trait Comparable
  *     extend String { fun isPalindrome(): Bool = ... }
@@ -233,12 +233,12 @@ data class SayStmt(
 ) : Stmt
 
 /**
- * For loop â€” two forms:
+ * For loop Ã¢â‚¬â€ two forms:
  *
- * Traditional:  `for i in list { ... }`   â†’ variable = "i"
- * Simplified:   `for list { ... }`        â†’ variable = null (uses implicit `it`)
- *               `for list say it`         â†’ single-statement body
- *               `for Color { say it }`    â†’ enum iteration
+ * Traditional:  `for i in list { ... }`   Ã¢â€ â€™ variable = "i"
+ * Simplified:   `for list { ... }`        Ã¢â€ â€™ variable = null (uses implicit `it`)
+ *               `for list say it`         Ã¢â€ â€™ single-statement body
+ *               `for Color { say it }`    Ã¢â€ â€™ enum iteration
  */
 data class ForStmt(
     val variable: String?,          // null for simplified (implicit `it`)
@@ -267,10 +267,12 @@ sealed interface Expr : Node
 
 /**
  * Literal value: `42`, `3.14`, `"hello"`, `'A'`, `true`, `nil`,
- * `<https://...>`, verbatim/multiline/backtick strings.
+ * `<https://...>`, `23cm`, `$50.25`, verbatim/multiline/backtick strings.
  *
  * The [value] holds the Kotlin representation (Int, Double, String, etc.).
- * The [kind] disambiguates string variants and numeric types.
+ * For quantities, [value] holds the raw text (e.g., "23cm", "$50.25") which
+ * the interpreter resolves to a `Quantity` via Ki.Core.
+ * The [kind] disambiguates string variants, numeric types, and quantities.
  */
 data class LiteralExpr(
     val value: Any?,
@@ -280,6 +282,7 @@ data class LiteralExpr(
 
 enum class LiteralKind {
     INT, LONG, FLOAT, DOUBLE, DEC,
+    QUANTITY, CURRENCY_QUANTITY,
     STRING, CHAR, BOOL, NIL, URL,
     VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE, BACKTICK_STRING
 }
@@ -289,7 +292,7 @@ enum class LiteralKind {
  *
  * The parser splits the raw string into alternating literal text segments
  * and embedded expression segments. Verbatim and backtick strings are never
- * templates â€” they always become plain [LiteralExpr].
+ * templates Ã¢â‚¬â€ they always become plain [LiteralExpr].
  */
 data class StringTemplateExpr(
     val parts: List<StringPart>,
@@ -356,6 +359,8 @@ data class BinaryExpr(
 enum class BinaryOp {
     // Arithmetic
     ADD, SUBTRACT, MULTIPLY, DIVIDE, MODULO, POWER,
+    // Unit composition
+    COMBINE,
     // Comparison
     EQUAL, NOT_EQUAL, LESS, GREATER, LESS_EQUAL, GREATER_EQUAL,
     // Logical
@@ -473,7 +478,7 @@ data class RangeExpr(
 ) : Expr
 
 /**
- * If expression â€” returns a value (like Kotlin).
+ * If expression Ã¢â‚¬â€ returns a value (like Kotlin).
  *
  *     if condition { thenBlock }
  *     if condition { thenBlock } else { elseBlock }
@@ -487,7 +492,7 @@ data class IfExpr(
 ) : Expr
 
 /**
- * When expression â€” Kotlin-style exhaustive branching.
+ * When expression Ã¢â‚¬â€ Kotlin-style exhaustive branching.
  *
  *     when subject { matchers -> body; else -> body }
  *     when { condition -> body }                      // no subject
@@ -499,7 +504,7 @@ data class WhenExpr(
 ) : Expr
 
 /**
- * Try expression â€” returns the value of the body or catch block.
+ * Try expression Ã¢â‚¬â€ returns the value of the body or catch block.
  *
  *     try { expr } catch(e: Type) { handler } finally { cleanup }
  *     try { expr } catch(*) { handler }
@@ -616,7 +621,7 @@ data class Parameter(
 )
 
 /**
- * Primary constructor parameter â€” may declare a property with var/let.
+ * Primary constructor parameter Ã¢â‚¬â€ may declare a property with var/let.
  *
  *     let name: String                immutable property
  *     var age: Int = 0                mutable property with default
@@ -635,7 +640,7 @@ data class ConstructorParam(
 enum class BindingType { VAR, LET }
 
 /**
- * Call argument â€” positional or named.
+ * Call argument Ã¢â‚¬â€ positional or named.
  *
  *     42                   positional (name = null)
  *     color = "purple"     named
@@ -672,8 +677,8 @@ data class EnumConstant(
  *     String?              nullable
  *     List<Int>            generic
  *     Map<String, Any?>    multi-param generic
- *     [Int]                list shorthand â†’ List<Int>
- *     [String:Int]         map shorthand  â†’ Map<String, Int>
+ *     [Int]                list shorthand Ã¢â€ â€™ List<Int>
+ *     [String:Int]         map shorthand  Ã¢â€ â€™ Map<String, Int>
  *     (Int, Int) -> Int    function type (future)
  */
 data class TypeRef(
@@ -683,11 +688,11 @@ data class TypeRef(
     val location: SourceLocation = SourceLocation()
 ) {
     companion object {
-        /** `[Int]` â†’ `List<Int>` */
+        /** `[Int]` Ã¢â€ â€™ `List<Int>` */
         fun listOf(element: TypeRef, loc: SourceLocation) =
             TypeRef("List", listOf(element), false, loc)
 
-        /** `[String:Int]` â†’ `Map<String, Int>` */
+        /** `[String:Int]` Ã¢â€ â€™ `Map<String, Int>` */
         fun mapOf(key: TypeRef, value: TypeRef, loc: SourceLocation) =
             TypeRef("Map", listOf(key, value), false, loc)
     }
@@ -696,7 +701,7 @@ data class TypeRef(
 // --- When Branches & Matchers ---
 
 /**
- * A branch in a when expression: matchers â†’ body.
+ * A branch in a when expression: matchers Ã¢â€ â€™ body.
  *
  *     in 90..100 -> say "A"
  *     .SUCCESS, .WARNING -> "Good or warning"
@@ -788,7 +793,7 @@ data class ComparisonConstraint(
 
 enum class ComparisonOp { GT, LT, GTE, LTE, NEQ }
 
-/** `1..100`, `0.0..<1.0` â€” a range expression as constraint */
+/** `1..100`, `0.0..<1.0` Ã¢â‚¬â€ a range expression as constraint */
 data class RangeConstraint(
     val range: Expr,                // should be a RangeExpr
     override val location: SourceLocation

@@ -253,7 +253,7 @@ var config = lang KD {
     }
 }
 
-/* TODO: fix interpolation
+//* TODO: fix interpolation
 var config = lang KD {
     @version(1 0 0)
     configuration name=$appName {
@@ -264,7 +264,7 @@ var config = lang KD {
         }
     }
 }
-*/
+//*/
 
 say "KD with computed values (interpolation):"
 say config
@@ -451,6 +451,91 @@ say "  Withdraw $300 (success=$success): " + account.statement()
 say ""
 
 # ════════════════════════════════════════════════════════════════════════════════
+# PART 6: Quantities & Units of Measure
+# ════════════════════════════════════════════════════════════════════════════════
+
+say.note "══════════════════════════════════════════════════════════════════════"
+say.note "  Part 6: Quantities & Units of Measure"
+say.note "══════════════════════════════════════════════════════════════════════"
+say ""
+
+# --- Basic Quantity Literals ---
+
+say "Basic quantity literals:"
+say "  Length:      " + 23cm
+say "  Mass:       " + 1000g
+say "  Volume:     " + 500mℓ
+say "  Time:       " + 30s
+say ""
+
+# --- Currency Literals (prefix notation) ---
+
+say "Currency literals (prefix notation):"
+say "  Dollars:    " + $23.53
+say "  Dollars:    " + $23.53 * 2
+say "  Euros:      " + €50.25
+say "  Yen:        " + ¥10000
+say "  Pounds:     " + £75.50
+say "  Bitcoin:    " + ₿0.5
+say "  Ether:      " + Ξ2.5
+say ""
+
+# --- Quantity Arithmetic (with unit conversion) ---
+
+say "Quantity arithmetic with automatic unit conversion:"
+say "  1m + 2cm          = " + (1m + 2cm)            # → 102cm
+say "  1000g - 250g      = " + (1000g - 250g)        # → 750g
+say "  5kg + 500g        = " + (5kg + 500g)           # → 5500g
+say ""
+
+# --- Scalar Arithmetic ---
+
+say "Quantity-scalar arithmetic:"
+say "  10cm * 3           = " + 10cm * 3              # → 30cm
+say "  1000g / 4          = " + 1000g / 4             # → 250g
+say "  -5kg               = " + -5kg                  # → -5kg
+say ""
+
+# --- Quantity Comparison ---
+
+say "Quantity comparison:"
+say "  1m > 50cm         = " + (1m > 50cm)            # → true
+say "  500g == 500g      = " + (500g == 500g)          # → true
+say "  100cm <= 1m       = " + (100cm <= 1m)           # → true
+say ""
+
+# --- Member Access ---
+
+let distance = 42km
+say "Member access on quantities:"
+say "  distance           = " + distance
+say "  distance.value     = " + distance.value
+say "  distance.unit      = " + distance.unit
+say ""
+
+# --- Combine Operator (⚭ for unit composition) ---
+
+say "Unit composition with ⚭ (combine operator):"
+say "  4cm ⚭ 3cm         = " + (4cm ⚭ 3cm)           # → 12cm² (area)
+say "  2m ⚭ 2m           = " + (2m ⚭ 2m)             # → 4m² (area)
+say "  3cm ⚭ 3cm ⚭ 3cm  = " + (3cm ⚭ 3cm ⚭ 3cm)   # → 27cm³ (volume)
+say ""
+
+# --- Scientific Notation ---
+
+say "Scientific notation in quantities:"
+say "  Speed of light:  " + 3e8mps
+say "  Nano-distance:   " + 5en7m
+say ""
+
+# --- Quantities in Collections ---
+
+let measurements = [10cm, 25cm, 50cm, 100cm]
+say "Quantities in a list:"
+say "  measurements = " + measurements
+say ""
+
+# ════════════════════════════════════════════════════════════════════════════════
 # FINALE
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -472,5 +557,10 @@ say "  ✓ KD with computed values (interpolation)"
 say "  ✓ Parameterized enums"
 say "  ✓ Classes with constrained constructor parameters"
 say "  ✓ Recursive functions with constraints"
+say "  ✓ Quantity literals with units (23cm, 1000g, 500mℓ)"
+say "  ✓ Currency literals with prefix notation ($23.53, €50.25)"
+say "  ✓ Quantity arithmetic with unit conversion (1m + 2cm)"
+say "  ✓ Unit composition with combine operator (4cm ⚭ 3cm)"
+say "  ✓ Scientific notation in quantities (3e8mps, 5en7m)"
 say ""
 say "KS: Where type safety meets expressiveness! 🚀"

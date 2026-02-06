@@ -249,11 +249,11 @@ class LexerTest : FunSpec({
         }
 
         test("unterminated string throws LexerError") {
-            shouldThrow<LexerError> { tokenize(""""unterminated""") }
+            shouldThrow<LexerException> { tokenize(""""unterminated""") }
         }
 
         test("newline in standard string throws LexerError") {
-            shouldThrow<LexerError> { tokenize("\"line1\nline2\"") }
+            shouldThrow<LexerException> { tokenize("\"line1\nline2\"") }
         }
     }
 
@@ -329,13 +329,13 @@ class LexerTest : FunSpec({
 
         test("under-indented line throws LexerError") {
             // Base indent is 8 spaces, but one line only has 4
-            shouldThrow<LexerError> {
+            shouldThrow<LexerException> {
                 tokenize("\"\"\"\n        deep\n    shallow\n        \"\"\"")
             }
         }
 
         test("unterminated multiline throws LexerError") {
-            shouldThrow<LexerError> { tokenize("\"\"\"never closed") }
+            shouldThrow<LexerException> { tokenize("\"\"\"never closed") }
         }
     }
 
@@ -357,7 +357,7 @@ class LexerTest : FunSpec({
         }
 
         test("under-indented line in verbatim throws LexerError") {
-            shouldThrow<LexerError> {
+            shouldThrow<LexerException> {
                 tokenize("@\"\"\"\n        deep\n    shallow\n        \"\"\"")
             }
         }
@@ -381,7 +381,7 @@ class LexerTest : FunSpec({
         }
 
         test("unterminated backtick throws LexerError") {
-            shouldThrow<LexerError> { tokenize("`never closed") }
+            shouldThrow<LexerException> { tokenize("`never closed") }
         }
     }
 
@@ -409,7 +409,7 @@ class LexerTest : FunSpec({
         }
 
         test("unterminated char literal throws LexerError") {
-            shouldThrow<LexerError> { tokenize("'A") }
+            shouldThrow<LexerException> { tokenize("'A") }
         }
     }
 
@@ -466,7 +466,7 @@ class LexerTest : FunSpec({
         }
 
         test("unterminated URL throws LexerError") {
-            shouldThrow<LexerError> { tokenize("<https://example.com") }
+            shouldThrow<LexerException> { tokenize("<https://example.com") }
         }
     }
 
@@ -743,7 +743,7 @@ class LexerTest : FunSpec({
         }
 
         test("unterminated block comment throws LexerError") {
-            shouldThrow<LexerError> { tokenize("/* never closed") }
+            shouldThrow<LexerException> { tokenize("/* never closed") }
         }
     }
 
@@ -1162,31 +1162,31 @@ class LexerTest : FunSpec({
 
     context("Error cases") {
         test("unexpected character throws LexerError") {
-            shouldThrow<LexerError> { tokenize("§") }
+            shouldThrow<LexerException> { tokenize("§") }
         }
 
         test("lone ampersand throws LexerError") {
-            shouldThrow<LexerError> { tokenize("&") }
+            shouldThrow<LexerException> { tokenize("&") }
         }
 
         test("lone pipe throws LexerError") {
-            shouldThrow<LexerError> { tokenize("|") }
+            shouldThrow<LexerException> { tokenize("|") }
         }
 
         test("invalid hex literal throws LexerError") {
-            shouldThrow<LexerError> { tokenize("0xZZ") }
+            shouldThrow<LexerException> { tokenize("0xZZ") }
         }
 
         test("invalid binary literal throws LexerError") {
-            shouldThrow<LexerError> { tokenize("0b22") }
+            shouldThrow<LexerException> { tokenize("0b22") }
         }
 
         test("unknown escape sequence throws LexerError") {
-            shouldThrow<LexerError> { tokenize(""""bad \q escape"""") }
+            shouldThrow<LexerException> { tokenize(""""bad \q escape"""") }
         }
 
         test("LexerError includes location info") {
-            val err = shouldThrow<LexerError> { tokenize("let x = §") }
+            val err = shouldThrow<LexerException> { tokenize("let x = §") }
             err.location shouldBe SourceLocation(line = 1, column = 10, offset = 9)
         }
     }

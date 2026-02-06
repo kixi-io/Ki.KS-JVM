@@ -13,6 +13,9 @@ package io.kixi.ks.lexer
  * Changes from previous version:
  * - Added STAR_STAR (**) for exponentiation: 5**3
  * - Added STAR_STAR_EQUAL (**=) for compound exponentiation assignment
+ * - Added QUANTITY_LITERAL for unit-of-measure quantities: 23cm, 51.4m³, 1000kg
+ * - Added CURRENCY_QUANTITY_LITERAL for prefix-notation currencies: $23.53, €50.25
+ * - Added COMBINE (⚭) for unit composition: 4cm ⚭ 3cm → 12cm²
  */
 enum class TokenType {
 
@@ -25,6 +28,10 @@ enum class TokenType {
     FLOAT_LITERAL,          // 3.14f
     DOUBLE_LITERAL,         // 3.14, 3.14d
     DEC_LITERAL,            // 3.14BD
+
+    // --- Quantity Literals ---
+    QUANTITY_LITERAL,           // 23cm, 51.4m³, 1000kg, 25°C, 97ℓ, 100USD, 5.5e(-7)m
+    CURRENCY_QUANTITY_LITERAL,  // $23.53, €50.25, ¥10000, £75.50, ₿0.5, Ξ2.5
 
     // --- String Literals ---
     STRING_LITERAL,         // "hello" (with escapes & interpolation)
@@ -47,6 +54,9 @@ enum class TokenType {
     STAR_STAR,              // ** (exponentiation)
     SLASH,                  // /
     PERCENT,                // %
+
+    // --- Unit Composition ---
+    COMBINE,                // ⚭ (unit combine: 4cm ⚭ 3cm → 12cm²)
 
     // --- Increment / Decrement ---
     PLUS_PLUS,              // ++

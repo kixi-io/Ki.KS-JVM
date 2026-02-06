@@ -8,6 +8,10 @@ import io.kixi.ks.SourceLocation
  * Tokenizes KS source code into a stream of [Token]s. Handles:
  * - All KD-inherited literal types (numbers, strings, chars, booleans, nil, URLs,
  *   dates, durations, versions, blobs, ranges, quantities)
+ * - Quantity literals with unit suffixes: 23cm, 51.4m³, 1000kg, 25°C, 97ℓ
+ * - Currency quantity literals with prefix notation: $23.53, €50.25, ¥10000
+ * - Scientific notation in quantities: 5.5e(-7)m, 5.5en7m, 5.5e8km
+ * - Unit composition operator: ⚭ (e.g., 4cm ⚭ 3cm → 12cm²)
  * - Five string variants: standard, verbatim, multiline, verbatim-multiline, backtick
  * - String interpolation markers ($var and ${expr})
  * - All operators including range (.., ..<, <.., <..<), null-safety (?., ?:, !!),
@@ -19,12 +23,12 @@ import io.kixi.ks.SourceLocation
  *
  * Design notes:
  * - All types are reference types (like Kotlin)
- * - Reified generics — no type erasure
+ * - Reified generics â€” no type erasure
  * - Commas are optional in lists, maps, and arguments
  * - Constraints are separate from types (runtime guards, compile-time where provable)
  *
  * Compatibility: Written for Kotlin 1.3+ (the version on this system). Clean enough
- * to port to Kotlin 2.3.0 trivially — no deprecated APIs used.
+ * to port to Kotlin 2.3.0 trivially â€” no deprecated APIs used.
  *
  * @param source The KS source code to tokenize
  */
@@ -303,6 +307,19 @@ class Lexer(private val source: String) {
             // --- Number Literals ---
             in '0'..'9' -> scanNumber()
 
+            // --- Currency Quantity Literals ---
+            // Prefix notation: $23.53, €50.25, ¥10000, £75.50, ₿0.5, Ξ2.5
+            '$', '€', '¥', '£', '₿', 'Ξ' -> {
+                if (isDigit(peek())) {
+                    scanCurrencyQuantity()
+                } else {
+                    error("Currency symbol '${c}' must be followed by a digit (e.g., ${c}100)")
+                }
+            }
+
+            // --- Unit Composition ---
+            '⚭' -> addToken(TokenType.COMBINE)
+
             // --- Identifiers and Keywords ---
             else -> {
                 if (isAlpha(c)) {
@@ -420,14 +437,98 @@ class Lexer(private val source: String) {
 
     /**
      * After consuming all digits (and possible decimal point + digits),
-     * check for type suffixes: L, f/F, d/D, BD/bd
+     * check for:
+     *   1. Scientific notation exponent (e.g., 5.5e8, 5.5e(-7), 5.5en7)
+     *   2. Unit suffix → QUANTITY_LITERAL (e.g., 23cm, 1000kg, 25°C)
+     *   3. Number type suffix → typed number (L, f/F, d/D, BD/bd)
+     *   4. No suffix → plain number
+     *
+     * Disambiguation: If the suffix is exactly a bare number type marker
+     * (L, f, F, d, D, BD, bd) with nothing following, it's a typed number.
+     * Otherwise, the suffix is treated as a unit symbol (quantity literal).
+     * Examples: `42L` → Long, `42LT` → liters quantity, `23d` → Double,
+     * `23dC` → degrees Celsius quantity.
      */
     private fun finishNumberWithSuffix(hasDecimalPoint: Boolean) {
+        // --- Phase 1: Try to consume scientific notation ---
+        val hasSciNotation = tryConsumeScientificNotation()
+
+        // --- Phase 2: Check for unit suffix vs number type suffix ---
+        val suffix = peekFullSuffix()
+
+        if (suffix.isEmpty()) {
+            // No suffix at all → plain number
+            emitPlainNumber(hasDecimalPoint || hasSciNotation)
+            return
+        }
+
+        // If we have scientific notation, any alpha suffix MUST be a unit
+        // (e.g., 5.5e8m → quantity, not a type-suffixed number)
+        if (hasSciNotation) {
+            consumeFullSuffix()
+            tryConsumeQuantityTypeSpec()
+            addToken(TokenType.QUANTITY_LITERAL, currentText())
+            return
+        }
+
+        // No scientific notation. Check if suffix is EXACTLY a number type marker.
+        if (isExactlyNumberTypeSuffix(suffix, hasDecimalPoint)) {
+            emitTypedNumber(hasDecimalPoint)
+            return
+        }
+
+        // Suffix is a unit → consume and emit quantity literal
+        consumeFullSuffix()
+        tryConsumeQuantityTypeSpec()
+        addToken(TokenType.QUANTITY_LITERAL, currentText())
+    }
+
+    /**
+     * Checks if the peeked suffix is exactly a bare number type marker with
+     * no further alphanumeric characters following it.
+     *
+     * Number type suffixes: L (Long), f/F (Float), d/D (Double), BD/bd (Dec).
+     * If ANY additional characters follow (e.g., "LT", "dC"), it's NOT a
+     * pure type suffix — it's a unit symbol.
+     */
+    private fun isExactlyNumberTypeSuffix(suffix: String, hasDecimalPoint: Boolean): Boolean {
+        return when (suffix) {
+            "L", "l" -> !hasDecimalPoint  // L is only valid for integers
+            "f", "F" -> true
+            "d", "D" -> true
+            "BD", "bd", "Bd", "bD" -> true
+            else -> false
+        }
+    }
+
+    /**
+     * Emits a plain (unsuffixed) number token.
+     * If hasDecimalOrSci is true → Double, otherwise Int or Long.
+     */
+    private fun emitPlainNumber(hasDecimalOrSci: Boolean) {
+        val text = currentText().replace("_", "")
+        if (hasDecimalOrSci) {
+            addToken(TokenType.DOUBLE_LITERAL, text.toDouble())
+        } else {
+            val value = text.toLong()
+            if (value <= Int.MAX_VALUE && value >= Int.MIN_VALUE) {
+                addToken(TokenType.INT_LITERAL, value.toInt())
+            } else {
+                addToken(TokenType.LONG_LITERAL, value)
+            }
+        }
+    }
+
+    /**
+     * Emits a typed number token using the number type suffix at peek position.
+     * Assumes [isExactlyNumberTypeSuffix] already returned true.
+     */
+    private fun emitTypedNumber(hasDecimalPoint: Boolean) {
         val c = peek()
         val cn = peekNext()
 
         when {
-            // BD / bd -> Dec
+            // BD / bd → Dec
             (c == 'B' || c == 'b') && (cn == 'D' || cn == 'd') -> {
                 advance() // consume B/b
                 advance() // consume D/d
@@ -437,7 +538,7 @@ class Lexer(private val source: String) {
                 addToken(TokenType.DEC_LITERAL, java.math.BigDecimal(text))
             }
 
-            // L / l -> Long (only without decimal point)
+            // L / l → Long (only without decimal point)
             (c == 'L' || c == 'l') && !hasDecimalPoint -> {
                 advance()
                 val text = currentText().replace("_", "").let {
@@ -446,7 +547,7 @@ class Lexer(private val source: String) {
                 addToken(TokenType.LONG_LITERAL, text.toLong())
             }
 
-            // f / F -> Float
+            // f / F → Float
             c == 'f' || c == 'F' -> {
                 advance()
                 val text = currentText().replace("_", "").let {
@@ -455,7 +556,7 @@ class Lexer(private val source: String) {
                 addToken(TokenType.FLOAT_LITERAL, text.toFloat())
             }
 
-            // d / D -> Double (explicit)
+            // d / D → Double (explicit)
             c == 'd' || c == 'D' -> {
                 advance()
                 val text = currentText().replace("_", "").let {
@@ -463,24 +564,165 @@ class Lexer(private val source: String) {
                 }
                 addToken(TokenType.DOUBLE_LITERAL, text.toDouble())
             }
+        }
+    }
 
-            // No suffix
-            hasDecimalPoint -> {
-                val text = currentText().replace("_", "")
-                addToken(TokenType.DOUBLE_LITERAL, text.toDouble())
+    // ========================================================================
+    // Quantity / UoM support
+    // ========================================================================
+
+    /**
+     * Attempts to consume a scientific notation exponent after the mantissa.
+     *
+     * Supported forms (from KD spec):
+     * - Parenthesized: `5.5e(-7)`, `1.5e(8)`, `5.5E(-7)`
+     * - Letter style: `5.5en7` (n = negative), `5.5ep8` (p = positive)
+     * - Standard: `5.5e8`, `5.5e+8`, `5.5e-8`
+     *
+     * If the 'e'/'E' is not followed by a valid exponent pattern, the lexer
+     * backtracks and returns false (the 'e' may be part of a unit symbol).
+     *
+     * @return true if scientific notation was consumed
+     */
+    private fun tryConsumeScientificNotation(): Boolean {
+        if (peek() != 'e' && peek() != 'E') return false
+
+        val saved = current
+        val savedCol = column
+        advance() // consume 'e' or 'E'
+
+        when {
+            // Parenthesized: e(-7), e(8), e(+3)
+            peek() == '(' -> {
+                advance() // consume '('
+                if (peek() == '-' || peek() == '+') advance()
+                if (!isDigit(peek())) { current = saved; column = savedCol; return false }
+                consumeDigits()
+                if (peek() != ')') { current = saved; column = savedCol; return false }
+                advance() // consume ')'
+                return true
             }
-
+            // Negative letter style: en7
+            peek() == 'n' && isDigit(peekNext()) -> {
+                advance() // consume 'n'
+                consumeDigits()
+                return true
+            }
+            // Positive letter style: ep8
+            peek() == 'p' && isDigit(peekNext()) -> {
+                advance() // consume 'p'
+                consumeDigits()
+                return true
+            }
+            // Standard with sign: e+7, e-7
+            (peek() == '+' || peek() == '-') && isDigit(peekNext()) -> {
+                advance() // consume sign
+                consumeDigits()
+                return true
+            }
+            // Standard without sign: e8
+            isDigit(peek()) -> {
+                consumeDigits()
+                return true
+            }
+            // 'e' not followed by valid exponent → backtrack
             else -> {
-                val text = currentText().replace("_", "")
-                val value = text.toLong()
-                if (value <= Int.MAX_VALUE && value >= Int.MIN_VALUE) {
-                    addToken(TokenType.INT_LITERAL, value.toInt())
-                } else {
-                    addToken(TokenType.LONG_LITERAL, value)
-                }
+                current = saved
+                column = savedCol
+                return false
             }
         }
     }
+
+    /**
+     * Scans a currency quantity literal after the prefix symbol has been consumed.
+     * The prefix character ($, €, ¥, £, ₿, Ξ) is already in the token text.
+     *
+     * Consumes: digits, optional decimal point + digits, optional scientific
+     * notation, and optional quantity type specifier (e.g., `:d`, `:L`).
+     *
+     * Examples: `$23.53`, `€50.25`, `¥10000`, `₿0.5e8`, `£75.50:d`
+     */
+    private fun scanCurrencyQuantity() {
+        // Consume integer digits (with optional underscores)
+        consumeDigits()
+
+        // Optional decimal point + fractional digits
+        if (peek() == '.' && isDigit(peekNext())) {
+            advance() // consume '.'
+            consumeDigits()
+        }
+
+        // Optional scientific notation
+        tryConsumeScientificNotation()
+
+        // Optional quantity type specifier (:d, :L, :f, :i)
+        tryConsumeQuantityTypeSpec()
+
+        addToken(TokenType.CURRENCY_QUANTITY_LITERAL, currentText())
+    }
+
+    /**
+     * Peeks at the full unit/type suffix without consuming any characters.
+     * Collects consecutive unit-suffix characters: alpha, °, ², ³, ℓ, µ.
+     *
+     * Examples:
+     * - After `23`: peeks "cm" → "cm"
+     * - After `42`: peeks "L" → "L"
+     * - After `42`: peeks "LT" → "LT"
+     * - After `25`: peeks "°C" → "°C"
+     * - After `51.4`: peeks "m³" → "m³"
+     */
+    private fun peekFullSuffix(): String {
+        val sb = StringBuilder()
+        var i = current
+        while (i < source.length && isUnitSuffixChar(source[i])) {
+            sb.append(source[i])
+            i++
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Consumes consecutive unit-suffix characters at the current position.
+     * Must only be called after [peekFullSuffix] confirmed a non-empty suffix.
+     */
+    private fun consumeFullSuffix() {
+        while (!isAtEnd() && isUnitSuffixChar(peek())) advance()
+    }
+
+    /**
+     * Checks if a character can appear in a unit suffix.
+     * Includes ASCII letters and Unicode symbols used in Ki units:
+     * °, ², ³, ℓ, µ
+     */
+    private fun isUnitSuffixChar(c: Char): Boolean =
+        c in 'a'..'z' || c in 'A'..'Z' || c == '°' || c == '²' || c == '³' || c == 'ℓ' || c == 'µ'
+
+    /**
+     * Tries to consume a quantity type specifier at the current position.
+     * Form: `:` followed by a type character (d, D, L, f, F, i, I).
+     *
+     * Example: `23cm:d` → the `:d` part is the quantity type specifier,
+     * meaning the numeric value should be stored as a Double.
+     */
+    private fun tryConsumeQuantityTypeSpec() {
+        if (peek() == ':' && isQuantityTypeChar(peekNext())) {
+            advance() // consume ':'
+            advance() // consume type char
+        }
+    }
+
+    /**
+     * Checks if a character is a valid quantity type indicator.
+     * These correspond to Ki's numeric types when used in quantity literals:
+     * - d/D → Double
+     * - L → Long
+     * - f/F → Float
+     * - i/I → Int
+     */
+    private fun isQuantityTypeChar(c: Char): Boolean =
+        c == 'd' || c == 'D' || c == 'L' || c == 'f' || c == 'F' || c == 'i' || c == 'I'
 
     // ========================================================================
     // Date / DateTime scanning
@@ -914,7 +1156,7 @@ class Lexer(private val source: String) {
         return when (lastType) {
             // These tokens indicate the line continues
             TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.STAR_STAR,
-            TokenType.SLASH, TokenType.PERCENT,
+            TokenType.SLASH, TokenType.PERCENT, TokenType.COMBINE,
             TokenType.EQUAL, TokenType.PLUS_EQUAL, TokenType.MINUS_EQUAL,
             TokenType.STAR_EQUAL, TokenType.STAR_STAR_EQUAL,
             TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL,
@@ -947,7 +1189,7 @@ class Lexer(private val source: String) {
      *
      * Algorithm:
      * 1. Strip the leading newline (the one immediately after opening """)
-     * 2. The last line (before closing """) must be whitespace-only — that
+     * 2. The last line (before closing """) must be whitespace-only â€” that
      *    whitespace is the base indentation level
      * 3. Strip the base indentation from the start of every content line
      * 4. If a non-blank line does not start with the base indentation, error
@@ -963,11 +1205,11 @@ class Lexer(private val source: String) {
         // If empty after stripping, return empty
         if (content.isEmpty()) return ""
 
-        // Step 2: Find the last line — this determines base indentation
+        // Step 2: Find the last line â€” this determines base indentation
         val lastNewline = content.lastIndexOf('\n')
 
         if (lastNewline == -1) {
-            // No newlines in content — single line between """ markers
+            // No newlines in content â€” single line between """ markers
             // No dedenting needed, just return trimmed
             return content.trimEnd()
         }
@@ -979,7 +1221,7 @@ class Lexer(private val source: String) {
         val baseIndent = if (lastLine.all { it == ' ' || it == '\t' }) {
             lastLine
         } else {
-            // Closing """ is on a line with content — no dedenting
+            // Closing """ is on a line with content â€” no dedenting
             return content
         }
 
@@ -994,7 +1236,7 @@ class Lexer(private val source: String) {
                 // Blank lines are preserved as empty
                 ""
             } else {
-                // Line has less indentation than base — this is an error (Swift behavior)
+                // Line has less indentation than base â€” this is an error (Swift behavior)
                 error("Insufficient indentation in multiline string literal")
             }
         }
@@ -1064,6 +1306,6 @@ class Lexer(private val source: String) {
     private fun isAlphaNumeric(c: Char): Boolean = isAlpha(c) || isDigit(c)
 
     private fun error(message: String): Nothing {
-        throw LexerError(message, SourceLocation(line = line, column = column, offset = current))
+        throw LexerException(message, SourceLocation(line = line, column = column, offset = current))
     }
 }

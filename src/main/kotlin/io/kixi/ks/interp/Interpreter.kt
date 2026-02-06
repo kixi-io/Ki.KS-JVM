@@ -3,6 +3,10 @@ package io.kixi.ks.interp
 import io.kixi.ks.*
 import io.kixi.ks.lexer.*
 import io.kixi.ks.parser.*
+import io.kixi.uom.Currency
+import io.kixi.uom.Quantity
+import io.kixi.uom.Unit as KiUnit
+import io.kixi.uom.combineUnits
 
 import java.math.BigDecimal as Dec
 import java.math.RoundingMode
@@ -23,7 +27,8 @@ import java.math.RoundingMode
  * ## Supported Features
  *
  * - Variables: `var`/`let` declarations, assignments (=, +=, -=, etc.)
- * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL
+ * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL, Quantity
+ * - Quantities: unit quantities (23cm, 25°C), currency ($50.25), combine (⚭)
  * - String interpolation: `"Hello $name"`, `"Sum: ${a + b}"`
  * - Operators: arithmetic, comparison, logical, elvis (?:)
  * - Unary: -, !, ++, --, !!
@@ -133,7 +138,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is ThrowStmt -> evaluateThrow(node)
 
             // --- Expressions: Literals ---
-            is LiteralExpr -> node.value
+            is LiteralExpr -> evaluateLiteral(node)
             is StringTemplateExpr -> evaluateStringTemplate(node)
             is ListExpr -> evaluateList(node)
             is MapExpr -> evaluateMap(node)
@@ -846,6 +851,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Float -> KSType("Float")
             is Double -> KSType("Double")
             is Dec -> KSType("Dec")
+            is Quantity<*> -> KSType("Quantity", value.unit.symbol)
             is String -> KSType("String")
             is Char -> KSType("Char")
             is Boolean -> KSType("Bool")
@@ -1105,6 +1111,72 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     // ========================================================================
+    // Literal Evaluation
+    // ========================================================================
+
+    /**
+     * Evaluate a literal expression.
+     *
+     * Most literals are stored directly in the AST node. Quantity and currency
+     * quantity literals store raw text that must be parsed into [Quantity] objects
+     * at evaluation time using Ki.Core's parsing infrastructure.
+     */
+    private fun evaluateLiteral(expr: LiteralExpr): Any? {
+        return when (expr.kind) {
+            LiteralKind.QUANTITY -> parseQuantityLiteral(expr.value as String, expr.location)
+            LiteralKind.CURRENCY_QUANTITY -> parseCurrencyQuantityLiteral(expr.value as String, expr.location)
+            else -> expr.value
+        }
+    }
+
+    /**
+     * Parse a quantity literal from raw text.
+     *
+     * Examples: `23cm`, `51.4m³`, `1000kg`, `25°C`, `97ℓ`, `100USD`, `5.5e(-7)m`
+     *
+     * Delegates to [Quantity.parse] which handles all forms including scientific
+     * notation and type specifiers.
+     */
+    private fun parseQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
+        return try {
+            Quantity.parse(text)
+        } catch (e: Exception) {
+            throw RuntimeError("Invalid quantity literal '$text': ${e.message}", location)
+        }
+    }
+
+    /**
+     * Parse a currency quantity literal from prefix notation.
+     *
+     * Converts prefix notation (`$23.53`) to suffix notation (`23.53USD`) and
+     * delegates to [Quantity.parse].
+     *
+     * Examples: `$23.53` → `23.53USD`, `€50.25:d` → `50.25EUR:d`, `₿0.5` → `0.5BTC`
+     */
+    private fun parseCurrencyQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
+        val prefixChar = text[0]
+        val currency = Currency.fromPrefix(prefixChar)
+            ?: throw RuntimeError("Unknown currency prefix: '$prefixChar'", location)
+
+        // Convert prefix notation to suffix notation for Quantity.parse
+        val numericPart = text.substring(1) // e.g., "23.53" or "23.53:d"
+        val colonIdx = numericPart.indexOf(':')
+        val suffixForm = if (colonIdx >= 0) {
+            // Insert currency symbol before type specifier: "23.53:d" → "23.53USD:d"
+            numericPart.substring(0, colonIdx) + currency.symbol + numericPart.substring(colonIdx)
+        } else {
+            // Append currency symbol: "23.53" → "23.53USD"
+            numericPart + currency.symbol
+        }
+
+        return try {
+            Quantity.parse(suffixForm)
+        } catch (e: Exception) {
+            throw RuntimeError("Invalid currency quantity '$text': ${e.message}", location)
+        }
+    }
+
+    // ========================================================================
     // String Template
     // ========================================================================
 
@@ -1173,6 +1245,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is List<*> -> getListMember(obj, expr.member, expr.location)
             is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
             is KSRange -> getRangeMember(obj, expr.member, expr.location)
+            is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
         }
@@ -1376,6 +1449,75 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             BinaryOp.OR -> isTruthy(left) || isTruthy(right)
 
             BinaryOp.ELVIS -> left ?: right
+
+            BinaryOp.COMBINE -> evaluateCombine(left, right, expr.location)
+        }
+    }
+
+    // ========================================================================
+    // Combine (⚭) Operator
+    // ========================================================================
+
+    /**
+     * Evaluate the unit composition operator ⚭.
+     *
+     * Combines two quantities into a higher-dimensional unit:
+     * - Length × Length → Area:   `4cm ⚭ 3cm → 12cm²`
+     * - Length × Area → Volume:  `2m ⚭ 3m² → 6m³`
+     * - Area × Length → Volume:  `3m² ⚭ 2m → 6m³`
+     *
+     * If units match, the combination is direct. If units differ within the
+     * same dimension (e.g., m and cm), both are converted to base units first.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun evaluateCombine(left: Any?, right: Any?, location: SourceLocation?): Quantity<*> {
+        if (left !is Quantity<*> || right !is Quantity<*>) {
+            throw TypeError(
+                "Combine operator ⚭ requires quantity operands, got " +
+                        "${left?.let { it::class.simpleName } ?: "nil"} and " +
+                        "${right?.let { it::class.simpleName } ?: "nil"}",
+                location
+            )
+        }
+
+        val lUnit = left.unit
+        val rUnit = right.unit
+
+        // Try to combine units directly
+        val resultUnit = combineUnits(lUnit, rUnit)
+            ?: throw RuntimeError(
+                "Cannot combine units '${lUnit.symbol}' and '${rUnit.symbol}' " +
+                        "(supported: Length×Length→Area, Length×Area→Volume)",
+                location
+            )
+
+        // If units are the same, multiply values directly
+        val resultValue = if (lUnit == rUnit) {
+            multiplyNumbers(left.value, right.value)
+        } else {
+            // Convert both to base units before multiplying
+            val lBase = (left as Quantity<KiUnit>).convertTo(lUnit.baseUnit as KiUnit)
+            val rBase = (right as Quantity<KiUnit>).convertTo(rUnit.baseUnit as KiUnit)
+            multiplyNumbers(lBase.value, rBase.value)
+        }
+
+        return Quantity(resultValue, resultUnit)
+    }
+
+    /**
+     * Multiply two Number values preserving appropriate types.
+     * Used by [evaluateCombine] for unit composition.
+     */
+    private fun multiplyNumbers(a: Number, b: Number): Number {
+        return when {
+            a is Dec || b is Dec -> toBigDecimal(a).multiply(toBigDecimal(b))
+            a is Double || b is Double -> a.toDouble() * b.toDouble()
+            a is Float || b is Float -> a.toFloat() * b.toFloat()
+            a is Long || b is Long -> a.toLong() * b.toLong()
+            else -> {
+                val result = a.toLong() * b.toLong()
+                if (result in Int.MIN_VALUE..Int.MAX_VALUE) result.toInt() else result
+            }
         }
     }
 
@@ -1484,6 +1626,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "Float" -> value is Float
             "Double" -> value is Double || value is Float
             "Dec" -> value is Dec
+            "Quantity" -> value is Quantity<*>
             "String" -> value is String
             "Char" -> value is Char
             "Bool" -> value is Boolean
@@ -1623,6 +1766,15 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     // ========================================================================
 
     private fun add(left: Any?, right: Any?): Any {
+        // Quantity + Quantity (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>) + (right as Quantity<KiUnit>)
+        }
+        // Quantity + Number (scalar addition)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "add")
+        }
         if (left is String || right is String) {
             return stringify(left) + stringify(right)
         }
@@ -1633,6 +1785,15 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     private fun subtract(left: Any?, right: Any?): Any {
+        // Quantity - Quantity (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>) - (right as Quantity<KiUnit>)
+        }
+        // Quantity - Number (scalar subtraction)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "subtract")
+        }
         return numericOp(left, right, "subtract")
     }
 
@@ -1643,14 +1804,30 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         if (left is Int && right is String) {
             return right.repeat(left)
         }
+        // Quantity * Number (scalar multiplication)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "multiply")
+        }
+        // Number * Quantity (commutative)
+        if (left is Number && right is Quantity<*>) {
+            return quantityScalarOp(right, left, "multiply")
+        }
         return numericOp(left, right, "multiply")
     }
 
     private fun divide(left: Any?, right: Any?): Any {
+        // Quantity / Number (scalar division)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "divide")
+        }
         return numericOp(left, right, "divide")
     }
 
     private fun modulo(left: Any?, right: Any?): Any {
+        // Quantity % Number (scalar modulo)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "modulo")
+        }
         return numericOp(left, right, "modulo")
     }
 
@@ -1670,6 +1847,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     private fun negate(value: Any?): Any {
         return when (value) {
+            is Quantity<*> -> -value
             is Int -> -value
             is Long -> -value
             is Float -> -value
@@ -1729,11 +1907,72 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
+    /**
+     * Perform a scalar arithmetic operation on a quantity.
+     *
+     * Delegates to the Quantity class operator overloads which handle
+     * type-preserving arithmetic (Int value stays Int, etc.).
+     *
+     * @param quantity The quantity operand
+     * @param scalar The numeric scalar operand
+     * @param op The operation name: "add", "subtract", "multiply", "divide"
+     */
+    private fun quantityScalarOp(quantity: Quantity<*>, scalar: Number, op: String): Quantity<*> {
+        return when (scalar) {
+            is Int -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Long -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Float -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Double -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Dec -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            else -> throw TypeError("Unsupported scalar type for quantity operation: ${scalar::class.simpleName}")
+        }
+    }
+
     private fun compare(left: Any?, right: Any?): Int {
         if (left is String && right is String) return left.compareTo(right)
         if (left is Char && right is Char) return left.compareTo(right)
         if (left is KSEnumConstant && right is KSEnumConstant) {
             return left.ordinal.compareTo(right.ordinal)
+        }
+        // Quantity comparison (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>)
         }
         return toDouble(left).compareTo(toDouble(right))
     }
@@ -1745,6 +1984,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     internal fun stringify(value: Any?): String {
         return when (value) {
             null -> "nil"
+            is Quantity<*> -> value.toString()
             is Double -> {
                 val text = value.toString()
                 if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
@@ -1821,6 +2061,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             null -> false
             is Boolean -> value
             is Number -> value.toDouble() != 0.0
+            is Quantity<*> -> true  // Quantities are always truthy
             is String -> value.isNotEmpty()
             is List<*> -> value.isNotEmpty()
             is Map<*, *> -> value.isNotEmpty()
@@ -1834,6 +2075,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         if (left is Number && right is Number) {
             return left.toDouble() == right.toDouble()
+        }
+
+        // Quantity equality (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>) == 0
         }
 
         if (left is KSEnumConstant && right is KSEnumConstant) {
@@ -1924,6 +2171,21 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
                 throw MemberNotFoundError(member, constant.enum.name, location)
             }
+        }
+    }
+
+    /**
+     * Access members on a Quantity value.
+     *
+     * Supported members:
+     * - `value` → the numeric value (Int, Long, Float, Double, or Dec)
+     * - `unit` → the unit symbol as a String (e.g., "cm", "kg", "USD")
+     */
+    private fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "value" -> quantity.value
+            "unit" -> quantity.unit.symbol
+            else -> throw MemberNotFoundError(member, "Quantity", location)
         }
     }
 
