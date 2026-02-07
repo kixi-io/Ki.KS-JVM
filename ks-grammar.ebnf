@@ -1,0 +1,909 @@
+// =============================================================================
+// KS Language — Formal Grammar (EBNF)
+// =============================================================================
+//
+// Version:  0.1.0-draft
+// Date:     2026-02-04
+// Status:   Working Draft
+//
+// This grammar defines the KS programming language, a standalone evolution of
+// the ClearWell KS (CWKS) scripting language. KS is influenced by Kotlin, Swift,
+// Mojo, and Rust, and shares its type system with Ki Data (KD).
+//
+// Key Design Decisions Encoded in this Grammar:
+//   - var/let declarations (mutable/immutable) with type inference
+//   - Constraints on declarations and parameters (>, <, >=, <=, ranges, in, matches)
+//   - KD-based type system (21 literal types + supertypes Number, Any)
+//   - Non-nullable by default; ? suffix for nullable types
+//   - if/for/while without parentheses around conditions (Swift/Rust style)
+//   - if, when as expressions (Kotlin style)
+//   - Commas optional in lists, maps, and function arguments
+//   - fun keyword for functions with single-expression bodies
+//   - Classes with primary constructors, traits, enums
+//   - try/catch/finally with catch(*) wildcard
+//   - say with .warn/.error/.info variants; parentheses optional
+//   - lang keyword for embedded DSLs (starting with KD)
+//   - use for imports (unified, Kotlin-style)
+//   - # and // for line comments, /* */ for block comments
+//   - Newline-sensitive (Kotlin-style semicolons)
+//   - All types are reference types; reified generics (no erasure)
+//
+// Notation:
+//   rule = definition ;                    — production rule
+//   |                                      — alternation
+//   ( ... )                                — grouping
+//   [ ... ]                                — optional (0 or 1)
+//   { ... }                                — repetition (0 or more)
+//   'text'                                 — terminal (literal keyword/symbol)
+//   (* comment *)                          — grammar comment
+//   UPPER_CASE                             — lexer tokens
+//   lowerCase                              — parser rules
+//
+// =============================================================================
+
+
+// ---------------------------------------------------------------------------
+// 1. PROGRAM STRUCTURE
+// ---------------------------------------------------------------------------
+
+program
+    = { NL } { topLevelDeclaration { statementSeparator } } EOF
+    ;
+
+topLevelDeclaration
+    = useDeclaration
+    | functionDeclaration
+    | classDeclaration
+    | traitDeclaration
+    | enumDeclaration
+    | variableDeclaration
+    | statement
+    ;
+
+statementSeparator
+    = NL
+    | ';'
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 2. IMPORTS
+// ---------------------------------------------------------------------------
+// Unified `use` keyword. Similar to Kotlin imports. Works with KS classes,
+// traits, properties, and host language when useHostLanguage=true.
+
+useDeclaration
+    = 'use' usePath [ 'as' IDENTIFIER ]
+    ;
+
+usePath
+    = IDENTIFIER { '.' IDENTIFIER } [ '.' '*' ]
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 3. VARIABLE DECLARATIONS
+// ---------------------------------------------------------------------------
+// var = mutable, let = immutable
+// Type annotations are optional (inference preferred)
+// Constraints can be attached to typed declarations
+
+variableDeclaration
+    = ( 'var' | 'let' ) IDENTIFIER [ ':' typeAnnotation [ constraint ] ]
+      [ '=' expression ]
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 4. TYPE SYSTEM
+// ---------------------------------------------------------------------------
+// Based on the Ki Type System (KTS) — 21 literal types + supertypes.
+// All types are reference types (like Kotlin).
+// Generics are reified (no type erasure).
+
+typeAnnotation
+    = typeReference [ '?' ]           (* nullable suffix *)
+    ;
+
+typeReference
+    = simpleType [ typeArguments ]
+    | listShorthand
+    | mapShorthand
+    | functionType
+    ;
+
+simpleType
+    = 'String' | 'Char'
+    | 'Int' | 'Long' | 'Float' | 'Double' | 'Dec'
+    | 'Bool'
+    | 'URL'
+    | 'Date' | 'LocalDateTime' | 'ZonedDateTime'
+    | 'Duration'
+    | 'Version'
+    | 'Blob'
+    | 'Quantity'
+    | 'Range'
+    | 'List' | 'Map'
+    | 'Number' | 'Any'               (* supertypes *)
+    | IDENTIFIER                       (* user-defined types *)
+    ;
+
+typeArguments
+    = '<' typeAnnotation { ',' typeAnnotation } '>'
+    ;
+
+listShorthand
+    = '[' typeAnnotation ']'          (* e.g. [Int] means List<Int> *)
+    ;
+
+mapShorthand
+    = '[' typeAnnotation ':' typeAnnotation ']'   (* e.g. [String:Int] means Map<String,Int> *)
+    ;
+
+functionType
+    = '(' [ typeAnnotation { ',' typeAnnotation } ] ')' '->' typeAnnotation
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 5. CONSTRAINTS
+// ---------------------------------------------------------------------------
+// Constraints are runtime-checked guards with compile-time verification
+// where statically provable. Violations throw ConstraintError.
+
+constraint
+    = comparisonConstraint
+    | rangeConstraint
+    | inConstraint
+    | matchesConstraint
+    ;
+
+comparisonConstraint
+    = ( '>' | '<' | '>=' | '<=' | '==' | '!=' ) expression
+    ;
+
+rangeConstraint
+    = rangeLiteral
+    ;
+
+inConstraint
+    = 'in' expression                 (* e.g. in [1, 2, 3] or in 1..10 *)
+    ;
+
+matchesConstraint
+    = 'matches' expression            (* e.g. matches "[A-Z]+" — regex *)
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 6. FUNCTIONS
+// ---------------------------------------------------------------------------
+// fun keyword. Typed and untyped parameters. Default values.
+// Single-expression bodies with =. Return type optional (inferred).
+
+functionDeclaration
+    = { annotation }
+      'fun' IDENTIFIER '(' [ parameterList ] ')' [ ':' typeAnnotation ]
+      ( block | '=' expression )
+    ;
+
+parameterList
+    = parameter { ( ',' | NL ) parameter } [ ',' ]
+    ;
+
+parameter
+    = IDENTIFIER [ ':' typeAnnotation [ constraint ] ] [ '=' expression ]
+    ;
+
+lambdaExpression
+    = '{' [ lambdaParameters '->' ] { statement statementSeparator } '}'
+    ;
+
+lambdaParameters
+    = IDENTIFIER { ( ',' | NL ) IDENTIFIER }
+    | '(' parameterList ')'
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 7. CLASSES
+// ---------------------------------------------------------------------------
+// Classes with primary constructors. Traits (like Kotlin interfaces).
+// Static blocks. Extend trait.
+
+classDeclaration
+    = { annotation }
+      'class' IDENTIFIER [ typeParameters ]
+      [ '(' [ parameterList ] ')' ]         (* primary constructor *)
+      [ ':' supertypeList ]
+      classBody
+    ;
+
+typeParameters
+    = '<' typeParameter { ',' typeParameter } '>'
+    ;
+
+typeParameter
+    = IDENTIFIER [ ':' typeAnnotation ]       (* upper bound *)
+    ;
+
+supertypeList
+    = typeReference { ',' typeReference }
+    ;
+
+classBody
+    = '{' { classMemberDeclaration { statementSeparator } } '}'
+    | (* empty — no body required *)
+    ;
+
+classMemberDeclaration
+    = variableDeclaration
+    | functionDeclaration
+    | staticBlock
+    | classDeclaration                         (* nested classes *)
+    | enumDeclaration
+    ;
+
+staticBlock
+    = 'static' '{' { classMemberDeclaration { statementSeparator } } '}'
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 8. TRAITS
+// ---------------------------------------------------------------------------
+// Traits are like Kotlin interfaces — can have default implementations.
+
+traitDeclaration
+    = { annotation }
+      'trait' IDENTIFIER [ typeParameters ]
+      [ ':' supertypeList ]
+      traitBody
+    ;
+
+traitBody
+    = '{' { traitMemberDeclaration { statementSeparator } } '}'
+    ;
+
+traitMemberDeclaration
+    = variableDeclaration
+    | functionDeclaration                      (* may have body = default impl *)
+    ;
+
+// Extend trait (add trait conformance to existing types)
+extendTraitDeclaration
+    = 'extend' 'trait' IDENTIFIER 'for' typeReference traitBody
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 9. ENUMS
+// ---------------------------------------------------------------------------
+// Enums with iteration support: for Color { say it }
+
+enumDeclaration
+    = { annotation }
+      'enum' IDENTIFIER '{' enumEntryList '}'
+    ;
+
+enumEntryList
+    = IDENTIFIER { ( ',' | NL ) IDENTIFIER } [ ',' ]
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 10. STATEMENTS
+// ---------------------------------------------------------------------------
+
+statement
+    = variableDeclaration
+    | assignment
+    | expressionStatement
+    | ifStatement
+    | forStatement
+    | whileStatement
+    | whenStatement
+    | tryStatement
+    | throwStatement
+    | returnStatement
+    | breakStatement
+    | continueStatement
+    | extendTraitDeclaration
+    | langBlock
+    ;
+
+block
+    = '{' { statement statementSeparator } '}'
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 11. CONTROL FLOW
+// ---------------------------------------------------------------------------
+
+// --- if ---
+// No parentheses around conditions (Swift/Rust style).
+// if is an expression (returns a value, like Kotlin).
+// Single-statement form: if condition statement
+
+ifStatement
+    = 'if' expression ( block | statement )
+      [ 'else' ( ifStatement | block | statement ) ]
+    ;
+
+// --- for ---
+// Traditional: for x in collection { ... }
+// Simplified:  for collection { say it }  — implicit `it` variable
+// Also:        for collection statement   — single-statement form
+
+forStatement
+    = 'for' [ IDENTIFIER 'in' ] expression ( block | statement )
+    ;
+
+// --- while ---
+// while condition { ... }
+// while condition statement  — single-statement form
+
+whileStatement
+    = 'while' expression ( block | statement )
+    ;
+
+// --- when ---
+// Both expression and statement. Optional subject.
+// Cases: values, ranges (in), type checks (is), regex (matches),
+// DPEC (.CONSTANT), comma-separated matchers, else.
+
+whenStatement
+    = 'when' [ '(' expression ')' ] '{'
+        { whenEntry }
+        [ 'else' '->' ( block | expression | statement ) ]
+      '}'
+    ;
+
+whenEntry
+    = whenCondition { ',' whenCondition } '->' ( block | expression | statement )
+    ;
+
+whenCondition
+    = 'is' typeReference                        (* type check *)
+    | 'in' expression                           (* range/collection membership *)
+    | 'matches' expression                      (* regex match *)
+    | '.' IDENTIFIER                            (* DPEC: .CONSTANT *)
+    | expression                                (* value match *)
+    ;
+
+// --- try/catch/finally ---
+// Kotlin-style with catch(*) wildcard for catch-all.
+
+tryStatement
+    = 'try' block
+      { catchClause }
+      [ 'finally' block ]
+    ;
+
+catchClause
+    = 'catch' '(' catchTarget ')' block
+    ;
+
+catchTarget
+    = '*'                                        (* catch-all *)
+    | IDENTIFIER [ ':' typeAnnotation ]          (* typed catch *)
+    ;
+
+// --- throw, return, break, continue ---
+
+throwStatement
+    = 'throw' expression
+    ;
+
+returnStatement
+    = 'return' [ expression ]
+    ;
+
+breakStatement
+    = 'break'
+    ;
+
+continueStatement
+    = 'continue'
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 12. ASSIGNMENTS
+// ---------------------------------------------------------------------------
+
+assignment
+    = assignmentTarget assignmentOperator expression
+    ;
+
+assignmentTarget
+    = IDENTIFIER
+    | memberAccess
+    | indexAccess
+    ;
+
+assignmentOperator
+    = '=' | '+=' | '-=' | '*=' | '/=' | '%='
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 13. EXPRESSIONS
+// ---------------------------------------------------------------------------
+// Operator precedence (lowest to highest):
+//   1. Ternary:           condition ? a : b
+//   2. Disjunction:       ||
+//   3. Conjunction:       &&
+//   4. Equality:          ==  !=
+//   5. Comparison:        <  >  <=  >=
+//   6. Named checks:      in  !in  is  !is  matches
+//   7. Range:             ..  ..<  <..  <..<
+//   8. Addition:          +  -
+//   9. Multiplication:    *  /  %
+//  10. Unary prefix:      -  !  ++  --
+//  11. Unary postfix:     ++  --
+//  12. Member/call/index: .  ?.  ()  []  !!
+//  13. Primary
+
+expression
+    = ternaryExpression
+    ;
+
+ternaryExpression
+    = disjunction [ '?' expression ':' expression ]
+    ;
+
+disjunction
+    = conjunction { '||' conjunction }
+    ;
+
+conjunction
+    = equality { '&&' equality }
+    ;
+
+equality
+    = comparison { ( '==' | '!=' ) comparison }
+    ;
+
+comparison
+    = namedCheck { ( '<' | '>' | '<=' | '>=' ) namedCheck }
+    ;
+
+namedCheck
+    = rangeExpression { ( 'in' | '!in' | 'is' | '!is' | 'matches' ) rangeExpression }
+    ;
+
+rangeExpression
+    = addition { rangeSuffix }
+    ;
+
+rangeSuffix
+    = '..'  addition                              (* inclusive both sides *)
+    | '..<' addition                              (* exclusive right     *)
+    | '<..' addition                              (* exclusive left      *)
+    | '<..<' addition                             (* exclusive both      *)
+    | '..' '_'                                    (* open right          *)
+    | '<..' '_'                                   (* exclusive-left, open-right *)
+    ;
+    (* Note: open-left ranges like _..100 are handled as prefix expressions *)
+
+addition
+    = multiplication { ( '+' | '-' ) multiplication }
+    ;
+
+multiplication
+    = unaryPrefix { ( '*' | '/' | '%' ) unaryPrefix }
+    ;
+
+unaryPrefix
+    = ( '-' | '!' | '++' | '--' ) unaryPrefix
+    | postfixExpression
+    ;
+
+postfixExpression
+    = primaryExpression { postfixOperation }
+    ;
+
+postfixOperation
+    = memberAccess
+    | nullSafeMemberAccess
+    | callSuffix
+    | indexAccess
+    | '!!'                                        (* non-null assertion *)
+    | '++'                                        (* postfix increment  *)
+    | '--'                                        (* postfix decrement  *)
+    | '::' 'class'                                (* reflection         *)
+    ;
+
+memberAccess
+    = '.' IDENTIFIER
+    ;
+
+nullSafeMemberAccess
+    = '?.' IDENTIFIER
+    ;
+
+callSuffix
+    = '(' [ argumentList ] ')'
+    | lambdaExpression                            (* trailing lambda    *)
+    ;
+
+indexAccess
+    = '[' expression ']'
+    ;
+
+argumentList
+    = argument { ( ',' | NL ) argument } [ ',' ]
+    ;
+
+argument
+    = [ IDENTIFIER '=' ] expression               (* positional or named *)
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 14. PRIMARY EXPRESSIONS
+// ---------------------------------------------------------------------------
+
+primaryExpression
+    = literal
+    | IDENTIFIER
+    | '(' expression ')'                          (* parenthesized      *)
+    | ifExpression
+    | whenExpression
+    | lambdaExpression
+    | sayExpression
+    | langBlock
+    | '_' '..' expression                         (* open-left range: _..100 *)
+    | '_' '<..' expression                        (* open-left exclusive     *)
+    ;
+
+// if as expression (same syntax, used in expression context)
+ifExpression
+    = 'if' expression block 'else' ( ifExpression | block )
+    ;
+
+// when as expression
+whenExpression
+    = 'when' [ '(' expression ')' ] '{'
+        { whenEntry }
+        'else' '->' ( block | expression )
+      '}'
+    ;
+
+// --- say ---
+// say prints to stdout with newline. Parentheses optional.
+// Variants: say.warn, say.error, say.info
+
+sayExpression
+    = 'say' [ '.' sayVariant ] sayArgument
+    ;
+
+sayVariant
+    = 'warn' | 'error' | 'info'
+    ;
+
+sayArgument
+    = '(' expression { ( ',' | NL ) expression } ')'
+    | expression                                  (* parentheses optional *)
+    ;
+
+expressionStatement
+    = expression
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 15. DSL BLOCKS
+// ---------------------------------------------------------------------------
+// lang keyword for embedded DSLs. Starts with KD.
+// The block is parsed by the DSL's own parser; result is a DSL-specific object.
+
+langBlock
+    = 'lang' IDENTIFIER block                     (* e.g. lang KD { ... } *)
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 16. ANNOTATIONS
+// ---------------------------------------------------------------------------
+
+annotation
+    = '@' IDENTIFIER [ '(' [ argumentList ] ')' ]
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 17. LITERALS
+// ---------------------------------------------------------------------------
+
+literal
+    = intLiteral
+    | longLiteral
+    | floatLiteral
+    | doubleLiteral
+    | decLiteral
+    | boolLiteral
+    | stringLiteral
+    | charLiteral
+    | nilLiteral
+    | urlLiteral
+    | dateLiteral
+    | localDateTimeLiteral
+    | zonedDateTimeLiteral
+    | durationLiteral
+    | versionLiteral
+    | blobLiteral
+    | quantityLiteral
+    | rangeLiteral
+    | listLiteral
+    | mapLiteral
+    ;
+
+
+// --- Numeric Literals ---
+// Numeric tower promotion: Int -> Long -> Float -> Double -> Dec
+
+intLiteral
+    = DECIMAL_DIGITS                              (* no suffix             *)
+    | '0x' HEX_DIGITS                            (* hex                   *)
+    | '0b' BIN_DIGITS                            (* binary                *)
+    ;
+
+longLiteral
+    = DECIMAL_DIGITS ( 'L' | 'l' )
+    ;
+
+floatLiteral
+    = DECIMAL_DIGITS '.' DECIMAL_DIGITS ( 'F' | 'f' )
+    | DECIMAL_DIGITS ( 'F' | 'f' )
+    ;
+
+doubleLiteral
+    = DECIMAL_DIGITS '.' DECIMAL_DIGITS [ 'D' | 'd' ]
+    | DECIMAL_DIGITS ( 'D' | 'd' )
+    ;
+
+decLiteral
+    = DECIMAL_DIGITS [ '.' DECIMAL_DIGITS ] ( 'BD' | 'bd' )
+    ;
+
+// Note: DECIMAL_DIGITS may contain underscores for legibility: 424_235_412
+
+boolLiteral
+    = 'true' | 'false'
+    ;
+
+nilLiteral
+    = 'nil'
+    ;
+
+
+// --- String Literals ---
+// Standard:            "hello"                  — supports escape chars, interpolation
+// Verbatim:            @"no \n escapes"         — no escape processing
+// Multiline:           """..."""                 — Swift-style multiline (dedented)
+// Verbatim Multiline:  @"""..."""               — no escapes, multiline
+// Backtick:            `raw text`               — raw string
+
+stringLiteral
+    = STANDARD_STRING                             (* "..." with escapes       *)
+    | VERBATIM_STRING                             (* @"..." no escapes        *)
+    | MULTILINE_STRING                            (* """...""" Swift-style     *)
+    | VERBATIM_MULTILINE_STRING                   (* @"""..."""               *)
+    | BACKTICK_STRING                             (* `...`                    *)
+    ;
+
+// String interpolation (within standard and multiline strings):
+//   $identifier           — simple variable interpolation
+//   ${expression}          — expression interpolation with nested brace handling
+
+charLiteral
+    = '\'' CHAR_CONTENT '\''
+    ;
+
+
+// --- URL Literal ---
+// Angle-bracket form from KD: <https://www.nasa.gov>
+// Also bare URLs with known schemes
+
+urlLiteral
+    = '<' URL_CONTENT '>'
+    | URL_BARE                                    (* e.g. https://example.com *)
+    ;
+
+
+// --- Date / DateTime Literals ---
+// From KD type system. Format: year/month/day
+
+dateLiteral
+    = YEAR '/' MONTH '/' DAY
+    ;
+
+localDateTimeLiteral
+    = dateLiteral '@' TIME
+    ;
+
+zonedDateTimeLiteral
+    = dateLiteral '@' TIME ZONE_SUFFIX
+    ;
+
+// TIME = hh:mm(:ss(.fractional)?)?
+// ZONE_SUFFIX = '-Z' | '-UTC' | ('+' | '-') OFFSET
+
+
+// --- Duration Literal ---
+// From KD: 12:74:42, 23days:05:21:23.53, 85ms
+
+durationLiteral
+    = DURATION_TOKEN
+    ;
+
+
+// --- Version Literal ---
+// Semantic versioning: major.minor.micro-qualifier-qualifierNumber
+// e.g. 5.2.7, 5.0.0-beta-2, 5.2-alpha
+
+versionLiteral
+    = VERSION_TOKEN
+    ;
+
+
+// --- Blob Literal ---
+// Base64 encoded binary: .blob(sdf789GSfsb2+3324sf2)
+
+blobLiteral
+    = '.blob(' BASE64_CONTENT ')'
+    ;
+
+
+// --- Quantity Literal ---
+// Amount + SI unit: 23cm, -15mL, 2.5m3, 142.24km:d
+// Not in initial grammar scope but syntax reserved.
+
+quantityLiteral
+    = NUMERIC_VALUE UNIT_SYMBOL [ ':' QUANTITY_TYPE_SUFFIX ]
+    ;
+
+// UNIT_SYMBOL: standard SI symbols (cm, m, kg, km, s, etc.)
+//              LT or ℓ for Liter (to avoid conflict with Long suffix L)
+// QUANTITY_TYPE_SUFFIX: i=Int, L=Long, d=Double, f=Float (default is Dec)
+
+
+// --- Range Literal ---
+// From KD. Inclusive, exclusive, open. For all comparable types.
+//   1..5         inclusive
+//   5.0<..<15.0  exclusive both
+//   2<..17       exclusive left
+//   6..<12       exclusive right
+//   6.._         open right
+//   _..100       open left
+//   8<.._        exclusive left, open right
+
+rangeLiteral
+    = expression ( '..' | '..<' | '<..' | '<..<' ) ( expression | '_' )
+    | '_' ( '..' | '<..' ) expression
+    ;
+
+
+// --- List Literal ---
+// Ordered collection. Commas optional.
+// Type is inferred: [1, 2, 3] -> List<Int>
+
+listLiteral
+    = '[' [ listElement { ( ',' | NL ) listElement } [ ',' ] ] ']'
+    ;
+
+listElement
+    = expression
+    ;
+
+
+// --- Map Literal ---
+// Key=value pairs. Commas optional.
+// Maps use = for pairs (from KD): [name="Rufus", color="rust"]
+// Type inferred: [name="Rufus"] -> Map<String, String>
+
+mapLiteral
+    = '[' mapEntry { ( ',' | NL ) mapEntry } [ ',' ] ']'
+    ;
+
+mapEntry
+    = expression '=' expression
+    ;
+
+
+// ---------------------------------------------------------------------------
+// 18. LEXER TOKENS (Informative)
+// ---------------------------------------------------------------------------
+// These are described informally for the grammar's completeness.
+// The actual lexer implementation handles tokenization.
+
+// --- Identifiers ---
+// Unicode-aware. Start with letter or _, followed by letters, digits, _.
+// IDENTIFIER = [a-zA-Z_\p{L}] [a-zA-Z0-9_\p{L}]*
+
+// --- Numeric Digits ---
+// DECIMAL_DIGITS = [0-9] ([0-9_]* [0-9])?     (* underscores for legibility *)
+// HEX_DIGITS     = [0-9a-fA-F] ([0-9a-fA-F_]* [0-9a-fA-F])?
+// BIN_DIGITS     = [01] ([01_]* [01])?
+
+// --- Comments ---
+// LINE_COMMENT   = ('#' | '//') .* NL          (* # and // both work *)
+// BLOCK_COMMENT  = '/*' .* '*/'                (* can nest? TBD *)
+
+// --- Whitespace ---
+// WS = [ \t\r]+                                 (* horizontal whitespace *)
+// NL = '\n' | '\r\n' | '\r'                     (* newline — significant *)
+
+// --- String Tokens ---
+// STANDARD_STRING         = '"' (ESCAPE_CHAR | INTERPOLATION | [^"\\])* '"'
+// VERBATIM_STRING         = '@"' [^"]* '"'
+// MULTILINE_STRING        = '"""' .* '"""'       (* Swift-style dedenting *)
+// VERBATIM_MULTILINE_STRING = '@"""' .* '"""'
+// BACKTICK_STRING         = '`' [^`]* '`'
+
+// ESCAPE_CHAR = '\\' ( 't' | 'b' | 'n' | 'r' | 'u' UNICODE_ESCAPE
+//                     | '\'' | '"' | '\\' )
+// INTERPOLATION = '$' IDENTIFIER | '${' expression '}'
+
+// --- Keywords ---
+// var, let, fun, class, trait, enum, if, else, for, in, while, when,
+// try, catch, finally, throw, return, break, continue, use, as,
+// is, matches, say, lang, static, extend, true, false, nil
+
+
+// ---------------------------------------------------------------------------
+// 19. OPERATOR SUMMARY
+// ---------------------------------------------------------------------------
+//
+// Arithmetic:    +  -  *  /  %
+// Comparison:    ==  !=  <  >  <=  >=
+// Logical:       &&  ||  !
+// Assignment:    =  +=  -=  *=  /=  %=
+// Increment:     ++  -- (prefix and postfix)
+// Range:         ..  ..<  <..  <..<
+// Null safety:   ?.  ?:  !!
+// Member:        .
+// Ternary:       ? :
+// Type check:    is  !is
+// Containment:   in  !in
+// Regex:         matches
+// Reflection:    ::class
+// Annotation:    @
+// Wildcard:      _ (in ranges and catch)
+// Spread/All:    * (in catch)
+//
+// Precedence is defined in section 13 (Expressions).
+
+
+// ---------------------------------------------------------------------------
+// 20. GRAMMAR NOTES & FUTURE EXTENSIONS
+// ---------------------------------------------------------------------------
+//
+// [1] AMBIGUITY: List vs Map literal
+//     [1, 2, 3] is a list; [a=1, b=2] is a map.
+//     Disambiguation: If the first element contains a top-level '=' that is
+//     not inside parentheses, it's a map. Otherwise it's a list.
+//     An empty [] is an empty list. An empty map is [=] or Map<K,V>().
+//
+// [2] AMBIGUITY: Unary minus in comma-optional lists
+//     [a -b] with spaces: two elements, a and -b
+//     [a - b] with spaces on both sides of -: one element, expression a - b
+//     Rule: Unary minus binds when preceded by whitespace and followed
+//     immediately by the operand (no space).
+//
+// [3] SEMICOLONS AND NEWLINES
+//     Newlines are treated as statement separators (like Kotlin).
+//     Semicolons can be used to place multiple statements on one line.
+//     A newline is NOT a separator when the previous line ends with an
+//     operator, open bracket/paren, or comma — continuation is inferred.
+//
+// [4] FUTURE: Concurrency model (Kotlin coroutines, Rust ownership, or hybrid)
+// [6] FUTURE: Pattern matching / destructuring
+// [7] FUTURE: Compile-time constraint verification
+// [8] FUTURE: Host language interop (useHostLanguage=true)
+// [9] FUTURE: Nested block comments
+//
+// ---------------------------------------------------------------------------

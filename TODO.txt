@@ -1,8 +1,8 @@
-1. Finish Interpreter test fail cleanup
-2. Add static blocks // cleaner, keeps us organized
-3. Add indexes for String, Lists, Maps and user defined.
-4. Add structs (data classes)
-5. Change `` to regex literal rather than a String literal
+1. Add structs (data classes)
+2. Change `` to regex literal rather than a String literal
+3. Add other Core models including Grid, Version and others that make sense.
+4. Add reflection and extensions for use when hostLanguage is set to true.
+5. Work on core library. Keep it light for now.
 
 --
 
