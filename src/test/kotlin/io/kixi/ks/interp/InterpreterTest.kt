@@ -1558,11 +1558,11 @@ class InterpreterTest : FunSpec({
     context("Pattern matching (matches)") {
 
         test("matches regex positive") {
-            exec(""""hello123" matches @"[a-z]+\\d+"""") shouldBe true
+            exec(""""hello123" matches @"[a-z]+\d+"""") shouldBe true
         }
 
         test("matches regex negative") {
-            exec(""""hello" matches @"\\d+"""") shouldBe false
+            exec(""""hello" matches @"\d+"""") shouldBe false
         }
     }
 

@@ -67,19 +67,15 @@ class KSClass(
                     for (staticMember in member.members) {
                         when (staticMember) {
                             is FunDecl -> {
-                                val fn = KSFunction(staticMember, staticMembers)
-                                staticMembers.defineFunction(staticMember.name, fn)
+                                // Static functions are initialized by the interpreter
+                                // in initializeStaticMembers(). Do NOT pre-define here
+                                // — that causes RedefinitionError.
                             }
                             is VarDecl -> {
-                                // Static variables - evaluated once at class definition time
-                                // For now, we'll store them without evaluating (needs interpreter)
-                                staticMembers.define(
-                                    staticMember.name,
-                                    null, // Will be initialized by interpreter
-                                    staticMember.mutable,
-                                    staticMember.typeAnnotation,
-                                    staticMember.constraint
-                                )
+                                // Static variables are initialized by the interpreter
+                                // in initializeStaticMembers() where initializers can
+                                // be evaluated. Do NOT pre-define here — that causes
+                                // RedefinitionError when the interpreter calls define().
                             }
                             else -> { /* ignore other members in static block */ }
                         }

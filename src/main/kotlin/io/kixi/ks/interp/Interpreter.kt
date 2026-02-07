@@ -1880,6 +1880,20 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
         }
 
+        // Integer division should truncate (like Kotlin, Java, Python //)
+        if (op == "divide") {
+            if (left is Int && right is Int) {
+                if (right == 0) throw DivisionByZeroError()
+                return left / right  // Kotlin Int / Int truncates toward zero
+            }
+            if (left is Long || right is Long) {
+                val a = (left as Number).toLong()
+                val b = (right as Number).toLong()
+                if (b == 0L) throw DivisionByZeroError()
+                return a / b
+            }
+        }
+
         val a = toDouble(left)
         val b = toDouble(right)
 

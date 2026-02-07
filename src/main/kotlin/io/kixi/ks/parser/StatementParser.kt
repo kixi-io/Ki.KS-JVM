@@ -145,15 +145,21 @@ class StatementParser(internal val p: Parser) {
             return args
         }
 
-        // Bare form: parse a single expression as the sole argument
+        // Bare form: parse space-separated expressions as arguments
+        // say "a" "b" "c"  → three arguments, printed as "a b c"
+        // say "Sum: " + a  → one expression argument (operator chains parse as single expr)
         if (!p.canStartExpression()) {
             // say with no arguments (just prints a blank line)
             return emptyList()
         }
 
-        val argLoc = p.currentLocation()
-        val value = p.expr.parseExpression()
-        return listOf(Argument(null, value, argLoc))
+        val args = mutableListOf<Argument>()
+        while (p.canStartExpression() && !p.check(NEWLINE) && !p.check(SEMICOLON) && !p.atBlockEnd()) {
+            val argLoc = p.currentLocation()
+            val value = p.expr.parseExpression()
+            args.add(Argument(null, value, argLoc))
+        }
+        return args
     }
 
     // ====================================================================
