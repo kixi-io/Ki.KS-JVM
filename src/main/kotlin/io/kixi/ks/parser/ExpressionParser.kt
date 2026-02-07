@@ -20,7 +20,7 @@ import io.kixi.ks.lexer.TokenType.*
  *   8. Elvis:          ?:
  *   9. Range:          ..  ..<  <..  <..<
  *  10. Addition:       +  -
- *  11. Multiplication: *  /  %  ⚭
+ *  11. Multiplication: *  /  %  âš­
  *  12. Exponentiation: **                            (right-assoc)
  *  13. Unary prefix:   -  !  ++  --
  *  14. Postfix:        .  ?.  ()  []  !!  ++  --  ::class
@@ -51,7 +51,7 @@ class ExpressionParser(internal val p: Parser) {
      *     arr[0] -= 2     MINUS_ASSIGN
      *     obj.f **= 3     POWER_ASSIGN
      *
-     * Assignment is right-associative: `a = b = c` → `a = (b = c)`.
+     * Assignment is right-associative: `a = b = c` â†’ `a = (b = c)`.
      * The left side must be a valid target: [IdentifierExpr], [MemberAccessExpr],
      * or [IndexExpr].
      */
@@ -307,7 +307,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 11. Multiplication: * / % ⚭
+    // 11. Multiplication: * / % âš­
     // ====================================================================
 
     private fun parseMultiplication(): Expr {
@@ -331,7 +331,7 @@ class ExpressionParser(internal val p: Parser) {
     // 12. Exponentiation: ** (right-associative)
     // ====================================================================
 
-    /** Right-associative: `2**3**4` → `2**(3**4)`. */
+    /** Right-associative: `2**3**4` â†’ `2**(3**4)`. */
     private fun parsePower(): Expr {
         val base = parseUnaryPrefix()
         if (p.match(STAR_STAR)) {
@@ -358,7 +358,7 @@ class ExpressionParser(internal val p: Parser) {
                 val operand = parseUnaryPrefix()
                 UnaryExpr(UnaryOp.NOT, operand, prefix = true, loc)
             }
-            // !! in prefix position is double logical NOT: !!true → !(!true)
+            // !! in prefix position is double logical NOT: !!true â†’ !(!true)
             // (In postfix position it remains the non-null assertion operator)
             p.match(BANG_BANG) -> {
                 val operand = parseUnaryPrefix()
@@ -417,9 +417,17 @@ class ExpressionParser(internal val p: Parser) {
 
                 p.check(LBRACKET) -> {
                     p.advance() // consume [
-                    val index = parseExpression()
+                    val indices = mutableListOf(parseExpression())
+                    // Parse additional indices (commas optional, KD-style)
+                    while (!p.check(RBRACKET) && !p.isAtEnd()) {
+                        p.match(COMMA) // optional comma
+                        p.skipSeparators()
+                        if (p.check(RBRACKET)) break
+                        if (!p.canStartExpression()) break
+                        indices.add(parseExpression())
+                    }
                     p.expect(RBRACKET, "Expected ']' after index")
-                    IndexExpr(expr, index, loc)
+                    IndexExpr(expr, indices, loc)
                 }
 
                 p.match(BANG_BANG) -> {
@@ -455,7 +463,7 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     /**
-     * Parse a primary expression — the atoms of the expression grammar.
+     * Parse a primary expression â€” the atoms of the expression grammar.
      *
      * Handles: literals, identifiers, `this`, grouping `(expr)`, collections
      * `[...]`, DPEC `.NAME`, quantities (`23cm`, `$50.25`), open-left ranges
@@ -473,12 +481,12 @@ class ExpressionParser(internal val p: Parser) {
             DEC_LITERAL    -> { val t = p.advance(); LiteralExpr(t.literal, LiteralKind.DEC, t.location) }
 
             // --- Quantity literals ---
-            // Unit quantities: 23cm, 51.4m³, 1000kg, 25°C, 97ℓ, 100USD, 5.5e(-7)m
+            // Unit quantities: 23cm, 51.4mÂ³, 1000kg, 25Â°C, 97â„“, 100USD, 5.5e(-7)m
             QUANTITY_LITERAL -> {
                 val t = p.advance()
                 LiteralExpr(t.literal, LiteralKind.QUANTITY, t.location)
             }
-            // Currency quantities with prefix notation: $23.53, €50.25, ¥10000, £75.50
+            // Currency quantities with prefix notation: $23.53, â‚¬50.25, Â¥10000, Â£75.50
             CURRENCY_QUANTITY_LITERAL -> {
                 val t = p.advance()
                 LiteralExpr(t.literal, LiteralKind.CURRENCY_QUANTITY, t.location)
@@ -623,12 +631,12 @@ class ExpressionParser(internal val p: Parser) {
             if (text[i] == '$' && i + 1 < text.length) {
                 val next = text[i + 1]
                 when {
-                    // ${expr} — complex interpolation
+                    // ${expr} â€” complex interpolation
                     next == '{' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val closeIdx = findMatchingBrace(text, i + 2)
                         if (closeIdx == -1) {
-                            // Malformed — treat rest as literal
+                            // Malformed â€” treat rest as literal
                             sb.append(text.substring(i))
                             i = text.length
                         } else {
@@ -638,7 +646,7 @@ class ExpressionParser(internal val p: Parser) {
                             i = closeIdx + 1
                         }
                     }
-                    // $identifier — simple interpolation
+                    // $identifier â€” simple interpolation
                     next.isLetter() || next == '_' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val start = i + 1
@@ -649,7 +657,7 @@ class ExpressionParser(internal val p: Parser) {
                         i = end
                     }
                     else -> {
-                        // $ followed by something unexpected — treat as literal $
+                        // $ followed by something unexpected â€” treat as literal $
                         sb.append('$')
                         i++
                     }
@@ -725,7 +733,7 @@ class ExpressionParser(internal val p: Parser) {
         val elseBranch = if (p.match(ELSE)) {
             p.skipNewlines()
             if (p.check(IF)) {
-                // else if chain — parse as another IfExpr
+                // else if chain â€” parse as another IfExpr
                 parseIfExpr()
             } else {
                 p.parseSingleOrBlock()
@@ -785,7 +793,7 @@ class ExpressionParser(internal val p: Parser) {
 
         while (!p.check(RBRACE) && !p.isAtEnd()) {
             if (p.check(ELSE)) {
-                // Else branch — must be last
+                // Else branch â€” must be last
                 val elseLoc = p.advance().location
                 p.expect(ARROW, "Expected '->' after 'else' in when")
                 val body = p.parseSingleOrBlock()
@@ -916,7 +924,7 @@ class ExpressionParser(internal val p: Parser) {
             p.expect(LPAREN, "Expected '(' after 'catch'")
 
             if (p.match(STAR)) {
-                // catch(*) — wildcard catch-all
+                // catch(*) â€” wildcard catch-all
                 p.expect(RPAREN, "Expected ')' after '*' in catch")
                 p.skipNewlines()
                 val catchBody = p.parseBlock()
@@ -1068,7 +1076,7 @@ class ExpressionParser(internal val p: Parser) {
      * Parse a comma/newline-separated argument list (inside parentheses).
      *
      * The opening `(` must already be consumed. The closing `)` is NOT
-     * consumed here — the caller handles it.
+     * consumed here â€” the caller handles it.
      *
      * Arguments can be positional or named:
      *     foo(1, 2, 3)
@@ -1099,7 +1107,7 @@ class ExpressionParser(internal val p: Parser) {
     /**
      * Parse a single argument (positional or named).
      *
-     * Named argument: `name = value` — disambiguated from assignment by
+     * Named argument: `name = value` â€” disambiguated from assignment by
      * checking IDENTIFIER followed by single `=` (not `==`).
      */
     private fun parseArgument(): Argument {

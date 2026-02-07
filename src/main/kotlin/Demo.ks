@@ -331,10 +331,10 @@ fun log(level: LogLevel, message: String): String {
 }
 
 say "Parameterized enum logging:"
-say "  " + log(LogLevel.DEBUG, "Starting application")
-say "  " + log(LogLevel.INFO, "Server listening on port 8080")
-say "  " + log(LogLevel.WARN, "Connection timeout approaching")
-say "  " + log(LogLevel.ERROR, "Failed to connect to database")
+say "  " + log(.DEBUG, "Starting application")
+say "  " + log(.INFO, "Server listening on port 8080")
+say "  " + log(.WARN, "Connection timeout approaching")
+say "  " + log(.ERROR, "Failed to connect to database")
 say ""
 
 # --- HTTP Status Codes with When ---
@@ -546,6 +546,159 @@ say "  measurements = " + measurements
 say ""
 
 # ════════════════════════════════════════════════════════════════════════════════
+# PART 7: Indexing
+# ════════════════════════════════════════════════════════════════════════════════
+
+say.note "══════════════════════════════════════════════════════════════════════"
+say.note "  Part 7: Indexing"
+say.note "══════════════════════════════════════════════════════════════════════"
+say ""
+
+# --- List Indexing ---
+
+let fruits = ["apple", "banana", "cherry", "date", "elderberry"]
+say "List indexing:"
+say "  fruits[0] = " + fruits[0]
+say "  fruits[2] = " + fruits[2]
+say "  fruits[4] = " + fruits[4]
+say ""
+
+# --- Map Indexing ---
+
+let capitals = ["Japan"="Tokyo", "France"="Paris", "Brazil"="Brasilia"]
+say "Map indexing:"
+say `  capitals["Japan"]  = ` + capitals["Japan"]
+say `  capitals["France"] = ` + capitals["France"]
+# say @"  capitals["Japan"]  = " + capitals["Japan"]
+# say @"  capitals["France"] = " + capitals["France"]
+say ""
+
+# --- String Indexing ---
+
+let greeting = "Kia Ora"
+say "String indexing:"
+say "  greeting[0] = " + greeting[0]
+say "  greeting[4] = " + greeting[4]
+say ""
+
+# --- Mutable List Index Assignment ---
+
+var scores = [10, 20, 30, 40, 50]
+say "Mutable list index assignment:"
+say "  Before: " + scores
+scores[2] = 99
+say "  scores[2] = 99"
+say "  After:  " + scores
+say ""
+
+# --- Mutable Map Index Assignment ---
+
+var settings = ["theme"="dark", "lang"="en"]
+say "Mutable map index assignment:"
+say "  Before: " + settings
+settings["lang"] = "ja"
+settings["font"] = "monospace"
+say "  settings[\"lang\"] = \"ja\""
+say "  settings[\"font\"] = \"monospace\""
+say "  After:  " + settings
+say ""
+
+# --- Class with Custom Indexer (Single Index) ---
+
+class Bucket(let name: String) {
+    var items = ["shovel"="rusty", "pail"="blue", "crab"="angry"]
+
+    fun get(key: String): String = items[key]
+
+    fun set(key: String, value: String) {
+        items[key] = value
+    }
+}
+
+let bucket = Bucket("beach")
+say "Class with single-index get/set (Bucket):"
+say "  bucket[\"shovel\"] = " + bucket["shovel"]
+say "  bucket[\"crab\"]   = " + bucket["crab"]
+bucket["crab"] = "friendly"
+say "  bucket[\"crab\"] = \"friendly\""
+say "  bucket[\"crab\"]   = " + bucket["crab"]
+say ""
+
+# --- Class with Multi-Index (Grid) ---
+
+class Grid(let rows: Int, let cols: Int) {
+    var cells = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    fun get(row: Int, col: Int): Int = cells[row * cols + col]
+
+    fun set(row: Int, col: Int, value: Int) {
+        cells[row * cols + col] = value
+    }
+
+    fun display(): String {
+        var result = ""
+        for r in 0..<rows {
+            var line = "    "
+            for c in 0..<cols {
+                line = line + get(r, c)
+                if c < cols - 1 { line = line + "  " }
+            }
+            result = result + line
+            if r < rows - 1 { result = result + "\n" }
+        }
+        return result
+    }
+}
+
+let grid = Grid(3, 3)
+say "Multi-index access on Grid (3x3):"
+say "  Initial grid:"
+say grid.display()
+say ""
+
+grid[0, 0] = 1
+grid[0, 2] = 3
+grid[1, 1] = 5
+grid[2, 0] = 7
+grid[2, 2] = 9
+say "  After setting corners and center:"
+say grid.display()
+say ""
+
+say "  grid[0, 0] = " + grid[0, 0]
+say "  grid[1, 1] = " + grid[1, 1]
+say "  grid[2, 2] = " + grid[2, 2]
+say ""
+
+# --- Multi-Index without Commas (KD-style) ---
+
+say "  Comma-optional: grid[2 2] = " + grid[2 2]
+say ""
+
+# --- Compound Assignment on Indexes ---
+
+say "Compound assignment on indexes:"
+var numbers = [10, 20, 30]
+say "  Before: " + numbers
+numbers[1] += 5
+say "  numbers[1] += 5"
+say "  After:  " + numbers
+say ""
+
+grid[1, 1] = grid[1, 1] + 100
+say "  grid[1,1] + 100 = " + grid[1, 1]
+say ""
+
+# --- Chained Index Access ---
+
+var matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+say "Chained index access (list of lists):"
+say "  matrix[0][0] = " + matrix[0][0]
+say "  matrix[1][2] = " + matrix[1][2]
+say "  matrix[2][1] = " + matrix[2][1]
+say ""
+
+# ════════════════════════════════════════════════════════════════════════════════
 # FINALE
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -572,5 +725,12 @@ say "  ✓ Currency literals with prefix notation ($23.53, €50.25)"
 say "  ✓ Quantity arithmetic with unit conversion (1m + 2cm)"
 say "  ✓ Unit composition with combine operator (4cm ⚭ 3cm)"
 say "  ✓ Scientific notation in quantities (3e8mps, 5en7m)"
+say "  ✓ List, Map, and String indexing"
+say "  ✓ Mutable index assignment (list[i] = x, map[k] = v)"
+say "  ✓ Custom class indexers via get/set (bucket[\"key\"])"
+say "  ✓ Multi-index access (grid[row, col])"
+say "  ✓ Comma-optional indexing (grid[1 2])"
+say "  ✓ Compound index assignment (list[i] += n)"
+say "  ✓ Chained index access (matrix[0][1])"
 say ""
 say "KS: Where type safety meets expressiveness! 🚀"

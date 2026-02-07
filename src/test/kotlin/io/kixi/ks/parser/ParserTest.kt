@@ -697,12 +697,12 @@ class ParserTest : FunSpec({
         test("list index") {
             val expr = parseExpr("list[0]") as IndexExpr
             (expr.obj as IdentifierExpr).name shouldBe "list"
-            (expr.index as LiteralExpr).value shouldBe 0
+            (expr.indices[0] as LiteralExpr).value shouldBe 0
         }
 
         test("map index with string key") {
             val expr = parseExpr("map[\"key\"]") as IndexExpr
-            (expr.index as LiteralExpr).value shouldBe "key"
+            (expr.indices[0] as LiteralExpr).value shouldBe "key"
         }
 
         test("chained index access") {

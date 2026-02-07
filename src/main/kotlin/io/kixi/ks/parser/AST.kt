@@ -4,7 +4,7 @@ import io.kixi.ks.SourceLocation
 
 /*
  * ============================================================================
- * KS Language Ã¢â‚¬â€ Abstract Syntax Tree
+ * KS Language ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Abstract Syntax Tree
  * ============================================================================
  *
  * Sealed hierarchy enabling exhaustive pattern matching in Kotlin `when`.
@@ -169,7 +169,7 @@ data class StaticBlock(
 ) : Decl
 
 /**
- * Type extension (future-proofed Ã¢â‚¬â€ syntax TBD).
+ * Type extension (future-proofed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â syntax TBD).
  *
  *     extend trait Comparable
  *     extend String { fun isPalindrome(): Bool = ... }
@@ -233,12 +233,12 @@ data class SayStmt(
 ) : Stmt
 
 /**
- * For loop Ã¢â‚¬â€ two forms:
+ * For loop ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â two forms:
  *
- * Traditional:  `for i in list { ... }`   Ã¢â€ â€™ variable = "i"
- * Simplified:   `for list { ... }`        Ã¢â€ â€™ variable = null (uses implicit `it`)
- *               `for list say it`         Ã¢â€ â€™ single-statement body
- *               `for Color { say it }`    Ã¢â€ â€™ enum iteration
+ * Traditional:  `for i in list { ... }`   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ variable = "i"
+ * Simplified:   `for list { ... }`        ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ variable = null (uses implicit `it`)
+ *               `for list say it`         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ single-statement body
+ *               `for Color { say it }`    ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ enum iteration
  */
 data class ForStmt(
     val variable: String?,          // null for simplified (implicit `it`)
@@ -292,7 +292,7 @@ enum class LiteralKind {
  *
  * The parser splits the raw string into alternating literal text segments
  * and embedded expression segments. Verbatim and backtick strings are never
- * templates Ã¢â‚¬â€ they always become plain [LiteralExpr].
+ * templates ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â they always become plain [LiteralExpr].
  */
 data class StringTemplateExpr(
     val parts: List<StringPart>,
@@ -428,11 +428,21 @@ data class MemberAccessExpr(
 ) : Expr
 
 /**
- * Index access: `list[0]`, `map["key"]`
+ * Index access: `list[0]`, `map["key"]`, `grid[1, 2]`
+ *
+ * Single-index access works on built-in types (List, Map, String).
+ * Multi-index access desugars to `get`/`set` method calls on objects,
+ * following Kotlin's operator overloading convention:
+ *
+ *     grid[1, 2]       -> grid.get(1, 2)
+ *     grid[1, 2] = 42  -> grid.set(1, 2, 42)
+ *
+ * Commas between indices are optional (KD-style):
+ *     grid[1, 2]  and  grid[1 2]  are equivalent.
  */
 data class IndexExpr(
     val obj: Expr,
-    val index: Expr,
+    val indices: List<Expr>,
     override val location: SourceLocation
 ) : Expr
 
@@ -478,7 +488,7 @@ data class RangeExpr(
 ) : Expr
 
 /**
- * If expression Ã¢â‚¬â€ returns a value (like Kotlin).
+ * If expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â returns a value (like Kotlin).
  *
  *     if condition { thenBlock }
  *     if condition { thenBlock } else { elseBlock }
@@ -492,7 +502,7 @@ data class IfExpr(
 ) : Expr
 
 /**
- * When expression Ã¢â‚¬â€ Kotlin-style exhaustive branching.
+ * When expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Kotlin-style exhaustive branching.
  *
  *     when subject { matchers -> body; else -> body }
  *     when { condition -> body }                      // no subject
@@ -504,7 +514,7 @@ data class WhenExpr(
 ) : Expr
 
 /**
- * Try expression Ã¢â‚¬â€ returns the value of the body or catch block.
+ * Try expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â returns the value of the body or catch block.
  *
  *     try { expr } catch(e: Type) { handler } finally { cleanup }
  *     try { expr } catch(*) { handler }
@@ -621,7 +631,7 @@ data class Parameter(
 )
 
 /**
- * Primary constructor parameter Ã¢â‚¬â€ may declare a property with var/let.
+ * Primary constructor parameter ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â may declare a property with var/let.
  *
  *     let name: String                immutable property
  *     var age: Int = 0                mutable property with default
@@ -640,7 +650,7 @@ data class ConstructorParam(
 enum class BindingType { VAR, LET }
 
 /**
- * Call argument Ã¢â‚¬â€ positional or named.
+ * Call argument ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â positional or named.
  *
  *     42                   positional (name = null)
  *     color = "purple"     named
@@ -677,8 +687,8 @@ data class EnumConstant(
  *     String?              nullable
  *     List<Int>            generic
  *     Map<String, Any?>    multi-param generic
- *     [Int]                list shorthand Ã¢â€ â€™ List<Int>
- *     [String:Int]         map shorthand  Ã¢â€ â€™ Map<String, Int>
+ *     [Int]                list shorthand ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ List<Int>
+ *     [String:Int]         map shorthand  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Map<String, Int>
  *     (Int, Int) -> Int    function type (future)
  */
 data class TypeRef(
@@ -688,11 +698,11 @@ data class TypeRef(
     val location: SourceLocation = SourceLocation()
 ) {
     companion object {
-        /** `[Int]` Ã¢â€ â€™ `List<Int>` */
+        /** `[Int]` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `List<Int>` */
         fun listOf(element: TypeRef, loc: SourceLocation) =
             TypeRef("List", listOf(element), false, loc)
 
-        /** `[String:Int]` Ã¢â€ â€™ `Map<String, Int>` */
+        /** `[String:Int]` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `Map<String, Int>` */
         fun mapOf(key: TypeRef, value: TypeRef, loc: SourceLocation) =
             TypeRef("Map", listOf(key, value), false, loc)
     }
@@ -701,7 +711,7 @@ data class TypeRef(
 // --- When Branches & Matchers ---
 
 /**
- * A branch in a when expression: matchers Ã¢â€ â€™ body.
+ * A branch in a when expression: matchers ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ body.
  *
  *     in 90..100 -> say "A"
  *     .SUCCESS, .WARNING -> "Good or warning"
@@ -793,7 +803,7 @@ data class ComparisonConstraint(
 
 enum class ComparisonOp { GT, LT, GTE, LTE, NEQ }
 
-/** `1..100`, `0.0..<1.0` Ã¢â‚¬â€ a range expression as constraint */
+/** `1..100`, `0.0..<1.0` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a range expression as constraint */
 data class RangeConstraint(
     val range: Expr,                // should be a RangeExpr
     override val location: SourceLocation

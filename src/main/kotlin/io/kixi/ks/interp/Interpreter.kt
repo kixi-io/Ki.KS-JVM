@@ -1255,11 +1255,33 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     private fun evaluateIndex(expr: IndexExpr): Any? {
         val obj = evaluate(expr.obj)
-        val index = evaluate(expr.index)
+        val indices = expr.indices.map { evaluate(it) }
+
+        // Multi-index: always dispatch to get() method on KSObject
+        if (indices.size > 1) {
+            return when (obj) {
+                is KSObject -> {
+                    val getMethod = obj.klass.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method for multi-index access",
+                            expr.location
+                        )
+                    callMethod(obj, getMethod, indices, expr.location)
+                }
+                null -> throw NullPointerError("Cannot index into nil", expr.location)
+                else -> throw TypeError(
+                    "Multi-index access requires a class with a 'get' method, got ${obj::class.simpleName}",
+                    expr.location
+                )
+            }
+        }
+
+        // Single index
+        val index = indices[0]
 
         return when (obj) {
             is List<*> -> {
-                val i = toInt(index, expr.index.location)
+                val i = toInt(index, expr.indices[0].location)
                 if (i < 0 || i >= obj.size) {
                     throw IndexOutOfBoundsError(i, obj.size, expr.location)
                 }
@@ -1267,11 +1289,20 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
             is Map<*, *> -> obj[index]
             is String -> {
-                val i = toInt(index, expr.index.location)
+                val i = toInt(index, expr.indices[0].location)
                 if (i < 0 || i >= obj.length) {
                     throw IndexOutOfBoundsError(i, obj.length, expr.location)
                 }
                 obj[i]
+            }
+            is KSObject -> {
+                // Desugar obj[index] -> obj.get(index)
+                val getMethod = obj.klass.findMethod("get")
+                    ?: throw RuntimeError(
+                        "Class '${obj.klass.name}' does not define a 'get' method for index access",
+                        expr.location
+                    )
+                callMethod(obj, getMethod, listOf(index), expr.location)
             }
             is KDTag -> {
                 when (index) {
@@ -1337,13 +1368,43 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
             is IndexExpr -> {
                 val obj = evaluate(target.obj)
-                val index = evaluate(target.index)
+                val indices = target.indices.map { evaluate(it) }
+
+                // KSObject: dispatch to set() method (single or multi-index)
+                if (obj is KSObject) {
+                    val getMethod = obj.klass.findMethod("get")
+                    val setMethod = obj.klass.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'set' method for index assignment",
+                            target.location
+                        )
+                    val newValue = computeAssignment(expr.operator, {
+                        if (getMethod != null) callMethod(obj, getMethod, indices, target.location)
+                        else throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method (needed for compound assignment)",
+                            target.location
+                        )
+                    }, value)
+                    callMethod(obj, setMethod, indices + newValue, target.location)
+                    return newValue
+                }
+
+                // Multi-index on non-KSObject is an error
+                if (indices.size > 1) {
+                    throw TypeError(
+                        "Multi-index assignment requires a class with a 'set' method, got ${obj?.javaClass?.simpleName}",
+                        target.location
+                    )
+                }
+
+                // Single index on built-in types
+                val index = indices[0]
 
                 when (obj) {
                     is MutableList<*> -> {
                         @Suppress("UNCHECKED_CAST")
                         val list = obj as MutableList<Any?>
-                        val i = toInt(index, target.index.location)
+                        val i = toInt(index, target.indices[0].location)
                         if (i < 0 || i >= list.size) {
                             throw IndexOutOfBoundsError(i, list.size, target.location)
                         }
@@ -1578,16 +1639,38 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
             is IndexExpr -> {
                 val obj = evaluate(operand.obj)
-                val index = evaluate(operand.index)
-                if (obj is MutableList<*>) {
+                val indices = operand.indices.map { evaluate(it) }
+
+                // KSObject: dispatch to get/set methods
+                if (obj is KSObject) {
+                    val getMethod = obj.klass.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method for index access",
+                            expr.location
+                        )
+                    val setMethod = obj.klass.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'set' method for index assignment",
+                            expr.location
+                        )
+                    val current = callMethod(obj, getMethod, indices, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    callMethod(obj, setMethod, indices + newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+
+                // Built-in: single index on MutableList
+                if (indices.size == 1 && obj is MutableList<*>) {
+                    val index = indices[0]
                     @Suppress("UNCHECKED_CAST")
                     val list = obj as MutableList<Any?>
-                    val i = toInt(index, operand.index.location)
+                    val i = toInt(index, operand.indices[0].location)
                     val current = list[i]
                     val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
                     list[i] = newVal
                     return if (expr.prefix) newVal else current
                 }
+
                 throw RuntimeError("Cannot increment/decrement index of ${obj?.javaClass?.simpleName}", expr.location)
             }
             else -> {
