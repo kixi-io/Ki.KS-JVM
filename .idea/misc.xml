@@ -2,6 +2,8 @@
 <project version="4">
   <component name="ExternalStorageConfigurationManager" enabled="true" />
   <component name="FrameworkDetectionExcludesConfiguration">
+    <file type="web" url="file://$PROJECT_DIR$/../Ki.Core-JVM" />
+    <file type="web" url="file://$PROJECT_DIR$/../Ki.KD-JVM" />
     <file type="web" url="file://$PROJECT_DIR$" />
   </component>
   <component name="KubernetesApiProvider"><![CDATA[{}]]></component>

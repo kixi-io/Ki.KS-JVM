@@ -16,22 +16,23 @@ import java.io.File
  * If no script is provided, runs the default Demo.ks from the source directory.
  */
 fun main() { // args: Array<String>
+
     val runtime = KSRuntime(
         colorOutput = true,
         debugMode = false
     )
-
-    val demoInterp = Interpreter(runtime)
-    var demoPath = "src/main/kotlin/Demo.ks"
-
-    var demoFile = File(demoPath)
-    runScript(demoInterp, demoFile)
 
     val stringDemoInterp = Interpreter(runtime)
     var stringDemoPath = "src/main/kotlin/StringDemo.ks"
 
     var stringDemoFile = File(stringDemoPath)
     runScript(stringDemoInterp, stringDemoFile)
+
+    val demoInterp = Interpreter(runtime)
+    var demoPath = "src/main/kotlin/Demo.ks"
+
+    var demoFile = File(demoPath)
+    runScript(demoInterp, demoFile)
 }
 
 /**

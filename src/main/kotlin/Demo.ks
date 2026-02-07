@@ -17,6 +17,10 @@ say.note "  Part 1: Functions with Constraints"
 say.note "══════════════════════════════════════════════════════════════════════"
 say ""
 
+
+var lemur = "sifaka"
+say "I love $lemur"
+
 # --- Comparison Constraints ---
 
 # Age must be positive

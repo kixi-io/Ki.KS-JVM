@@ -1,0 +1,13 @@
+1. Finish Interpreter test fail cleanup
+2. Add static blocks // cleaner, keeps us organized
+3. Add indexes for String, Lists, Maps and user defined.
+4. Add structs (data classes)
+5. Change `` to regex literal rather than a String literal
+
+--
+
+v3: Custom DSL blocks like:
+    let block = lang KD {
+        // ...
+    }
+

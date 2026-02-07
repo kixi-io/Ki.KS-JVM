@@ -847,6 +847,13 @@ class Lexer(private val source: String) {
                     advance() // consume backslash
                     sb.append(scanEscapeChar())
                 }
+                peek() == '$' && peekNext() == '{' -> {
+                    // Interpolation block: ${ ... }
+                    // Consume the entire block including nested strings/braces
+                    sb.append(advance()) // consume '$'
+                    sb.append(advance()) // consume '{'
+                    scanInterpolationBlock(sb)
+                }
                 peek() == '\n' -> {
                     error("Unterminated string (use \"\"\" for multiline strings)")
                 }
@@ -862,6 +869,63 @@ class Lexer(private val source: String) {
 
         advance() // consume closing "
         addToken(TokenType.STRING_LITERAL, sb.toString())
+    }
+
+    /**
+     * Scans the contents of a `${...}` interpolation block inside a string.
+     * Tracks brace depth and handles nested strings so that a `"` inside
+     * the interpolation doesn't prematurely terminate the outer string.
+     *
+     * The opening `${` has already been consumed and appended to [sb].
+     * This method consumes up to and including the matching closing `}`.
+     */
+    private fun scanInterpolationBlock(sb: StringBuilder) {
+        var depth = 1
+        while (!isAtEnd() && depth > 0) {
+            when {
+                peek() == '{' -> {
+                    depth++
+                    sb.append(advance())
+                }
+                peek() == '}' -> {
+                    depth--
+                    sb.append(advance())
+                }
+                peek() == '"' -> {
+                    // Nested string inside interpolation — consume it entirely
+                    sb.append(advance()) // consume opening "
+                    while (!isAtEnd() && peek() != '"') {
+                        if (peek() == '\\') {
+                            sb.append(advance()) // consume backslash
+                            if (!isAtEnd()) sb.append(advance()) // consume escaped char
+                        } else {
+                            sb.append(advance())
+                        }
+                    }
+                    if (!isAtEnd()) sb.append(advance()) // consume closing "
+                }
+                peek() == '\'' -> {
+                    // Char literal inside interpolation
+                    sb.append(advance()) // consume opening '
+                    while (!isAtEnd() && peek() != '\'') {
+                        if (peek() == '\\') {
+                            sb.append(advance())
+                            if (!isAtEnd()) sb.append(advance())
+                        } else {
+                            sb.append(advance())
+                        }
+                    }
+                    if (!isAtEnd()) sb.append(advance()) // consume closing '
+                }
+                peek() == '\n' -> {
+                    sb.append(advance())
+                    line++
+                    column = 1
+                }
+                else -> sb.append(advance())
+            }
+        }
+        if (depth > 0) error("Unterminated interpolation block in string")
     }
 
     /**

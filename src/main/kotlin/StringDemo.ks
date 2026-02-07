@@ -2,6 +2,11 @@
 # KS Strings — Literal Types and Interpolation
 # ============================================================
 
+say.note "--- String ---"
+var rich = 1_000_000
+say "She is $rich"
+say "She is ${rich}"
+
 # --- Standard Strings ---
 # Double-quoted. Supports escape sequences and interpolation.
 

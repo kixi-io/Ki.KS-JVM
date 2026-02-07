@@ -358,6 +358,12 @@ class ExpressionParser(internal val p: Parser) {
                 val operand = parseUnaryPrefix()
                 UnaryExpr(UnaryOp.NOT, operand, prefix = true, loc)
             }
+            // !! in prefix position is double logical NOT: !!true → !(!true)
+            // (In postfix position it remains the non-null assertion operator)
+            p.match(BANG_BANG) -> {
+                val operand = parseUnaryPrefix()
+                UnaryExpr(UnaryOp.NOT, UnaryExpr(UnaryOp.NOT, operand, prefix = true, loc), prefix = true, loc)
+            }
             p.match(PLUS_PLUS) -> {
                 val operand = parseUnaryPrefix()
                 UnaryExpr(UnaryOp.INCREMENT, operand, prefix = true, loc)

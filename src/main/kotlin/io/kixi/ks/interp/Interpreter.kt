@@ -2005,7 +2005,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Dec -> value.toPlainString()
             is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
             is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
-            is KSEnumConstant -> "${value.enum.name}.${value.name}"
+            is KSEnumConstant -> value.name
             is KSObject -> value.toString()
             is KDTag -> value.toString()
             is KDDocument -> value.toString()
