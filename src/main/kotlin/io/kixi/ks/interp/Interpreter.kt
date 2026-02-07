@@ -901,13 +901,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
                 iterations++
 
-                if (stmt.variable != null) {
-                    if (iterations == 1L) {
-                        // First iteration: define new variable in loop scope (shadows any outer variable)
-                        loopEnv.define(stmt.variable, item, mutable = true)
-                    } else {
-                        loopEnv.assign(stmt.variable, item)
-                    }
+                val varName = stmt.variable ?: "it"
+                if (iterations == 1L) {
+                    loopEnv.define(varName, item, mutable = true)
+                } else {
+                    loopEnv.assign(varName, item)
                 }
 
                 try {

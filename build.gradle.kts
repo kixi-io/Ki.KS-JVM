@@ -27,6 +27,9 @@ dependencies {
     implementation("io.kixi:Ki.Core-JVM:2.3.1")
     implementation("io.kixi:Ki.KD-JVM:2.3.1")
 
+    // === JLine (REPL terminal handling) ===
+    implementation("org.jline:jline:3.26.3")
+
     // === Kotlin Reflection (full library) ===
     implementation(kotlin("reflect"))
 
@@ -82,6 +85,37 @@ val dokkaJavadocJar by tasks.registering(Jar::class) {
     from(layout.buildDirectory.dir("dokka/html"))
     archiveClassifier.set("javadoc")
 }
+
+// ============================================================================
+// REPL
+// ============================================================================
+
+/** Fat JAR containing the KS REPL and all dependencies. */
+tasks.register<Jar>("replJar") {
+    archiveFileName.set("ks-repl.jar")
+    manifest { attributes("Main-Class" to "io.kixi.ks.repl.ReplKt") }
+    from(sourceSets["main"].output)
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    dependsOn(configurations.runtimeClasspath)
+    from({ configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) } })
+}
+
+/**
+ * Build and launch the KS REPL.  Usage: ./gradlew -q repl
+ * Must be run from a real terminal (not IntelliJ's Run panel).
+ */
+/*
+tasks.register("repl") {
+    dependsOn("replJar")
+    doLast {
+        val jar = layout.buildDirectory.file("libs/ks-repl.jar").get().asFile
+        ProcessBuilder("java", "-jar", jar.absolutePath)
+            .inheritIO()
+            .start()
+            .waitFor()
+    }
+}
+*/
 
 // ============================================================================
 // Publishing
