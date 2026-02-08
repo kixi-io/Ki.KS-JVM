@@ -199,6 +199,50 @@ class DeclarationParser(internal val p: Parser) {
         return TraitDecl(name, superTraits, members, loc)
     }
 
+    /**
+     * Parse a struct declaration.
+     *
+     *     struct Point(let x: Double, let y: Double)
+     *     struct Color(let r: Int, let g: Int, let b: Int): Printable { ... }
+     *
+     * Structs require a primary constructor. All constructor params should
+     * have let/var binding (enforced as warning, not hard error, for now).
+     * Supertypes are restricted to traits (enforced at interpreter level).
+     */
+    fun parseStructDecl(): StructDecl {
+        val loc = p.expect(TokenType.STRUCT, "Expected 'struct'").location
+
+        val name = p.expectIdentifier("Expected struct name")
+
+        // Primary constructor (required for structs)
+        val params = if (p.check(TokenType.LPAREN)) {
+            p.types.parseConstructorParamList()
+        } else {
+            p.error("Structs require a primary constructor: struct $name(...)")
+        }
+
+        // Trait list (no superclass allowed — enforced at interpreter level)
+        val traits = mutableListOf<TypeRef>()
+        if (p.match(TokenType.COLON)) {
+            p.skipNewlines()
+            traits.add(p.types.parseTypeRef())
+            while (p.match(TokenType.COMMA)) {
+                p.skipNewlines()
+                traits.add(p.types.parseTypeRef())
+            }
+        }
+
+        // Body (optional)
+        p.skipNewlines()
+        val members = if (p.check(TokenType.LBRACE)) {
+            p.parseBlock().statements
+        } else {
+            emptyList()
+        }
+
+        return StructDecl(name, params, traits, members, loc)
+    }
+
     // ====================================================================
     // Enum Declaration
     // ====================================================================

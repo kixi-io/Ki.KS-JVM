@@ -60,6 +60,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /** Registry of defined enums by name. */
     private val enums = mutableMapOf<String, KSEnum>()
 
+    /** Registry of defined structs by name. */
+    private val structs = mutableMapOf<String, KSStruct>()
+
     /** Current enum context for DPEC resolution (set during when subject evaluation). */
     private var currentEnumContext: KSEnum? = null
 
@@ -123,6 +126,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is ClassDecl -> evaluateClassDecl(node)
             is TraitDecl -> evaluateTraitDecl(node)
             is EnumDecl -> evaluateEnumDecl(node)
+            is StructDecl -> evaluateStructDecl(node)
             is UseDecl -> evaluateUseDecl(node)
             is ExtendDecl -> evaluateExtendDecl(node)
             is StaticBlock -> evaluateStaticBlock(node)
@@ -189,7 +193,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     private fun evaluateVarDecl(decl: VarDecl): Any? {
         val value = if (decl.initializer != null) {
-            evaluate(decl.initializer)
+            copyIfStruct(evaluate(decl.initializer))
         } else {
             null
         }
@@ -257,7 +261,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         for (i in params.indices) {
             val param = params[i]
             val value = if (i < arguments.size) {
-                arguments[i]
+                copyIfStruct(arguments[i])
             } else {
                 // Use default value (must exist since we passed arity check)
                 param.defaultValue?.let { evaluate(it) }
@@ -394,6 +398,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         return when (callee) {
             is KSFunction -> callFunction(callee, args, location)
             is KSClass -> instantiateClass(callee, args, expr.arguments, location)
+            is KSStruct -> instantiateStruct(callee, args, expr.arguments, location)
             is KSEnum -> throw RuntimeError("Cannot instantiate enum '${callee.name}' directly", location)
             is Callable -> callee.call(this, args, location)
             else -> {
@@ -410,6 +415,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     // Check classes
                     classes[name]?.let { cls ->
                         return instantiateClass(cls, args, expr.arguments, location)
+                    }
+
+                    // Check structs
+                    structs[name]?.let { struct ->
+                        return instantiateStruct(struct, args, expr.arguments, location)
                     }
                 }
                 throw NotCallableError(callee, location)
@@ -436,6 +446,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Try as a class
         classes[name]?.let { return it }
 
+        // Try as a struct
+        structs[name]?.let { return it }
+
         // Try as an enum
         enums[name]?.let { return it }
 
@@ -444,7 +457,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         // If in a method context, try implicit 'this' property access
         if (environment.isDefined("this")) {
-            val thisObj = environment.get("this") as? KSObject
+            val thisVal = environment.get("this")
+
+            val thisObj = thisVal as? KSObject
             if (thisObj != null) {
                 if (thisObj.hasProperty(name)) {
                     return thisObj.get(name, expr.location)
@@ -452,6 +467,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 // Also check for methods
                 thisObj.klass.findMethod(name)?.let { method ->
                     return BoundMethod(thisObj, method)
+                }
+            }
+
+            val thisStruct = thisVal as? KSStructInstance
+            if (thisStruct != null) {
+                if (thisStruct.hasProperty(name)) {
+                    return thisStruct.get(name, expr.location)
+                }
+                thisStruct.struct.findMethod(name)?.let { method ->
+                    return StructBoundMethod(thisStruct, method)
                 }
             }
         }
@@ -612,6 +637,197 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         environment.define(decl.name, ksTrait, mutable = false, location = decl.location)
 
         return null
+    }
+
+    // ========================================================================
+    // Struct Declarations & Instantiation
+    // ========================================================================
+
+    private fun evaluateStructDecl(decl: StructDecl): Any? {
+        // Resolve traits (structs can only implement traits, no superclass)
+        val implementedTraits = decl.traits.mapNotNull { typeRef ->
+            traits[typeRef.name] ?: run {
+                // Check if it's a class — structs can't extend classes
+                if (classes.containsKey(typeRef.name)) {
+                    throw RuntimeError(
+                        "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
+                        decl.location
+                    )
+                }
+                null
+            }
+        }
+
+        val ksStruct = KSStruct(decl, implementedTraits, environment)
+        structs[decl.name] = ksStruct
+
+        // Initialize static members
+        initializeStructStaticMembers(ksStruct, decl.members)
+
+        // Make struct available in environment
+        environment.define(decl.name, ksStruct, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    private fun initializeStructStaticMembers(ksStruct: KSStruct, members: List<Node>) {
+        val staticEnv = ksStruct.staticEnvironment()
+        val previousEnv = environment
+        environment = staticEnv
+
+        try {
+            for (member in members) {
+                when (member) {
+                    is StaticBlock -> {
+                        for (staticMember in member.members) {
+                            when (staticMember) {
+                                is VarDecl -> {
+                                    val value = staticMember.initializer?.let { evaluate(it) }
+                                    staticEnv.define(
+                                        staticMember.name, value, staticMember.mutable,
+                                        staticMember.typeAnnotation, staticMember.constraint,
+                                        staticMember.location
+                                    )
+                                }
+                                is FunDecl -> {
+                                    val fn = KSFunction(staticMember, staticEnv)
+                                    staticEnv.defineFunction(staticMember.name, fn, staticMember.location)
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        } finally {
+            environment = previousEnv
+        }
+    }
+
+    /**
+     * Create a new instance of a struct.
+     */
+    private fun instantiateStruct(
+        ksStruct: KSStruct,
+        args: List<Any?>,
+        argNodes: List<Argument>,
+        location: SourceLocation?
+    ): KSStructInstance {
+        val instance = KSStructInstance(ksStruct)
+
+        val params = ksStruct.constructorParams
+
+        // Build argument map for named arguments
+        val namedArgs = mutableMapOf<String, Any?>()
+        val positionalArgs = mutableListOf<Any?>()
+
+        for ((index, argNode) in argNodes.withIndex()) {
+            if (argNode.name != null) {
+                namedArgs[argNode.name] = args[index]
+            } else {
+                positionalArgs.add(args[index])
+            }
+        }
+
+        // Assign values to constructor parameters
+        var positionalIndex = 0
+        for (param in params) {
+            val value = when {
+                namedArgs.containsKey(param.name) -> namedArgs[param.name]
+                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
+                param.defaultValue != null -> evaluate(param.defaultValue)
+                else -> throw ArityError(ksStruct.name, params.size, args.size, location)
+            }
+
+            // Check constraint
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, location)
+            }
+
+            // If param has binding (var/let), create a property
+            if (param.binding != null) {
+                instance.initProperty(param.name, value, param.binding == BindingType.VAR)
+            }
+        }
+
+        // Initialize instance properties from struct body
+        val previousEnv = environment
+        val instanceEnv = environment.child("instance:${ksStruct.name}")
+        instanceEnv.define("this", instance, mutable = false, location = location)
+        environment = instanceEnv
+
+        try {
+            for (property in ksStruct.getInstanceProperties()) {
+                val value = property.initializer?.let { evaluate(it) }
+                if (property.constraint != null && value != null) {
+                    checkConstraint(property.name, value, property.constraint, property.location)
+                }
+                instance.initProperty(property.name, value, property.mutable)
+            }
+        } finally {
+            environment = previousEnv
+        }
+
+        return instance
+    }
+
+    /**
+     * Call a method on a struct instance with proper `this` binding.
+     */
+    fun callStructMethod(receiver: KSStructInstance, method: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+        if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
+            throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
+        }
+
+        val params = method.params
+        if (arguments.size < method.requiredArity) {
+            throw ArityError(method.name, method.requiredArity, arguments.size, location)
+        }
+        if (arguments.size > method.totalArity) {
+            throw ArityError(method.name, method.totalArity, arguments.size, location)
+        }
+
+        val methodEnv = method.closure.child("method:${method.name}")
+        methodEnv.define("this", receiver, mutable = false, location = location)
+
+        for (i in params.indices) {
+            val param = params[i]
+            val value = if (i < arguments.size) {
+                copyIfStruct(arguments[i])
+            } else {
+                param.defaultValue?.let { evaluate(it) }
+            }
+
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, param.location)
+            }
+
+            methodEnv.define(param.name, value, mutable = true, param.type, param.constraint, param.location)
+        }
+
+        val previousEnv = environment
+        environment = methodEnv
+        recursionDepth++
+
+        try {
+            val body = method.declaration.body
+                ?: throw RuntimeError("Cannot call abstract method '${method.name}'", location)
+
+            return if (method.isSingleExpr) {
+                evaluate(body)
+            } else {
+                try {
+                    evaluate(body)
+                    null
+                } catch (ret: ReturnValue) {
+                    ret.value
+                }
+            }
+        } finally {
+            recursionDepth--
+            environment = previousEnv
+        }
     }
 
     // ========================================================================
@@ -858,8 +1074,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is List<*> -> KSType("List")
             is Map<*, *> -> KSType("Map")
             is KSObject -> KSType(value.klass.name)
+            is KSStructInstance -> KSType(value.struct.name)
             is KSEnumConstant -> KSType(value.enum.name)
             is KSClass -> KSType("Class", value.name)
+            is KSStruct -> KSType("Struct", value.name)
             is KSTrait -> KSType("Trait", value.name)
             is KSEnum -> KSType("Enum", value.name)
             is KSFunction -> KSType("Function", value.name)
@@ -1231,7 +1449,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         return when (obj) {
             is KSObject -> obj.get(expr.member, expr.location)
+            is KSStructInstance -> {
+                // Check for auto-generated copy() method
+                if (expr.member == "copy" && obj.struct.findMethod("copy") == null) {
+                    return StructCopyCallable(obj)
+                }
+                obj.get(expr.member, expr.location)
+            }
             is KSClass -> obj.getStatic(expr.member)
+                ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is KSStruct -> obj.getStatic(expr.member)
                 ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
             is KSEnum -> {
                 // Could be a constant or static member
@@ -1265,6 +1492,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                             expr.location
                         )
                     callMethod(obj, getMethod, indices, expr.location)
+                }
+                is KSStructInstance -> {
+                    val getMethod = obj.struct.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method for multi-index access",
+                            expr.location
+                        )
+                    callStructMethod(obj, getMethod, indices, expr.location)
                 }
                 null -> throw NullPointerError("Cannot index into nil", expr.location)
                 else -> throw TypeError(
@@ -1302,6 +1537,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     )
                 callMethod(obj, getMethod, listOf(index), expr.location)
             }
+            is KSStructInstance -> {
+                val getMethod = obj.struct.findMethod("get")
+                    ?: throw RuntimeError(
+                        "Struct '${obj.struct.name}' does not define a 'get' method for index access",
+                        expr.location
+                    )
+                callStructMethod(obj, getMethod, listOf(index), expr.location)
+            }
             is KDTag -> {
                 when (index) {
                     is Int -> obj.children.getOrNull(index)
@@ -1332,11 +1575,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is IdentifierExpr -> {
                 // Check if this is a variable in scope
                 if (environment.isDefined(target.name)) {
-                    val newValue = computeAssignment(
+                    val newValue = copyIfStruct(computeAssignment(
                         expr.operator,
                         { environment.get(target.name, target.location) },
                         value
-                    )
+                    ))
 
                     val constraint = environment.getConstraint(target.name)
                     if (constraint != null && newValue != null) {
@@ -1349,7 +1592,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
                 // If not in scope but we're in a method, try implicit 'this' property
                 if (environment.isDefined("this")) {
-                    val thisObj = environment.get("this") as? KSObject
+                    val thisVal = environment.get("this")
+
+                    val thisObj = thisVal as? KSObject
                     if (thisObj != null && thisObj.hasProperty(target.name)) {
                         val newValue = computeAssignment(
                             expr.operator,
@@ -1357,6 +1602,17 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                             value
                         )
                         thisObj.set(target.name, newValue, expr.location)
+                        return newValue
+                    }
+
+                    val thisStruct = thisVal as? KSStructInstance
+                    if (thisStruct != null && thisStruct.hasProperty(target.name)) {
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { thisStruct.get(target.name, target.location) },
+                            value
+                        )
+                        thisStruct.set(target.name, newValue, expr.location)
                         return newValue
                     }
                 }
@@ -1387,7 +1643,26 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     return newValue
                 }
 
-                // Multi-index on non-KSObject is an error
+                // KSStructInstance: dispatch to set() method (single or multi-index)
+                if (obj is KSStructInstance) {
+                    val getMethod = obj.struct.findMethod("get")
+                    val setMethod = obj.struct.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'set' method for index assignment",
+                            target.location
+                        )
+                    val newValue = computeAssignment(expr.operator, {
+                        if (getMethod != null) callStructMethod(obj, getMethod, indices, target.location)
+                        else throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method (needed for compound assignment)",
+                            target.location
+                        )
+                    }, value)
+                    callStructMethod(obj, setMethod, indices + newValue, target.location)
+                    return newValue
+                }
+
+                // Multi-index on non-KSObject/KSStructInstance is an error
                 if (indices.size > 1) {
                     throw TypeError(
                         "Multi-index assignment requires a class with a 'set' method, got ${obj?.javaClass?.simpleName}",
@@ -1442,6 +1717,15 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                             { obj.get(target.member, target.location) },
                             value
                         )
+                        obj.set(target.member, newValue, expr.location)
+                        return newValue
+                    }
+                    is KSStructInstance -> {
+                        val newValue = copyIfStruct(computeAssignment(
+                            expr.operator,
+                            { obj.get(target.member, target.location) },
+                            value
+                        ))
                         obj.set(target.member, newValue, expr.location)
                         return newValue
                     }
@@ -1633,6 +1917,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     obj.set(operand.member, newVal, operand.location)
                     return if (expr.prefix) newVal else current
                 }
+                if (obj is KSStructInstance) {
+                    val current = obj.get(operand.member, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    obj.set(operand.member, newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
                 throw RuntimeError("Cannot increment/decrement member of ${obj?.javaClass?.simpleName}", expr.location)
             }
             is IndexExpr -> {
@@ -1654,6 +1944,24 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     val current = callMethod(obj, getMethod, indices, operand.location)
                     val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
                     callMethod(obj, setMethod, indices + newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+
+                // KSStructInstance: dispatch to get/set methods
+                if (obj is KSStructInstance) {
+                    val getMethod = obj.struct.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method for index access",
+                            expr.location
+                        )
+                    val setMethod = obj.struct.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'set' method for index assignment",
+                            expr.location
+                        )
+                    val current = callStructMethod(obj, getMethod, indices, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    callStructMethod(obj, setMethod, indices + newVal, operand.location)
                     return if (expr.prefix) newVal else current
                 }
 
@@ -1727,6 +2035,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 // Check user-defined types
                 when (value) {
                     is KSObject -> value.klass.name == type.name || value.klass.isSubclassOf(classes[type.name] ?: return false)
+                    is KSStructInstance -> value.struct.name == type.name
                     is KSEnumConstant -> value.enum.name == type.name
                     else -> false
                 }
@@ -2102,6 +2411,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
             is KSEnumConstant -> value.name
             is KSObject -> value.toString()
+            is KSStructInstance -> value.toString()
             is KDTag -> value.toString()
             is KDDocument -> value.toString()
             is KSType -> value.toString()
@@ -2174,6 +2484,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
+    /**
+     * If [value] is a struct instance, return a copy. Otherwise return as-is.
+     * This is the single interception point for copy-on-assign semantics.
+     */
+    private fun copyIfStruct(value: Any?): Any? {
+        return if (value is KSStructInstance) value.copy() else value
+    }
+
     private fun isEqual(left: Any?, right: Any?): Boolean {
         if (left == null && right == null) return true
         if (left == null || right == null) return false
@@ -2190,6 +2508,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         if (left is KSEnumConstant && right is KSEnumConstant) {
             return left.enum == right.enum && left.name == right.name
+        }
+
+        // Struct instances use structural equality (via KSStructInstance.equals)
+        if (left is KSStructInstance && right is KSStructInstance) {
+            return left == right
         }
 
         return left == right

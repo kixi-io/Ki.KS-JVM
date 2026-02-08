@@ -122,6 +122,7 @@ enum class TokenType {
     CLASS,                  // class
     TRAIT,                  // trait
     ENUM,                   // enum
+    STRUCT,                 // struct
     STATIC,                 // static
     EXTEND,                 // extend
 
@@ -167,6 +168,7 @@ enum class TokenType {
             "class" to CLASS,
             "trait" to TRAIT,
             "enum" to ENUM,
+            "struct" to STRUCT,
             "static" to STATIC,
             "extend" to EXTEND,
             "if" to IF,

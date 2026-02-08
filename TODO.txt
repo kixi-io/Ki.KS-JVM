@@ -3,6 +3,7 @@
 3. Add other Core models including Grid, Version and others that make sense.
 4. Add reflection and extensions for use when hostLanguage is set to true.
 5. Work on core library. Keep it light for now.
+6. Discuss memory classes versus byte code classes with Claude.
 
 --
 

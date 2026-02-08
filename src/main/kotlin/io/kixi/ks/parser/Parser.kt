@@ -113,6 +113,7 @@ class Parser(private val tokens: List<Token>) {
             VAR, LET  -> decl.parseVarDecl()
             FUN       -> decl.parseFunDecl()
             CLASS     -> decl.parseClassDecl()
+            STRUCT    -> decl.parseStructDecl()
             TRAIT     -> decl.parseTraitDecl()
             ENUM      -> decl.parseEnumDecl()
             USE       -> decl.parseUseDecl()

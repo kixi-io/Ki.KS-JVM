@@ -24,7 +24,7 @@ import io.kixi.ks.SourceLocation
  * Organization:
  *   1. Base Node interface
  *   2. Program (top-level container)
- *   3. Declarations (var, fun, class, trait, enum, use, static, extend)
+ *   3. Declarations (var, fun, class, struct, trait, enum, use, static, extend)
  *   4. Statements (expr-stmt, return, break, continue, throw, say, for, while)
  *   5. Expressions (literals, operators, control flow, access, etc.)
  *   6. Supporting types (Parameter, TypeRef, Constraint, WhenBranch, etc.)
@@ -105,6 +105,25 @@ data class ClassDecl(
     val name: String,
     val constructorParams: List<ConstructorParam>,
     val superTypes: List<TypeRef>,
+    val members: List<Node>,
+    override val location: SourceLocation
+) : Decl
+
+/**
+ * Struct declaration (value type).
+ *
+ *     struct Point(let x: Double, let y: Double)
+ *     struct Color(let r: Int 0..255, let g: Int 0..255, let b: Int 0..255): Printable {
+ *         fun brightness() = (r + g + b) / 3
+ *     }
+ *
+ * Structs use structural equality and copy-on-assign semantics.
+ * No superclass — traits only.
+ */
+data class StructDecl(
+    val name: String,
+    val constructorParams: List<ConstructorParam>,
+    val traits: List<TypeRef>,          // traits only, no superclass
     val members: List<Node>,
     override val location: SourceLocation
 ) : Decl
