@@ -28,6 +28,20 @@ fun main() { // args: Array<String>
     var stringDemoFile = File(stringDemoPath)
     runScript(stringDemoInterp, stringDemoFile)
 
+    /////
+
+    println("Extend Test")
+
+    val extendDemoInterp = Interpreter(runtime)
+    var extendDemoPath = "src/main/kotlin/ExtendTest.ks"
+
+    var extendDemoFile = File(extendDemoPath)
+    runScript(extendDemoInterp, extendDemoFile)
+
+    /////
+
+    println("General Test")
+
     val demoInterp = Interpreter(runtime)
     var demoPath = "src/main/kotlin/Demo.ks"
 

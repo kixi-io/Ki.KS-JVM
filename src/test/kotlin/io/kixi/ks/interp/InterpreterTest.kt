@@ -1,2173 +1,2988 @@
 package io.kixi.ks.interp
 
-import io.kixi.ks.KSRuntime
-import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.shouldBe
-import io.kotest.matchers.types.shouldBeInstanceOf
-import io.kotest.matchers.nulls.shouldBeNull
-import io.kotest.matchers.nulls.shouldNotBeNull
-import io.kotest.matchers.string.shouldContain
-import io.kotest.matchers.string.shouldStartWith
-import io.kotest.matchers.comparables.shouldBeGreaterThan
-import io.kotest.matchers.comparables.shouldBeLessThan
-import io.kotest.matchers.doubles.plusOrMinus
+import io.kixi.ks.*
+import io.kixi.ks.lexer.*
+import io.kixi.ks.parser.*
+import io.kixi.uom.Currency
 import io.kixi.uom.Quantity
-import java.io.StringWriter
-import java.math.BigDecimal
+import io.kixi.uom.Unit as KiUnit
+import io.kixi.uom.combineUnits
+
+import java.math.BigDecimal as Dec
+import java.math.RoundingMode
 
 /**
- * Comprehensive Kotest tests for the KS Interpreter.
+ * KS Interpreter
  *
- * Covers:
- *   - Literals (Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL)
- *   - Quantity and Currency literals (suffix and prefix notation)
- *   - String interpolation (simple and expression-based)
- *   - Multiline strings
- *   - Arithmetic expressions with correct precedence
- *   - Comparison, logical, and null-safety operators
- *   - Unary operators (negate, not, increment, decrement, non-null assert)
- *   - Variable declarations (var/let), assignments, compound assignments
- *   - Control flow: if/else, when, for, while, try/catch/finally
- *   - Functions: declarations, calls, closures, recursion, default params
- *   - Classes: declarations, instantiation, methods, properties
- *   - Traits: declarations, implementation, default methods
- *   - Enums: declarations, DPEC matching, ordinal/name access
- *   - Collections: List, Map, member access
- *   - Ranges: inclusive, exclusive, open-ended
- *   - Type operations: is, !is, as, in, !in, matches
- *   - Lang blocks: lang KD { ... }
- *   - Reflection: ::class
- *   - Say statement with variants
- *   - Elvis (?:), safe navigation (?.), non-null assert (!!)
- *   - Combine operator (⚭) for unit composition
+ * Tree-walking interpreter that executes KS programs by recursively evaluating
+ * AST nodes. Uses [Environment] for lexical scoping and [KSFunction] for
+ * first-class function support.
  *
- * Run with: ./gradlew test
+ * ## Architecture
+ *
+ * The interpreter follows a modular design pattern where evaluation logic is
+ * organized by AST node category. The core `evaluate()` method dispatches to
+ * specialized evaluation methods based on node type.
+ *
+ * ## Supported Features
+ *
+ * - Variables: `var`/`let` declarations, assignments (=, +=, -=, etc.)
+ * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL, Quantity
+ * - Quantities: unit quantities (23cm, 25°C), currency ($50.25), combine (⚭)
+ * - String interpolation: `"Hello $name"`, `"Sum: ${a + b}"`
+ * - Operators: arithmetic, comparison, logical, elvis (?:)
+ * - Unary: -, !, ++, --, !!
+ * - Control flow: if/else, when, try/catch/finally, for, while
+ * - Functions: declarations, calls, closures, recursion
+ * - Classes: declaration, instantiation, methods, properties, static members
+ * - Traits: declaration, implementation, default methods
+ * - Enums: declaration, constants, iteration, DPEC matching
+ * - Say: `say`, `say.error`, `say.warn`, `say.note`
+ * - Lang blocks: `lang KD { ... }` for embedded DSLs
+ * - Reflection: `::class`
+ *
+ * @param runtime Configuration for interpreter behavior (optional)
  */
-class InterpreterTest : FunSpec({
+class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
-    // ====================================================================
-    // Helpers
-    // ====================================================================
+    /** Current execution environment (scope chain). */
+    internal var environment = Environment.global()
 
-    /** Create a fresh interpreter for each test */
-    fun interp() = Interpreter()
+    /** Recursion depth counter for stack overflow protection. */
+    private var recursionDepth = 0
 
-    /** Execute source and return result */
-    fun exec(source: String): Any? = interp().execute(source)
+    /** Registry of defined classes by name. */
+    private val classes = mutableMapOf<String, KSClass>()
 
-    /** Execute source with captured output, return pair of (result, output) */
-    fun execWithOutput(source: String): Pair<Any?, String> {
-        val output = StringWriter()
-        val error = StringWriter()
-        val runtime = KSRuntime.forTesting(output, error)
-        val interpreter = Interpreter(runtime)
-        val result = interpreter.execute(source)
-        return Pair(result, output.toString().trim())
-    }
+    /** Registry of defined traits by name. */
+    private val traits = mutableMapOf<String, KSTrait>()
 
-    /** Execute source with captured error output */
-    fun execWithError(source: String): Pair<Any?, String> {
-        val output = StringWriter()
-        val error = StringWriter()
-        val runtime = KSRuntime.forTesting(output, error)
-        val interpreter = Interpreter(runtime)
-        val result = interpreter.execute(source)
-        return Pair(result, error.toString().trim())
-    }
+    /** Registry of defined enums by name. */
+    private val enums = mutableMapOf<String, KSEnum>()
 
-    // ====================================================================
-    // Literal Expressions
-    // ====================================================================
+    /** Registry of defined structs by name. */
+    private val structs = mutableMapOf<String, KSStruct>()
 
-    context("Literal expressions") {
+    /** Current enum context for DPEC resolution (set during when subject evaluation). */
+    private var currentEnumContext: KSEnum? = null
 
-        test("integer literal") {
-            exec("42") shouldBe 42
-        }
+    // ========================================================================
+    // Public API
+    // ========================================================================
 
-        test("zero") {
-            exec("0") shouldBe 0
-        }
+    /**
+     * Execute KS source code.
+     *
+     * @param source The KS source code to execute
+     * @return The result of the last evaluated expression/statement
+     */
+    fun execute(source: String): Any? {
+        println("executing: $source")
 
-        test("negative integer") {
-            exec("-42") shouldBe -42
-        }
+        try {
+            val lexer = Lexer(source)
+            println("Lexer initialized")
 
-        test("long literal") {
-            exec("100L") shouldBe 100L
-        }
+            val tokens = lexer.tokenize()
+            val parser = Parser(tokens)
+            val program = parser.parse()
 
-        test("float literal") {
-            exec("3.14f") shouldBe 3.14f
-        }
-
-        test("double literal") {
-            exec("3.14") shouldBe 3.14
-        }
-
-        test("decimal literal") {
-            val result = exec("3.14BD")
-            result.shouldBeInstanceOf<BigDecimal>()
-        }
-
-        test("string literal") {
-            exec(""""hello"""") shouldBe "hello"
-        }
-
-        test("empty string") {
-            exec("""""""") shouldBe ""
-        }
-
-        test("char literal") {
-            exec("'A'") shouldBe 'A'
-        }
-
-        test("boolean true") {
-            exec("true") shouldBe true
-        }
-
-        test("boolean false") {
-            exec("false") shouldBe false
-        }
-
-        test("nil literal") {
-            exec("nil").shouldBeNull()
-        }
-
-        test("string with escape sequences") {
-            exec(""""hello\nworld"""") shouldBe "hello\nworld"
-        }
-
-        test("string with tab escape") {
-            exec(""""col1\tcol2"""") shouldBe "col1\tcol2"
+            return executeProgram(program)
+        } catch (e: Exception) {
+            println("Exception: ${e.message}")
+            e.printStackTrace()
+            return null
         }
     }
 
-    // ====================================================================
-    // String Interpolation
-    // ====================================================================
-
-    context("String interpolation") {
-
-        test("simple variable interpolation") {
-            val source = """
-                var name = "World"
-                "Hello ${'$'}name"
-            """.trimIndent()
-            exec(source) shouldBe "Hello World"
+    /**
+     * Execute a parsed program.
+     *
+     * @param program The AST program to execute
+     * @return The result of the last evaluated node
+     */
+    fun executeProgram(program: Program): Any? {
+        var result: Any? = null
+        for (node in program.body) {
+            result = evaluate(node)
         }
+        return result
+    }
 
-        test("expression interpolation") {
-            val source = """
-                var a = 3
-                var b = 4
-                "Sum: ${'$'}{a + b}"
-            """.trimIndent()
-            exec(source) shouldBe "Sum: 7"
-        }
+    // ========================================================================
+    // Core Evaluation Dispatch
+    // ========================================================================
 
-        test("multiple interpolations in one string") {
-            val source = """
-                var first = "Ada"
-                var last = "Lovelace"
-                "${'$'}first ${'$'}last"
-            """.trimIndent()
-            exec(source) shouldBe "Ada Lovelace"
-        }
+    /**
+     * Evaluate any AST node.
+     *
+     * This is the main dispatch method that routes to specialized evaluators.
+     */
+    internal fun evaluate(node: Node): Any? {
+        return when (node) {
+            // --- Declarations ---
+            is VarDecl -> evaluateVarDecl(node)
+            is FunDecl -> evaluateFunDecl(node)
+            is ClassDecl -> evaluateClassDecl(node)
+            is TraitDecl -> evaluateTraitDecl(node)
+            is EnumDecl -> evaluateEnumDecl(node)
+            is StructDecl -> evaluateStructDecl(node)
+            is UseDecl -> evaluateUseDecl(node)
+            is ExtendDecl -> evaluateExtendDecl(node)
+            is StaticBlock -> evaluateStaticBlock(node)
 
-        test("nested expression interpolation") {
-            val source = """
-                var x = 10
-                "Value: ${'$'}{if x > 5 { "big" } else { "small" }}"
-            """.trimIndent()
-            exec(source) shouldBe "Value: big"
-        }
+            // --- Statements ---
+            is SayStmt -> evaluateSay(node)
+            is ExprStmt -> evaluate(node.expression)
+            is ReturnStmt -> evaluateReturn(node)
+            is ForStmt -> evaluateFor(node)
+            is WhileStmt -> evaluateWhile(node)
+            is BreakStmt -> throw BreakSignal()
+            is ContinueStmt -> throw ContinueSignal()
+            is ThrowStmt -> evaluateThrow(node)
 
-        test("interpolation with method call on string") {
-            val source = """
-                var name = "hello"
-                "Upper: ${'$'}{name.uppercase}"
-            """.trimIndent()
-            exec(source) shouldBe "Upper: HELLO"
+            // --- Expressions: Literals ---
+            is LiteralExpr -> evaluateLiteral(node)
+            is StringTemplateExpr -> evaluateStringTemplate(node)
+            is ListExpr -> evaluateList(node)
+            is MapExpr -> evaluateMap(node)
+
+            // --- Expressions: Variables & Access ---
+            is IdentifierExpr -> lookupIdentifier(node)
+            is ThisExpr -> environment.get("this", node.location)
+            is MemberAccessExpr -> evaluateMemberAccess(node)
+            is IndexExpr -> evaluateIndex(node)
+            is DPECExpr -> evaluateDPEC(node)
+
+            // --- Expressions: Operators ---
+            is BinaryExpr -> evaluateBinary(node)
+            is UnaryExpr -> evaluateUnary(node)
+            is AssignExpr -> evaluateAssign(node)
+            is TernaryExpr -> evaluateTernary(node)
+
+            // --- Expressions: Calls ---
+            is CallExpr -> evaluateCall(node)
+
+            // --- Expressions: Control Flow ---
+            is IfExpr -> evaluateIf(node)
+            is WhenExpr -> evaluateWhen(node)
+            is TryExpr -> evaluateTry(node)
+            is BlockExpr -> evaluateBlock(node)
+
+            // --- Expressions: Type Operations ---
+            is TypeCheckExpr -> evaluateTypeCheck(node)
+            is TypeCastExpr -> evaluateTypeCast(node)
+            is InCheckExpr -> evaluateInCheck(node)
+            is MatchesExpr -> evaluateMatches(node)
+            is RangeExpr -> evaluateRange(node)
+
+            // --- Expressions: Special ---
+            is LangBlockExpr -> evaluateLangBlock(node)
+            is ReflectionExpr -> evaluateReflection(node)
+
+            // --- KD Nodes ---
+            is KDTagNode -> evaluateKDTag(node)
+
+            is Program -> executeProgram(node)
         }
     }
 
-    // ====================================================================
-    // Multiline Strings
-    // ====================================================================
+    // ========================================================================
+    // Variable Declarations
+    // ========================================================================
 
-    context("Multiline strings") {
-
-        test("basic multiline string") {
-            val source = "\"\"\"hello\nworld\"\"\""
-            val result = exec(source)
-            result.shouldBeInstanceOf<String>()
+    private fun evaluateVarDecl(decl: VarDecl): Any? {
+        val value = if (decl.initializer != null) {
+            copyIfStruct(evaluate(decl.initializer))
+        } else {
+            null
         }
+
+        // Check constraint if present
+        if (decl.constraint != null && value != null) {
+            checkConstraint(decl.name, value, decl.constraint, decl.location)
+        }
+
+        environment.define(
+            decl.name,
+            value,
+            decl.mutable,
+            decl.typeAnnotation,
+            decl.constraint,
+            decl.location
+        )
+        return null
     }
 
-    // ====================================================================
-    // Arithmetic Expressions & Precedence
-    // ====================================================================
+    // ========================================================================
+    // Function Declarations & Calls
+    // ========================================================================
 
-    context("Arithmetic expressions") {
-
-        test("addition") {
-            exec("2 + 3") shouldBe 5
-        }
-
-        test("subtraction") {
-            exec("10 - 4") shouldBe 6
-        }
-
-        test("multiplication") {
-            exec("6 * 7") shouldBe 42
-        }
-
-        test("division") {
-            exec("15 / 3") shouldBe 5
-        }
-
-        test("modulo") {
-            exec("17 % 5") shouldBe 2
-        }
-
-        test("exponentiation") {
-            exec("2 ** 10") shouldBe 1024
-        }
-
-        test("negation") {
-            exec("-5") shouldBe -5
-        }
-
-        test("double negation") {
-            exec("-(-5)") shouldBe 5
-        }
-
-        test("string concatenation via +") {
-            exec(""""hello" + " " + "world"""") shouldBe "hello world"
-        }
-
-        test("string repetition via *") {
-            exec(""""ha" * 3""") shouldBe "hahaha"
-        }
-
-        test("int * string repetition (commutative)") {
-            exec("""3 * "ha"""") shouldBe "hahaha"
-        }
-
-        test("list concatenation via +") {
-            val result = exec("[1, 2] + [3, 4]")
-            result shouldBe listOf(1, 2, 3, 4)
-        }
+    private fun evaluateFunDecl(decl: FunDecl): Any? {
+        // Create a function object that captures the current environment (closure)
+        val function = KSFunction(decl, environment)
+        environment.defineFunction(decl.name, function, decl.location)
+        return null
     }
 
-    context("Operator precedence") {
-
-        test("multiplication before addition: 2 + 3 * 4 == 14") {
-            exec("2 + 3 * 4") shouldBe 14
-        }
-
-        test("division before subtraction: 10 - 6 / 2 == 7") {
-            exec("10 - 6 / 2") shouldBe 7
-        }
-
-        test("exponentiation before multiplication: 2 * 3 ** 2 == 18") {
-            exec("2 * 3 ** 2") shouldBe 18
-        }
-
-        test("parentheses override precedence: (2 + 3) * 4 == 20") {
-            exec("(2 + 3) * 4") shouldBe 20
-        }
-
-        test("chained operations: 2 + 3 * 4 - 1 == 13") {
-            exec("2 + 3 * 4 - 1") shouldBe 13
-        }
-
-        test("modulo same precedence as multiply: 10 % 3 + 2 == 3") {
-            exec("10 % 3 + 2") shouldBe 3
-        }
-
-        test("complex expression: (1 + 2) * (3 + 4) == 21") {
-            exec("(1 + 2) * (3 + 4)") shouldBe 21
-        }
-
-        test("nested exponentiation is right-associative: 2 ** 3 ** 2 == 512") {
-            // 2 ** (3 ** 2) = 2 ** 9 = 512
-            exec("2 ** 3 ** 2") shouldBe 512
-        }
-
-        test("unary minus higher than binary: -2 ** 2 == 4") {
-            // (-2) ** 2 = 4
-            exec("-2 ** 2") shouldBe 4
-        }
-
-        test("logical AND before OR: true || false && false == true") {
-            exec("true || false && false") shouldBe true
-        }
-
-        test("comparison before logical: 1 < 2 && 3 > 2 == true") {
-            exec("1 < 2 && 3 > 2") shouldBe true
-        }
-    }
-
-    // ====================================================================
-    // Comparison & Logical Operators
-    // ====================================================================
-
-    context("Comparison operators") {
-
-        test("equal") {
-            exec("5 == 5") shouldBe true
-        }
-
-        test("not equal") {
-            exec("5 != 3") shouldBe true
-        }
-
-        test("less than") {
-            exec("3 < 5") shouldBe true
-        }
-
-        test("greater than") {
-            exec("5 > 3") shouldBe true
-        }
-
-        test("less than or equal") {
-            exec("5 <= 5") shouldBe true
-        }
-
-        test("greater than or equal") {
-            exec("5 >= 4") shouldBe true
-        }
-
-        test("string comparison") {
-            exec(""""apple" < "banana"""") shouldBe true
-        }
-
-        test("numeric equality across types") {
-            exec("5 == 5.0") shouldBe true
-        }
-
-        test("nil equality") {
-            exec("nil == nil") shouldBe true
-        }
-
-        test("nil not equal to value") {
-            exec("nil != 0") shouldBe true
-        }
-    }
-
-    context("Logical operators") {
-
-        test("logical AND true") {
-            exec("true && true") shouldBe true
-        }
-
-        test("logical AND false") {
-            exec("true && false") shouldBe false
-        }
-
-        test("logical OR true") {
-            exec("false || true") shouldBe true
-        }
-
-        test("logical OR false") {
-            exec("false || false") shouldBe false
-        }
-
-        test("logical NOT") {
-            exec("!true") shouldBe false
-        }
-
-        test("double NOT") {
-            exec("!!true") shouldBe true
-        }
-
-        test("short-circuit AND does not evaluate right side") {
-            // If short-circuit works, this should not throw
-            val source = """
-                var evaluated = false
-                false && { evaluated = true; true }
-                evaluated
-            """.trimIndent()
-            exec(source) shouldBe false
-        }
-
-        test("short-circuit OR does not evaluate right side") {
-            val source = """
-                var evaluated = false
-                true || { evaluated = true; false }
-                evaluated
-            """.trimIndent()
-            exec(source) shouldBe false
-        }
-    }
-
-    // ====================================================================
-    // Null Safety Operators
-    // ====================================================================
-
-    context("Null safety") {
-
-        test("elvis operator with non-null left") {
-            val source = """
-                var x = 42
-                x ?: 0
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-
-        test("elvis operator with null left") {
-            val source = """
-                var x = nil
-                x ?: 99
-            """.trimIndent()
-            exec(source) shouldBe 99
-        }
-
-        test("safe navigation on non-null") {
-            val source = """
-                var s = "hello"
-                s?.length
-            """.trimIndent()
-            exec(source) shouldBe 5
-        }
-
-        test("safe navigation on nil returns nil") {
-            val source = """
-                var s = nil
-                s?.length
-            """.trimIndent()
-            exec(source).shouldBeNull()
-        }
-
-        test("non-null assertion on non-null value") {
-            val source = """
-                var x = 42
-                x!!
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-    }
-
-    // ====================================================================
-    // Variable Declarations & Assignments
-    // ====================================================================
-
-    context("Variable declarations") {
-
-        test("var declaration with initializer") {
-            val source = """
-                var x = 42
-                x
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-
-        test("let declaration (immutable)") {
-            val source = """
-                let x = 42
-                x
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-
-        test("var reassignment") {
-            val source = """
-                var x = 1
-                x = 2
-                x
-            """.trimIndent()
-            exec(source) shouldBe 2
-        }
-
-        test("compound assignment +=") {
-            val source = """
-                var x = 10
-                x += 5
-                x
-            """.trimIndent()
-            exec(source) shouldBe 15
-        }
-
-        test("compound assignment -=") {
-            val source = """
-                var x = 10
-                x -= 3
-                x
-            """.trimIndent()
-            exec(source) shouldBe 7
-        }
-
-        test("compound assignment *=") {
-            val source = """
-                var x = 5
-                x *= 4
-                x
-            """.trimIndent()
-            exec(source) shouldBe 20
-        }
-
-        test("compound assignment /=") {
-            val source = """
-                var x = 20
-                x /= 4
-                x
-            """.trimIndent()
-            exec(source) shouldBe 5
-        }
-
-        test("compound assignment %=") {
-            val source = """
-                var x = 17
-                x %= 5
-                x
-            """.trimIndent()
-            exec(source) shouldBe 2
-        }
-
-        test("compound assignment **=") {
-            val source = """
-                var x = 3
-                x **= 3
-                x
-            """.trimIndent()
-            exec(source) shouldBe 27
-        }
-    }
-
-    context("Increment and decrement") {
-
-        test("prefix increment") {
-            val source = """
-                var x = 5
-                ++x
-            """.trimIndent()
-            exec(source) shouldBe 6
-        }
-
-        test("postfix increment returns old value") {
-            val source = """
-                var x = 5
-                x++
-            """.trimIndent()
-            exec(source) shouldBe 5
-        }
-
-        test("prefix decrement") {
-            val source = """
-                var x = 5
-                --x
-            """.trimIndent()
-            exec(source) shouldBe 4
-        }
-
-        test("postfix decrement returns old value") {
-            val source = """
-                var x = 5
-                x--
-            """.trimIndent()
-            exec(source) shouldBe 5
-        }
-
-        test("increment mutates variable") {
-            val source = """
-                var x = 5
-                x++
-                x
-            """.trimIndent()
-            exec(source) shouldBe 6
-        }
-    }
-
-    // ====================================================================
-    // Quantity & Currency Literals
-    // ====================================================================
-
-    context("Quantity literals") {
-
-        test("simple length quantity - cm") {
-            val result = exec("23cm")
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "23"
-            result.toString() shouldContain "cm"
-        }
-
-        test("decimal mass quantity - kg") {
-            val result = exec("51.4kg")
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "51.4"
-            result.toString() shouldContain "kg"
-        }
-
-        test("temperature quantity - degrees Celsius") {
-            val result = exec("25\u00B0C")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("quantity member access - value") {
-            val source = """
-                let len = 23cm
-                len.value
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldNotBeNull()
-        }
-
-        test("quantity member access - unit") {
-            val source = """
-                let len = 23cm
-                len.unit
-            """.trimIndent()
-            exec(source) shouldBe "cm"
-        }
-
-        test("quantity addition (same unit)") {
-            val source = """
-                let a = 10cm
-                let b = 5cm
-                a + b
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "15"
-        }
-
-        test("quantity subtraction") {
-            val source = """
-                let a = 20kg
-                let b = 8kg
-                a - b
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "12"
-        }
-
-        test("quantity scalar multiplication") {
-            val source = """
-                let len = 5cm
-                len * 3
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "15"
-        }
-
-        test("quantity scalar division") {
-            val source = """
-                let len = 12cm
-                len / 4
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "3"
-        }
-
-        test("quantity negation") {
-            val result = exec("-5cm")
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "-5"
-        }
-    }
-
-    context("Currency quantity literals") {
-
-        test("USD prefix notation") {
-            val result = exec("${'$'}100")
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "100"
-        }
-
-        test("EUR prefix notation") {
-            val result = exec("\u20AC50.25")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("GBP prefix notation") {
-            val result = exec("\u00A375.50")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("JPY prefix notation") {
-            val result = exec("\u00A510000")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("BTC prefix notation") {
-            val result = exec("\u20BF0.5")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("ETH prefix notation") {
-            val result = exec("\u039E2.5")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("USD suffix notation") {
-            val result = exec("100USD")
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "100"
-        }
-
-        test("EUR suffix notation") {
-            val result = exec("50.25EUR")
-            result.shouldBeInstanceOf<Quantity<*>>()
-        }
-
-        test("currency addition (same currency)") {
-            val source = """
-                let a = ${'$'}100
-                let b = ${'$'}50
-                a + b
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "150"
-        }
-
-        test("currency subtraction") {
-            val source = """
-                let a = ${'$'}100
-                let b = ${'$'}30
-                a - b
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "70"
-        }
-
-        test("currency scalar multiplication") {
-            val source = """
-                let price = ${'$'}25
-                price * 4
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "100"
-        }
-
-        test("currency comparison") {
-            val source = """
-                ${'$'}100 > ${'$'}50
-            """.trimIndent()
-            exec(source) shouldBe true
-        }
-    }
-
-    context("Combine operator ⚭") {
-
-        test("length × length = area: 4cm ⚭ 3cm") {
-            val source = "4cm ⚭ 3cm"
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "12"
-        }
-
-        test("combine with variables") {
-            val source = """
-                let w = 5m
-                let h = 3m
-                w ⚭ h
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Quantity<*>>()
-            result.toString() shouldContain "15"
-        }
-    }
-
-    // ====================================================================
-    // Control Flow: if/else
-    // ====================================================================
-
-    context("If/else expressions") {
-
-        test("if true returns then-branch") {
-            exec("if true { 42 }") shouldBe 42
-        }
-
-        test("if false with else returns else-branch") {
-            exec("if false { 1 } else { 2 }") shouldBe 2
-        }
-
-        test("if as expression") {
-            val source = """
-                let x = 10
-                let result = if x > 5 { "big" } else { "small" }
-                result
-            """.trimIndent()
-            exec(source) shouldBe "big"
-        }
-
-        test("if-else chain") {
-            val source = """
-                let x = 50
-                if x < 0 { "negative" } else if x == 0 { "zero" } else { "positive" }
-            """.trimIndent()
-            exec(source) shouldBe "positive"
-        }
-
-        test("if without else and false condition returns nil") {
-            exec("if false { 42 }").shouldBeNull()
-        }
-    }
-
-    // ====================================================================
-    // Control Flow: when expression
-    // ====================================================================
-
-    context("When expression") {
-
-        test("when with subject - value matching") {
-            val source = """
-                let x = 2
-                when x {
-                    1 -> "one"
-                    2 -> "two"
-                    3 -> "three"
-                    else -> "other"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "two"
-        }
-
-        test("when with else fallback") {
-            val source = """
-                let x = 99
-                when x {
-                    1 -> "one"
-                    else -> "unknown"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "unknown"
-        }
-
-        test("when without subject (condition-style)") {
-            val source = """
-                let x = 42
-                when {
-                    x < 0 -> "negative"
-                    x == 0 -> "zero"
-                    x > 0 -> "positive"
-                    else -> "impossible"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "positive"
-        }
-
-        test("when with type matching (is)") {
-            val source = """
-                let x = "hello"
-                when x {
-                    is Int -> "integer"
-                    is String -> "string"
-                    else -> "other"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "string"
-        }
-
-        test("when with range matching (in)") {
-            val source = """
-                let score = 85
-                when score {
-                    in 90..100 -> "A"
-                    in 80..89 -> "B"
-                    in 70..79 -> "C"
-                    else -> "F"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "B"
-        }
-
-        test("when with enum and DPEC matching") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                let c = Color.RED
-                when c {
-                    .RED -> "red"
-                    .GREEN -> "green"
-                    .BLUE -> "blue"
-                    else -> "unknown"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "red"
-        }
-
-        test("when with block body") {
-            val source = """
-                let x = 2
-                when x {
-                    1 -> {
-                        let v = "one"
-                        v
-                    }
-                    2 -> {
-                        let v = "two"
-                        v
-                    }
-                    else -> "other"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "two"
-        }
-    }
-
-    // ====================================================================
-    // Control Flow: for statement
-    // ====================================================================
-
-    context("For statement") {
-
-        test("for with explicit variable over list") {
-            val (_, output) = execWithOutput("""
-                for i in [1, 2, 3] {
-                    say i
-                }
-            """.trimIndent())
-            output shouldBe "1\n2\n3"
-        }
-
-        test("for over range") {
-            val (_, output) = execWithOutput("""
-                for i in 1..3 {
-                    say i
-                }
-            """.trimIndent())
-            output shouldBe "1\n2\n3"
-        }
-
-        test("for over exclusive range") {
-            val (_, output) = execWithOutput("""
-                for i in 0..<3 {
-                    say i
-                }
-            """.trimIndent())
-            output shouldBe "0\n1\n2"
-        }
-
-        test("for with break") {
-            val (_, output) = execWithOutput("""
-                for i in 1..10 {
-                    if i > 3 break
-                    say i
-                }
-            """.trimIndent())
-            output shouldBe "1\n2\n3"
-        }
-
-        test("for with continue") {
-            val (_, output) = execWithOutput("""
-                for i in 1..5 {
-                    if i == 3 continue
-                    say i
-                }
-            """.trimIndent())
-            output shouldBe "1\n2\n4\n5"
-        }
-
-        test("for over string iterates characters") {
-            val (_, output) = execWithOutput("""
-                for c in "abc" {
-                    say c
-                }
-            """.trimIndent())
-            output shouldBe "a\nb\nc"
-        }
-
-        test("for accumulation pattern") {
-            val source = """
-                var sum = 0
-                for i in 1..10 {
-                    sum += i
-                }
-                sum
-            """.trimIndent()
-            exec(source) shouldBe 55
-        }
-
-        test("nested for loops") {
-            val source = """
-                var count = 0
-                for i in 1..3 {
-                    for j in 1..3 {
-                        count += 1
-                    }
-                }
-                count
-            """.trimIndent()
-            exec(source) shouldBe 9
-        }
-
-        test("for over enum constants") {
-            val (_, output) = execWithOutput("""
-                enum Color { RED GREEN BLUE }
-                for c in Color {
-                    say c
-                }
-            """.trimIndent())
-            output shouldBe "RED\nGREEN\nBLUE"
-        }
-    }
-
-    // ====================================================================
-    // Control Flow: while statement
-    // ====================================================================
-
-    context("While statement") {
-
-        test("basic while loop") {
-            val source = """
-                var x = 0
-                while x < 5 {
-                    x += 1
-                }
-                x
-            """.trimIndent()
-            exec(source) shouldBe 5
-        }
-
-        test("while with break") {
-            val source = """
-                var x = 0
-                while true {
-                    x += 1
-                    if x >= 3 break
-                }
-                x
-            """.trimIndent()
-            exec(source) shouldBe 3
-        }
-
-        test("while with continue") {
-            val (_, output) = execWithOutput("""
-                var x = 0
-                while x < 5 {
-                    x += 1
-                    if x == 3 continue
-                    say x
-                }
-            """.trimIndent())
-            output shouldBe "1\n2\n4\n5"
-        }
-
-        test("while false never executes") {
-            val source = """
-                var x = 42
-                while false {
-                    x = 0
-                }
-                x
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-    }
-
-    // ====================================================================
-    // Functions
-    // ====================================================================
-
-    context("Function declarations and calls") {
-
-        test("simple function declaration and call") {
-            val source = """
-                fun add(a, b) { return a + b }
-                add(3, 4)
-            """.trimIndent()
-            exec(source) shouldBe 7
-        }
-
-        test("single-expression function") {
-            val source = """
-                fun double(x) = x * 2
-                double(21)
-            """.trimIndent()
-            exec(source) shouldBe 42
-        }
-
-        test("function with default parameters") {
-            val source = """
-                fun greet(name, greeting = "Hello") = "${'$'}greeting, ${'$'}name!"
-                greet("World")
-            """.trimIndent()
-            exec(source) shouldBe "Hello, World!"
-        }
-
-        test("function with default param overridden") {
-            val source = """
-                fun greet(name, greeting = "Hello") = "${'$'}greeting, ${'$'}name!"
-                greet("World", "Hi")
-            """.trimIndent()
-            exec(source) shouldBe "Hi, World!"
-        }
-
-        test("recursive function - factorial") {
-            val source = """
-                fun factorial(n) {
-                    if n <= 1 return 1
-                    return n * factorial(n - 1)
-                }
-                factorial(5)
-            """.trimIndent()
-            exec(source) shouldBe 120
-        }
-
-        test("recursive function - fibonacci") {
-            val source = """
-                fun fib(n) {
-                    if n <= 1 return n
-                    return fib(n - 1) + fib(n - 2)
-                }
-                fib(10)
-            """.trimIndent()
-            exec(source) shouldBe 55
-        }
-
-        test("closure captures environment") {
-            val source = """
-                fun makeCounter() {
-                    var count = 0
-                    fun increment() {
-                        count += 1
-                        return count
-                    }
-                    return increment
-                }
-                let counter = makeCounter()
-                counter()
-                counter()
-                counter()
-            """.trimIndent()
-            exec(source) shouldBe 3
-        }
-
-        test("function returning nil implicitly") {
-            val source = """
-                fun doNothing() { }
-                doNothing()
-            """.trimIndent()
-            exec(source).shouldBeNull()
-        }
-    }
-
-    // ====================================================================
-    // Classes
-    // ====================================================================
-
-    context("Class declarations and instantiation") {
-
-        test("simple class with constructor params") {
-            val source = """
-                class Point(let x, let y)
-                let p = Point(3, 4)
-                p.x
-            """.trimIndent()
-            exec(source) shouldBe 3
-        }
-
-        test("class with method") {
-            val source = """
-                class Point(let x, let y) {
-                    fun sum() = x + y
-                }
-                let p = Point(10, 20)
-                p.sum()
-            """.trimIndent()
-            exec(source) shouldBe 30
-        }
-
-        test("class with mutable property") {
-            val source = """
-                class Counter(var count) {
-                    fun increment() {
-                        count += 1
-                    }
-                }
-                let c = Counter(0)
-                c.increment()
-                c.increment()
-                c.count
-            """.trimIndent()
-            exec(source) shouldBe 2
-        }
-
-        test("class with default constructor parameter") {
-            val source = """
-                class Greeter(let name, let greeting = "Hello") {
-                    fun greet() = "${'$'}greeting, ${'$'}name!"
-                }
-                let g = Greeter("World")
-                g.greet()
-            """.trimIndent()
-            exec(source) shouldBe "Hello, World!"
-        }
-
-        test("class with static block") {
-            val source = """
-                class MathUtils {
-                    static {
-                        let PI = 3.14159
-                    }
-                }
-                MathUtils.PI
-            """.trimIndent()
-            val result = exec(source)
-            result shouldBe 3.14159
-        }
-    }
-
-    // ====================================================================
-    // Traits
-    // ====================================================================
-
-    context("Trait declarations and implementation") {
-
-        test("class implementing trait with default method") {
-            val source = """
-                trait Describable {
-                    fun describe() = "I am describable"
-                }
-                class Widget: Describable
-                let w = Widget()
-                w.describe()
-            """.trimIndent()
-            exec(source) shouldBe "I am describable"
-        }
-
-        test("class overriding trait method") {
-            val source = """
-                trait Greeter {
-                    fun greet() = "Hello"
-                }
-                class FrenchGreeter: Greeter {
-                    fun greet() = "Bonjour"
-                }
-                let g = FrenchGreeter()
-                g.greet()
-            """.trimIndent()
-            exec(source) shouldBe "Bonjour"
-        }
-    }
-
-    // ====================================================================
-    // Enums
-    // ====================================================================
-
-    context("Enum declarations") {
-
-        test("simple enum") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                Color.RED
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KSEnumConstant>()
-            result.toString() shouldBe "RED"
-        }
-
-        test("enum constant ordinal") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                Color.GREEN.ordinal
-            """.trimIndent()
-            exec(source) shouldBe 1
-        }
-
-        test("enum constant name") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                Color.BLUE.name
-            """.trimIndent()
-            exec(source) shouldBe "BLUE"
-        }
-
-        test("enum with value assignments") {
-            val source = """
-                enum Priority { LOW = 1 MEDIUM = 5 HIGH = 10 }
-                Priority.HIGH
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KSEnumConstant>()
-            result.toString() shouldBe "HIGH"
-        }
-
-        test("enum with constructor params") {
-            val source = """
-                enum HttpStatus(code, msg) {
-                    OK(200, "OK")
-                    NOT_FOUND(404, "Not Found")
-                }
-                HttpStatus.NOT_FOUND.code
-            """.trimIndent()
-            exec(source) shouldBe 404
-        }
-
-        test("enum equality") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                Color.RED == Color.RED
-            """.trimIndent()
-            exec(source) shouldBe true
-        }
-
-        test("enum inequality") {
-            val source = """
-                enum Color { RED GREEN BLUE }
-                Color.RED == Color.BLUE
-            """.trimIndent()
-            exec(source) shouldBe false
-        }
-    }
-
-    // ====================================================================
-    // Collections
-    // ====================================================================
-
-    context("Lists") {
-
-        test("list literal") {
-            val result = exec("[1, 2, 3]")
-            result shouldBe listOf(1, 2, 3)
-        }
-
-        test("empty list") {
-            val result = exec("[]")
-            result shouldBe emptyList<Any?>()
-        }
-
-        test("list index access") {
-            exec("[10, 20, 30][1]") shouldBe 20
-        }
-
-        test("list size member") {
-            exec("[1, 2, 3].size") shouldBe 3
-        }
-
-        test("list isEmpty") {
-            exec("[].isEmpty") shouldBe true
-        }
-
-        test("list isNotEmpty") {
-            exec("[1].isNotEmpty") shouldBe true
-        }
-
-        test("list first") {
-            exec("[10, 20, 30].first") shouldBe 10
-        }
-
-        test("list last") {
-            exec("[10, 20, 30].last") shouldBe 30
-        }
-
-        test("list reversed") {
-            exec("[1, 2, 3].reversed") shouldBe listOf(3, 2, 1)
-        }
-
-        test("nested list") {
-            val result = exec("[[1, 2], [3, 4]]")
-            result shouldBe listOf(listOf(1, 2), listOf(3, 4))
-        }
-
-        test("list of mixed types") {
-            val result = exec("""[1, "two", true, nil]""")
-            result shouldBe listOf(1, "two", true, null)
-        }
-    }
-
-    context("Maps") {
-
-        test("map literal") {
-            val result = exec("""["a" = 1, "b" = 2]""")
-            result shouldBe mapOf("a" to 1, "b" to 2)
-        }
-
-        test("map index access") {
-            exec("""["x" = 10, "y" = 20]["x"]""") shouldBe 10
-        }
-
-        test("map size") {
-            exec("""["a" = 1, "b" = 2].size""") shouldBe 2
-        }
-
-        test("map isEmpty") {
-            // Empty map is tricky - test with variable
-            val source = """
-                let m = ["a" = 1]
-                m.isEmpty
-            """.trimIndent()
-            exec(source) shouldBe false
-        }
-
-        test("map keys") {
-            val source = """
-                let m = ["a" = 1, "b" = 2]
-                m.keys
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<List<*>>()
-            (result as List<*>).toSet() shouldBe setOf("a", "b")
-        }
-
-        test("map values") {
-            val source = """
-                let m = ["a" = 1, "b" = 2]
-                m.values
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<List<*>>()
-            (result as List<*>).toSet() shouldBe setOf(1, 2)
-        }
-    }
-
-    // ====================================================================
-    // String Members
-    // ====================================================================
-
-    context("String member access") {
-
-        test("string length") {
-            exec(""""hello".length""") shouldBe 5
-        }
-
-        test("string uppercase") {
-            exec(""""hello".uppercase""") shouldBe "HELLO"
-        }
-
-        test("string lowercase") {
-            exec(""""HELLO".lowercase""") shouldBe "hello"
-        }
-
-        test("string trim") {
-            exec(""""  hello  ".trim""") shouldBe "hello"
-        }
-
-        test("string reversed") {
-            exec(""""hello".reversed""") shouldBe "olleh"
-        }
-
-        test("string isEmpty on empty") {
-            exec(""""".isEmpty""") shouldBe true
-        }
-
-        test("string isNotEmpty on non-empty") {
-            exec(""""hello".isNotEmpty""") shouldBe true
-        }
-
-        test("string first") {
-            exec(""""hello".first""") shouldBe 'h'
-        }
-
-        test("string last") {
-            exec(""""hello".last""") shouldBe 'o'
-        }
-
-        test("string index access") {
-            exec(""""hello"[1]""") shouldBe 'e'
-        }
-    }
-
-    // ====================================================================
-    // Ranges
-    // ====================================================================
-
-    context("Ranges") {
-
-        test("inclusive range creation") {
-            val result = exec("1..5")
-            result.shouldBeInstanceOf<KSRange>()
-        }
-
-        test("exclusive end range creation") {
-            val result = exec("0..<5")
-            result.shouldBeInstanceOf<KSRange>()
-            (result as KSRange).endExclusive shouldBe true
-        }
-
-        test("range contains check (in)") {
-            exec("3 in 1..5") shouldBe true
-        }
-
-        test("range does not contain (in)") {
-            exec("6 in 1..5") shouldBe false
-        }
-
-        test("range negated contains (!in)") {
-            exec("6 !in 1..5") shouldBe true
-        }
-
-        test("exclusive range boundary") {
-            exec("5 in 0..<5") shouldBe false
-        }
-
-        test("range start member") {
-            val source = """
-                let r = 1..10
-                r.start
-            """.trimIndent()
-            exec(source) shouldBe 1
-        }
-
-        test("range end member") {
-            val source = """
-                let r = 1..10
-                r.end
-            """.trimIndent()
-            exec(source) shouldBe 10
-        }
-    }
-
-    // ====================================================================
-    // Type Operations
-    // ====================================================================
-
-    context("Type checking and casting") {
-
-        test("is Int") {
-            exec("42 is Int") shouldBe true
-        }
-
-        test("is String") {
-            exec(""""hello" is String""") shouldBe true
-        }
-
-        test("is Bool") {
-            exec("true is Bool") shouldBe true
-        }
-
-        test("!is String on Int") {
-            exec("42 !is String") shouldBe true
-        }
-
-        test("as Int from Double") {
-            val source = """
-                let x = 3.14
-                x as Int
-            """.trimIndent()
-            exec(source) shouldBe 3
-        }
-
-        test("as String") {
-            exec("42 as String") shouldBe "42"
-        }
-
-        test("nil is not Int") {
-            exec("nil is Int") shouldBe false
-        }
-    }
-
-    context("Pattern matching (matches)") {
-
-        test("matches regex positive") {
-            exec(""""hello123" matches @"[a-z]+\d+"""") shouldBe true
-        }
-
-        test("matches regex negative") {
-            exec(""""hello" matches @"\d+"""") shouldBe false
-        }
-    }
-
-    // ====================================================================
-    // Try / Catch / Finally
-    // ====================================================================
-
-    context("Try/catch/finally") {
-
-        test("try without error returns body value") {
-            exec("try { 42 } catch(e) { -1 }") shouldBe 42
-        }
-
-        test("try with error caught") {
-            val source = """
+    /**
+     * Call a KSFunction with the given arguments.
+     *
+     * This method is called by [KSFunctionCallable] and handles:
+     * - Creating a new scope with the function's closure as parent
+     * - Binding parameters to arguments (positional and default values)
+     * - Executing the function body
+     * - Handling return values
+     *
+     * @param function The function to call
+     * @param arguments Evaluated argument values
+     * @param location Call site location for error reporting
+     * @return The function's return value
+     */
+    fun callFunction(function: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+        // Check recursion depth
+        if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
+            throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
+        }
+
+        // Check arity
+        val params = function.params
+        if (arguments.size < function.requiredArity) {
+            throw ArityError(function.name, function.requiredArity, arguments.size, location)
+        }
+        if (arguments.size > function.totalArity) {
+            throw ArityError(function.name, function.totalArity, arguments.size, location)
+        }
+
+        // Create new scope with function's closure as parent (lexical scoping)
+        val functionEnv = function.closure.child("function:${function.name}")
+
+        // Bind parameters
+        for (i in params.indices) {
+            val param = params[i]
+            val value = if (i < arguments.size) {
+                copyIfStruct(arguments[i])
+            } else {
+                // Use default value (must exist since we passed arity check)
+                param.defaultValue?.let { evaluate(it) }
+            }
+
+            // Check parameter constraint if present
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, param.location)
+            }
+
+            functionEnv.define(
+                param.name,
+                value,
+                mutable = true, // Parameters can be reassigned within the function
+                param.type,
+                param.constraint,
+                param.location
+            )
+        }
+
+        // Execute function body
+        val previousEnv = environment
+        environment = functionEnv
+        recursionDepth++
+
+        try {
+            val body = function.declaration.body
+                ?: throw RuntimeError("Cannot call abstract function '${function.name}'", location)
+
+            return if (function.isSingleExpr) {
+                // Single-expression body: = expr
+                evaluate(body)
+            } else {
+                // Block body: { ... }
                 try {
-                    throw "boom"
-                } catch(e) {
-                    "caught"
+                    evaluate(body)
+                    null // Block without explicit return returns null
+                } catch (ret: ReturnValue) {
+                    ret.value
                 }
-            """.trimIndent()
-            exec(source) shouldBe "caught"
-        }
-
-        test("finally block executes on success") {
-            val (_, output) = execWithOutput("""
-                try {
-                    say "body"
-                } catch(e) {
-                    say "catch"
-                } finally {
-                    say "finally"
-                }
-            """.trimIndent())
-            output shouldContain "body"
-            output shouldContain "finally"
-        }
-
-        test("finally block executes on error") {
-            val (_, output) = execWithOutput("""
-                try {
-                    throw "error"
-                } catch(e) {
-                    say "caught"
-                } finally {
-                    say "cleanup"
-                }
-            """.trimIndent())
-            output shouldContain "caught"
-            output shouldContain "cleanup"
-        }
-
-        test("catch-all with wildcard") {
-            val source = """
-                try {
-                    throw "anything"
-                } catch(*) {
-                    "caught all"
-                }
-            """.trimIndent()
-            exec(source) shouldBe "caught all"
+            }
+        } finally {
+            recursionDepth--
+            environment = previousEnv
         }
     }
 
-    // ====================================================================
-    // Say Statement
-    // ====================================================================
-
-    context("Say statement") {
-
-        test("say basic string") {
-            val (_, output) = execWithOutput("""say "Hello, World!" """)
-            output shouldBe "Hello, World!"
+    /**
+     * Call a method on an object with proper `this` binding.
+     *
+     * @param receiver The object the method is being called on
+     * @param method The method to call
+     * @param arguments Evaluated argument values
+     * @param location Call site location for error reporting
+     * @return The method's return value
+     */
+    fun callMethod(receiver: KSObject, method: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+        // Check recursion depth
+        if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
+            throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
         }
 
-        test("say integer") {
-            val (_, output) = execWithOutput("say 42")
-            output shouldBe "42"
+        // Check arity
+        val params = method.params
+        if (arguments.size < method.requiredArity) {
+            throw ArityError(method.name, method.requiredArity, arguments.size, location)
+        }
+        if (arguments.size > method.totalArity) {
+            throw ArityError(method.name, method.totalArity, arguments.size, location)
         }
 
-        test("say multiple arguments") {
-            val (_, output) = execWithOutput("""say "a" "b" "c" """)
-            output shouldBe "a b c"
+        // Create new scope with method's closure as parent (lexical scoping)
+        val methodEnv = method.closure.child("method:${method.name}")
+
+        // Bind `this` to the receiver object
+        methodEnv.define("this", receiver, mutable = false, location = location)
+
+        // Bind parameters
+        for (i in params.indices) {
+            val param = params[i]
+            val value = if (i < arguments.size) {
+                arguments[i]
+            } else {
+                param.defaultValue?.let { evaluate(it) }
+            }
+
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, param.location)
+            }
+
+            methodEnv.define(
+                param.name,
+                value,
+                mutable = true,
+                param.type,
+                param.constraint,
+                param.location
+            )
         }
 
-        test("say.error outputs to error stream") {
-            val (_, error) = execWithError("""say.error "oops!" """)
-            error shouldBe "oops!"
-        }
+        // Execute method body
+        val previousEnv = environment
+        environment = methodEnv
+        recursionDepth++
 
-        test("say.warn outputs warning") {
-            val (_, output) = execWithOutput("""say.warn "caution" """)
-            output shouldBe "caution"
-        }
+        try {
+            val body = method.declaration.body
+                ?: throw RuntimeError("Cannot call abstract method '${method.name}'", location)
 
-        test("say.note outputs bold text") {
-            val (_, output) = execWithOutput("""say.note "important" """)
-            output shouldBe "important"
-        }
-
-        test("say with interpolated string") {
-            val (_, output) = execWithOutput("""
-                let name = "Claude"
-                say "Hello, ${'$'}name!"
-            """.trimIndent())
-            output shouldBe "Hello, Claude!"
-        }
-
-        test("say nil") {
-            val (_, output) = execWithOutput("say nil")
-            output shouldBe "nil"
+            return if (method.isSingleExpr) {
+                evaluate(body)
+            } else {
+                try {
+                    evaluate(body)
+                    null
+                } catch (ret: ReturnValue) {
+                    ret.value
+                }
+            }
+        } finally {
+            recursionDepth--
+            environment = previousEnv
         }
     }
 
-    // ====================================================================
-    // Lang KD Blocks
-    // ====================================================================
+    private fun evaluateCall(expr: CallExpr): Any? {
+        val callee = evaluate(expr.callee)
+        val location = expr.location
 
-    context("Lang KD blocks") {
+        // Evaluate arguments
+        val args = expr.arguments.map { evaluate(it.value) }
 
-        test("single KD tag with values") {
-            val source = """
-                lang KD {
-                    book "The Hobbit"
+        // Handle different callable types
+        return when (callee) {
+            is KSFunction -> callFunction(callee, args, location)
+            is KSClass -> instantiateClass(callee, args, expr.arguments, location)
+            is KSStruct -> instantiateStruct(callee, args, expr.arguments, location)
+            is KSEnum -> throw RuntimeError("Cannot instantiate enum '${callee.name}' directly", location)
+            is StructCopyCallable -> {
+                // Auto-generated copy(): no args = plain copy, named args = copy-with-overrides
+                if (expr.arguments.isEmpty()) {
+                    callee.receiver.copy()
+                } else {
+                    val namedArgs = mutableMapOf<String, Any?>()
+                    for ((index, argNode) in expr.arguments.withIndex()) {
+                        if (argNode.name != null) {
+                            namedArgs[argNode.name] = args[index]
+                        } else {
+                            throw RuntimeError(
+                                "copy() requires named arguments: copy(x = 10.0)",
+                                location
+                            )
+                        }
+                    }
+                    callee.receiver.copyWith(namedArgs, location)
                 }
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KDTag>()
-            (result as KDTag).name shouldBe "book"
-            result.values shouldBe listOf("The Hobbit")
-        }
+            }
+            is Callable -> callee.call(this, args, location)
+            else -> {
+                // Check if it's a function name
+                if (expr.callee is IdentifierExpr) {
+                    val name = (expr.callee as IdentifierExpr).name
 
-        test("KD tag with attributes") {
-            val source = """
-                lang KD {
-                    book "The Hobbit" author="Tolkien" year=1937
-                }
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KDTag>()
-            (result as KDTag).attributes["author"] shouldBe "Tolkien"
-            result.attributes["year"] shouldBe 1937
-        }
+                    // Check functions first
+                    if (environment.isFunctionDefined(name)) {
+                        val fn = environment.getFunction(name, location)
+                        return callFunction(fn, args, location)
+                    }
 
-        test("KD tag name access") {
-            val source = """
-                let tag = lang KD {
-                    book "Dune"
-                }
-                tag.name
-            """.trimIndent()
-            exec(source) shouldBe "book"
-        }
+                    // Check classes
+                    classes[name]?.let { cls ->
+                        return instantiateClass(cls, args, expr.arguments, location)
+                    }
 
-        test("KD tag values access") {
-            val source = """
-                let tag = lang KD {
-                    point 3 4
-                }
-                tag.values
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<List<*>>()
-            result shouldBe listOf(3, 4)
-        }
-
-        test("KD tag attribute access by name") {
-            val source = """
-                let tag = lang KD {
-                    person name="Ada" age=36
-                }
-                tag.name
-            """.trimIndent()
-            // tag.name returns the tag name itself, not the attribute
-            exec(source) shouldBe "person"
-        }
-
-        test("KD tag attribute access via attributes map") {
-            val source = """
-                let tag = lang KD {
-                    person name="Ada" age=36
-                }
-                tag.attributes
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<Map<*, *>>()
-            (result as Map<*, *>)["name"] shouldBe "Ada"
-            result["age"] shouldBe 36
-        }
-
-        test("KD tag with children") {
-            val source = """
-                let doc = lang KD {
-                    library {
-                        book "The Hobbit"
-                        book "Dune"
+                    // Check structs
+                    structs[name]?.let { struct ->
+                        return instantiateStruct(struct, args, expr.arguments, location)
                     }
                 }
-                doc.children.size
-            """.trimIndent()
-            exec(source) shouldBe 2
-        }
-
-        test("multiple root tags produce KDDocument") {
-            val source = """
-                let doc = lang KD {
-                    book "The Hobbit"
-                    book "Dune"
-                }
-                doc.size
-            """.trimIndent()
-            exec(source) shouldBe 2
-        }
-
-        test("KDDocument tag access by index") {
-            val source = """
-                let doc = lang KD {
-                    book "The Hobbit"
-                    book "Dune"
-                }
-                doc[0].values
-            """.trimIndent()
-            val result = exec(source)
-            result shouldBe listOf("The Hobbit")
-        }
-
-        test("KD tag with annotation") {
-            val source = """
-                lang KD {
-                    @Important book "Special"
-                }
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KDTag>()
-            (result as KDTag).annotations.size shouldBe 1
-            result.annotations[0].name shouldBe "Important"
-        }
-
-        test("KD tag with boolean and nil values") {
-            val source = """
-                lang KD {
-                    config true nil 42
-                }
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KDTag>()
-            (result as KDTag).values shouldBe listOf(true, null, 42)
+                throw NotCallableError(callee, location)
+            }
         }
     }
 
-    // ====================================================================
+    /**
+     * Look up an identifier - could be a variable, function, class, enum, or trait.
+     */
+    private fun lookupIdentifier(expr: IdentifierExpr): Any? {
+        val name = expr.name
+
+        // First try as a variable
+        if (environment.isDefined(name)) {
+            return environment.get(name, expr.location)
+        }
+
+        // Then try as a function
+        if (environment.isFunctionDefined(name)) {
+            return environment.getFunction(name, expr.location)
+        }
+
+        // Try as a class
+        classes[name]?.let { return it }
+
+        // Try as a struct
+        structs[name]?.let { return it }
+
+        // Try as an enum
+        enums[name]?.let { return it }
+
+        // Try as a trait
+        traits[name]?.let { return it }
+
+        // If in a method context, try implicit 'this' property access
+        if (environment.isDefined("this")) {
+            val thisVal = environment.get("this")
+
+            val thisObj = thisVal as? KSObject
+            if (thisObj != null) {
+                if (thisObj.hasProperty(name)) {
+                    return thisObj.get(name, expr.location)
+                }
+                // Also check for methods
+                thisObj.klass.findMethod(name)?.let { method ->
+                    return BoundMethod(thisObj, method)
+                }
+            }
+
+            val thisStruct = thisVal as? KSStructInstance
+            if (thisStruct != null) {
+                if (thisStruct.hasProperty(name)) {
+                    return thisStruct.get(name, expr.location)
+                }
+                thisStruct.struct.findMethod(name)?.let { method ->
+                    return StructBoundMethod(thisStruct, method)
+                }
+            }
+        }
+
+        throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
+    }
+    // ========================================================================
+    // Class Declarations & Instantiation
+    // ========================================================================
+
+    private fun evaluateClassDecl(decl: ClassDecl): Any? {
+        // Resolve superclass if specified
+        val superclass: KSClass? = if (decl.superTypes.isNotEmpty()) {
+            val superTypeName = decl.superTypes.first().name
+            classes[superTypeName] ?: traits[superTypeName]?.let { null }
+        } else {
+            null
+        }
+
+        // Resolve traits
+        val implementedTraits = decl.superTypes.mapNotNull { typeRef ->
+            traits[typeRef.name]
+        }
+
+        // Create class
+        val ksClass = KSClass(decl, superclass, implementedTraits, environment)
+        classes[decl.name] = ksClass
+
+        // Initialize static members
+        initializeStaticMembers(ksClass, decl.members)
+
+        // Make class available in environment
+        environment.define(decl.name, ksClass, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    private fun initializeStaticMembers(ksClass: KSClass, members: List<Node>) {
+        val staticEnv = ksClass.staticEnvironment()
+        val previousEnv = environment
+        environment = staticEnv
+
+        try {
+            for (member in members) {
+                when (member) {
+                    is StaticBlock -> {
+                        for (staticMember in member.members) {
+                            when (staticMember) {
+                                is VarDecl -> {
+                                    val value = staticMember.initializer?.let { evaluate(it) }
+                                    staticEnv.define(
+                                        staticMember.name,
+                                        value,
+                                        staticMember.mutable,
+                                        staticMember.typeAnnotation,
+                                        staticMember.constraint,
+                                        staticMember.location
+                                    )
+                                }
+                                is FunDecl -> {
+                                    val fn = KSFunction(staticMember, staticEnv)
+                                    staticEnv.defineFunction(staticMember.name, fn, staticMember.location)
+                                }
+                                else -> { /* ignore */ }
+                            }
+                        }
+                    }
+                    else -> { /* instance members handled during instantiation */ }
+                }
+            }
+        } finally {
+            environment = previousEnv
+        }
+    }
+
+    /**
+     * Create a new instance of a class.
+     */
+    private fun instantiateClass(
+        ksClass: KSClass,
+        args: List<Any?>,
+        argNodes: List<Argument>,
+        location: SourceLocation?
+    ): KSObject {
+        val obj = KSObject(ksClass)
+
+        // Bind constructor parameters to properties
+        val params = ksClass.constructorParams
+
+        // Build argument map for named arguments
+        val namedArgs = mutableMapOf<String, Any?>()
+        val positionalArgs = mutableListOf<Any?>()
+
+        for ((index, argNode) in argNodes.withIndex()) {
+            if (argNode.name != null) {
+                namedArgs[argNode.name] = args[index]
+            } else {
+                positionalArgs.add(args[index])
+            }
+        }
+
+        // Assign values to constructor parameters
+        var positionalIndex = 0
+        for (param in params) {
+            val value = when {
+                namedArgs.containsKey(param.name) -> namedArgs[param.name]
+                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
+                param.defaultValue != null -> evaluate(param.defaultValue)
+                else -> throw ArityError(ksClass.name, params.size, args.size, location)
+            }
+
+            // Check constraint
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, location)
+            }
+
+            // If param has binding (var/let), create a property
+            if (param.binding != null) {
+                obj.initProperty(param.name, value, param.binding == BindingType.VAR)
+            }
+        }
+
+        // Initialize instance properties from class body
+        val previousEnv = environment
+        val instanceEnv = environment.child("instance:${ksClass.name}")
+        instanceEnv.define("this", obj, mutable = false, location = location)
+        environment = instanceEnv
+
+        try {
+            for (property in ksClass.getInstanceProperties()) {
+                val value = property.initializer?.let { evaluate(it) }
+                if (property.constraint != null && value != null) {
+                    checkConstraint(property.name, value, property.constraint, property.location)
+                }
+                obj.initProperty(property.name, value, property.mutable)
+            }
+        } finally {
+            environment = previousEnv
+        }
+
+        return obj
+    }
+
+    // ========================================================================
+    // Trait Declarations
+    // ========================================================================
+
+    private fun evaluateTraitDecl(decl: TraitDecl): Any? {
+        // Resolve super traits
+        val superTraits = decl.superTraits.mapNotNull { typeRef ->
+            traits[typeRef.name]
+        }
+
+        val ksTrait = KSTrait(decl, superTraits, environment)
+        traits[decl.name] = ksTrait
+
+        // Make trait available in environment
+        environment.define(decl.name, ksTrait, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    // ========================================================================
+    // Struct Declarations & Instantiation
+    // ========================================================================
+
+    private fun evaluateStructDecl(decl: StructDecl): Any? {
+        // Resolve traits (structs can only implement traits, no superclass)
+        val implementedTraits = decl.traits.mapNotNull { typeRef ->
+            traits[typeRef.name] ?: run {
+                // Check if it's a class — structs can't extend classes
+                if (classes.containsKey(typeRef.name)) {
+                    throw RuntimeError(
+                        "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
+                        decl.location
+                    )
+                }
+                null
+            }
+        }
+
+        val ksStruct = KSStruct(decl, implementedTraits, environment)
+        structs[decl.name] = ksStruct
+
+        // Validate trait conformance: every abstract method must be implemented
+        validateStructTraitConformance(ksStruct)
+
+        // Initialize static members
+        initializeStructStaticMembers(ksStruct, decl.members)
+
+        // Make struct available in environment
+        environment.define(decl.name, ksStruct, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    private fun initializeStructStaticMembers(ksStruct: KSStruct, members: List<Node>) {
+        val staticEnv = ksStruct.staticEnvironment()
+        val previousEnv = environment
+        environment = staticEnv
+
+        try {
+            for (member in members) {
+                when (member) {
+                    is StaticBlock -> {
+                        for (staticMember in member.members) {
+                            when (staticMember) {
+                                is VarDecl -> {
+                                    val value = staticMember.initializer?.let { evaluate(it) }
+                                    staticEnv.define(
+                                        staticMember.name, value, staticMember.mutable,
+                                        staticMember.typeAnnotation, staticMember.constraint,
+                                        staticMember.location
+                                    )
+                                }
+                                is FunDecl -> {
+                                    val fn = KSFunction(staticMember, staticEnv)
+                                    staticEnv.defineFunction(staticMember.name, fn, staticMember.location)
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        } finally {
+            environment = previousEnv
+        }
+    }
+
+    /**
+     * Validate that a struct implements all abstract methods required by its traits.
+     *
+     * An abstract method is one with no body in the trait. If a trait provides a
+     * default implementation (body present), the struct is not required to override it.
+     */
+    private fun validateStructTraitConformance(ksStruct: KSStruct) {
+        val missingMethods = mutableListOf<String>()
+
+        for (trait in ksStruct.traits) {
+            for (methodName in trait.abstractMethodNames()) {
+                // findMethod checks struct's own methods first, then falls back to traits.
+                // We need to verify the struct provides a concrete implementation —
+                // not just that the trait's own abstract declaration is reachable.
+                val found = ksStruct.findMethod(methodName)
+                if (found == null || found.declaration.body == null) {
+                    missingMethods.add("${trait.name}.${methodName}")
+                }
+            }
+        }
+
+        if (missingMethods.isNotEmpty()) {
+            throw RuntimeError(
+                "Struct '${ksStruct.name}' does not implement required trait methods: ${missingMethods.joinToString(", ")}",
+                ksStruct.location
+            )
+        }
+    }
+
+    /**
+     */
+    private fun instantiateStruct(
+        ksStruct: KSStruct,
+        args: List<Any?>,
+        argNodes: List<Argument>,
+        location: SourceLocation?
+    ): KSStructInstance {
+        val instance = KSStructInstance(ksStruct)
+
+        val params = ksStruct.constructorParams
+
+        // Build argument map for named arguments
+        val namedArgs = mutableMapOf<String, Any?>()
+        val positionalArgs = mutableListOf<Any?>()
+
+        for ((index, argNode) in argNodes.withIndex()) {
+            if (argNode.name != null) {
+                namedArgs[argNode.name] = args[index]
+            } else {
+                positionalArgs.add(args[index])
+            }
+        }
+
+        // Assign values to constructor parameters
+        var positionalIndex = 0
+        for (param in params) {
+            val value = when {
+                namedArgs.containsKey(param.name) -> namedArgs[param.name]
+                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
+                param.defaultValue != null -> evaluate(param.defaultValue)
+                else -> throw ArityError(ksStruct.name, params.size, args.size, location)
+            }
+
+            // Check constraint
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, location)
+            }
+
+            // If param has binding (var/let), create a property
+            if (param.binding != null) {
+                instance.initProperty(param.name, value, param.binding == BindingType.VAR)
+            }
+        }
+
+        // Initialize instance properties from struct body
+        val previousEnv = environment
+        val instanceEnv = environment.child("instance:${ksStruct.name}")
+        instanceEnv.define("this", instance, mutable = false, location = location)
+        environment = instanceEnv
+
+        try {
+            for (property in ksStruct.getInstanceProperties()) {
+                val value = property.initializer?.let { evaluate(it) }
+                if (property.constraint != null && value != null) {
+                    checkConstraint(property.name, value, property.constraint, property.location)
+                }
+                instance.initProperty(property.name, value, property.mutable)
+            }
+        } finally {
+            environment = previousEnv
+        }
+
+        return instance
+    }
+
+    /**
+     * Call a method on a struct instance with proper `this` binding.
+     */
+    fun callStructMethod(receiver: KSStructInstance, method: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+        if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
+            throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
+        }
+
+        val params = method.params
+        if (arguments.size < method.requiredArity) {
+            throw ArityError(method.name, method.requiredArity, arguments.size, location)
+        }
+        if (arguments.size > method.totalArity) {
+            throw ArityError(method.name, method.totalArity, arguments.size, location)
+        }
+
+        val methodEnv = method.closure.child("method:${method.name}")
+        methodEnv.define("this", receiver, mutable = false, location = location)
+
+        for (i in params.indices) {
+            val param = params[i]
+            val value = if (i < arguments.size) {
+                copyIfStruct(arguments[i])
+            } else {
+                param.defaultValue?.let { evaluate(it) }
+            }
+
+            if (param.constraint != null && value != null) {
+                checkConstraint(param.name, value, param.constraint, param.location)
+            }
+
+            methodEnv.define(param.name, value, mutable = true, param.type, param.constraint, param.location)
+        }
+
+        val previousEnv = environment
+        environment = methodEnv
+        recursionDepth++
+
+        try {
+            val body = method.declaration.body
+                ?: throw RuntimeError("Cannot call abstract method '${method.name}'", location)
+
+            return if (method.isSingleExpr) {
+                evaluate(body)
+            } else {
+                try {
+                    evaluate(body)
+                    null
+                } catch (ret: ReturnValue) {
+                    ret.value
+                }
+            }
+        } finally {
+            recursionDepth--
+            environment = previousEnv
+        }
+    }
+
+    // ========================================================================
+    // Enum Declarations
+    // ========================================================================
+
+    private fun evaluateEnumDecl(decl: EnumDecl): Any? {
+        val ksEnum = KSEnum(decl, environment)
+        enums[decl.name] = ksEnum
+
+        // Initialize enum constants
+        for ((index, constant) in decl.constants.withIndex()) {
+            val enumValue = when {
+                // Constructor-style: OK(200, "OK")
+                constant.arguments.isNotEmpty() -> {
+                    val args = constant.arguments.map { evaluate(it.value) }
+                    KSEnumConstant(ksEnum, constant.name, index, args)
+                }
+                // Value-style: Apple = 1
+                constant.value != null -> {
+                    val value = evaluate(constant.value)
+                    KSEnumConstant(ksEnum, constant.name, index, listOf(value))
+                }
+                // Simple: RED
+                else -> {
+                    KSEnumConstant(ksEnum, constant.name, index, emptyList())
+                }
+            }
+            ksEnum.addConstant(constant.name, enumValue)
+        }
+
+        // Initialize static members
+        for (member in decl.members) {
+            when (member) {
+                is FunDecl -> {
+                    val fn = KSFunction(member, environment)
+                    ksEnum.staticMembers.defineFunction(member.name, fn, member.location)
+                }
+                is VarDecl -> {
+                    val value = member.initializer?.let { evaluate(it) }
+                    ksEnum.staticMembers.define(
+                        member.name,
+                        value,
+                        member.mutable,
+                        member.typeAnnotation,
+                        member.constraint,
+                        member.location
+                    )
+                }
+                is StaticBlock -> {
+                    val previousEnv = environment
+                    environment = ksEnum.staticMembers
+                    try {
+                        for (staticMember in member.members) {
+                            evaluate(staticMember)
+                        }
+                    } finally {
+                        environment = previousEnv
+                    }
+                }
+                else -> { /* ignore */ }
+            }
+        }
+
+        // Make enum available in environment
+        environment.define(decl.name, ksEnum, mutable = false, location = decl.location)
+
+        return null
+    }
+
+    // ========================================================================
+    // DPEC - Dot-Prefixed Enum Constant
+    // ========================================================================
+
+    /**
+     * Evaluate a DPEC expression like `.RED` or `.SUCCESS`.
+     *
+     * Resolution order:
+     * 1. Current enum context (from when expression subject)
+     * 2. Infer from assignment target type annotation
+     * 3. Search all enums for a matching constant
+     */
+    private fun evaluateDPEC(expr: DPECExpr): Any? {
+        val constantName = expr.name
+
+        // First, check current enum context (set during when evaluation)
+        currentEnumContext?.let { enum ->
+            enum.getConstant(constantName)?.let { return it }
+        }
+
+        // Search all enums for the constant
+        for ((_, enum) in enums) {
+            enum.getConstant(constantName)?.let { return it }
+        }
+
+        throw UndefinedNameError(constantName, NameKind.ENUM_CONSTANT, expr.location)
+    }
+
+    // ========================================================================
+    // Use (Import) Declarations
+    // ========================================================================
+
+    private fun evaluateUseDecl(decl: UseDecl): Any? {
+        // For now, use declarations are informational only.
+        // Full module system would require a module loader.
+        // In portable mode (hostLang = false), we only have KS standard library.
+
+        if (runtime.debugMode) {
+            val path = decl.path.joinToString(".")
+            val suffix = if (decl.wildcard) ".*" else ""
+            val alias = decl.alias?.let { " as $it" } ?: ""
+            runtime.outputWriter.println("[DEBUG] use $path$suffix$alias")
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // Extend Declarations
+    // ========================================================================
+
+    private fun evaluateExtendDecl(decl: ExtendDecl): Any? {
+        val targetName = decl.target.name
+
+        if (decl.isTraitExtension) {
+            // extend trait Foo { fun bar() = ... }
+            val trait = traits[targetName]
+                ?: throw RuntimeError("Cannot extend unknown trait '$targetName'", decl.location)
+
+            for (member in decl.members) {
+                when (member) {
+                    is FunDecl -> {
+                        val fn = KSFunction(member, environment)
+                        trait.addMethod(member.name, fn)
+                    }
+                    else -> throw RuntimeError(
+                        "Trait extensions can only contain methods",
+                        decl.location
+                    )
+                }
+            }
+        } else {
+            // extend Point { fun distance() = ... }
+            // Resolve target: class, struct, or trait
+            val ksClass = classes[targetName]
+            val ksStruct = structs[targetName]
+
+            if (ksClass == null && ksStruct == null) {
+                throw RuntimeError("Cannot extend unknown type '$targetName'", decl.location)
+            }
+
+            for (member in decl.members) {
+                when (member) {
+                    is FunDecl -> {
+                        val fn = KSFunction(member, environment)
+                        if (ksClass != null) {
+                            ksClass.addMethod(member.name, fn)
+                        } else {
+                            ksStruct!!.addMethod(member.name, fn)
+                        }
+                    }
+                    is VarDecl -> throw RuntimeError(
+                        "Extension properties are not yet supported. Use extension methods instead.",
+                        member.location
+                    )
+                    else -> throw RuntimeError(
+                        "Unsupported member in extension block",
+                        decl.location
+                    )
+                }
+            }
+        }
+
+        if (runtime.debugMode) {
+            val kind = if (decl.isTraitExtension) "trait " else ""
+            runtime.outputWriter.println("[DEBUG] extend $kind$targetName with ${decl.members.size} members")
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // Static Blocks
+    // ========================================================================
+
+    private fun evaluateStaticBlock(block: StaticBlock): Any? {
+        // Static blocks are processed during class/enum declaration
+        // If encountered at top level, evaluate as a regular block
+        for (member in block.members) {
+            evaluate(member)
+        }
+        return null
+    }
+
+    // ========================================================================
+    // Lang Block (DSL)
+    // ========================================================================
+
+    /**
+     * Evaluate a lang block expression.
+     *
+     * Currently only KD is supported:
+     *
+     *     lang KD {
+     *         book "The Hobbit" author="Tolkien"
+     *         book "Dune" author="Herbert"
+     *     }
+     *
+     * Returns a KDTag if there's a single root tag, or a KDDocument for multiple root tags.
+     */
+    private fun evaluateLangBlock(expr: LangBlockExpr): Any? {
+        return when (expr.language.uppercase()) {
+            "KD" -> {
+                val tags = expr.body.map { evaluateKDTag(it) }
+                if (tags.size == 1) tags[0] else KDDocument(tags)
+            }
+            else -> throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
+        }
+    }
+
+    /**
+     * Evaluate a KD tag into a KDTag runtime object.
+     */
+    private fun evaluateKDTag(tag: KDTagNode): KDTag {
+        // Evaluate values
+        val values = tag.values.map { evaluate(it) }
+
+        // Evaluate attributes
+        val attributes = tag.attributes.associate { attr ->
+            val key = if (attr.namespace != null) "${attr.namespace}:${attr.name}" else attr.name
+            key to evaluate(attr.value)
+        }
+
+        // Evaluate annotations
+        val annotations = tag.annotations.map { ann ->
+            KDAnnotation(
+                ann.name,
+                ann.values.map { evaluate(it) },
+                ann.attributes.associate { attr ->
+                    val key = if (attr.namespace != null) "${attr.namespace}:${attr.name}" else attr.name
+                    key to evaluate(attr.value)
+                }
+            )
+        }
+
+        // Recursively evaluate children
+        val children = tag.children.map { evaluateKDTag(it) }
+
+        return KDTag(
+            name = tag.name,
+            namespace = tag.namespace,
+            values = values,
+            attributes = attributes,
+            annotations = annotations,
+            children = children
+        )
+    }
+
+    // ========================================================================
     // Reflection
-    // ====================================================================
+    // ========================================================================
 
-    context("Reflection with ::class") {
+    /**
+     * Evaluate a reflection expression like `x::class`.
+     */
+    private fun evaluateReflection(expr: ReflectionExpr): Any? {
+        val value = evaluate(expr.expr)
 
-        test("Int type") {
-            val result = exec("42::class")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "Int"
-        }
-
-        test("String type") {
-            val result = exec(""""hello"::class""")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "String"
-        }
-
-        test("Bool type") {
-            val result = exec("true::class")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "Bool"
-        }
-
-        test("Nil type") {
-            val result = exec("nil::class")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "Nil"
-        }
-
-        test("List type") {
-            val result = exec("[1, 2, 3]::class")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "List"
-        }
-
-        test("Quantity type") {
-            val result = exec("23cm::class")
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "Quantity"
-        }
-
-        test("user class type") {
-            val source = """
-                class Dog(let name)
-                let d = Dog("Rex")
-                d::class
-            """.trimIndent()
-            val result = exec(source)
-            result.shouldBeInstanceOf<KSType>()
-            (result as KSType).name shouldBe "Dog"
+        return when (expr.member) {
+            "class" -> getKSType(value)
+            else -> throw RuntimeError("Unknown reflection member: '${expr.member}'", expr.location)
         }
     }
 
-    // ====================================================================
-    // Truthiness
-    // ====================================================================
-
-    context("Truthiness") {
-
-        test("nil is falsy") {
-            exec("if nil { true } else { false }") shouldBe false
-        }
-
-        test("false is falsy") {
-            exec("if false { true } else { false }") shouldBe false
-        }
-
-        test("0 is falsy") {
-            exec("if 0 { true } else { false }") shouldBe false
-        }
-
-        test("empty string is falsy") {
-            exec("""if "" { true } else { false }""") shouldBe false
-        }
-
-        test("empty list is falsy") {
-            exec("if [] { true } else { false }") shouldBe false
-        }
-
-        test("non-zero is truthy") {
-            exec("if 1 { true } else { false }") shouldBe true
-        }
-
-        test("non-empty string is truthy") {
-            exec("""if "hello" { true } else { false }""") shouldBe true
-        }
-
-        test("non-empty list is truthy") {
-            exec("if [1] { true } else { false }") shouldBe true
-        }
-
-        test("quantity is truthy") {
-            exec("if 5cm { true } else { false }") shouldBe true
+    /**
+     * Get the KS type representation of a value.
+     */
+    private fun getKSType(value: Any?): KSType {
+        return when (value) {
+            null -> KSType("Nil")
+            is Int -> KSType("Int")
+            is Long -> KSType("Long")
+            is Float -> KSType("Float")
+            is Double -> KSType("Double")
+            is Dec -> KSType("Dec")
+            is Quantity<*> -> KSType("Quantity", value.unit.symbol)
+            is String -> KSType("String")
+            is Char -> KSType("Char")
+            is Boolean -> KSType("Bool")
+            is List<*> -> KSType("List")
+            is Map<*, *> -> KSType("Map")
+            is KSObject -> KSType(value.klass.name)
+            is KSStructInstance -> KSType(value.struct.name)
+            is KSEnumConstant -> KSType(value.enum.name)
+            is KSClass -> KSType("Class", value.name)
+            is KSStruct -> KSType("Struct", value.name)
+            is KSTrait -> KSType("Trait", value.name)
+            is KSEnum -> KSType("Enum", value.name)
+            is KSFunction -> KSType("Function", value.name)
+            is KSRange -> KSType("Range")
+            is KDTag -> KSType("KDTag")
+            is KDDocument -> KSType("KDDocument")
+            else -> KSType(value::class.simpleName ?: "Unknown")
         }
     }
 
-    // ====================================================================
-    // Scoping
-    // ====================================================================
+    // ========================================================================
+    // Control Flow Statements
+    // ========================================================================
 
-    context("Lexical scoping") {
+    private fun evaluateReturn(stmt: ReturnStmt): Nothing {
+        val value = stmt.value?.let { evaluate(it) }
+        throw ReturnValue(value)
+    }
 
-        test("block creates new scope") {
-            val source = """
-                var x = 1
-                {
-                    var x = 2
-                    x
+    private fun evaluateFor(stmt: ForStmt): Any? {
+        val iterableValue = evaluate(stmt.iterable)
+
+        // Handle enum iteration: for Color { say it }
+        val items: Iterable<Any?> = when (iterableValue) {
+            is KSEnum -> iterableValue.constants.values
+            else -> toIterable(iterableValue, stmt.iterable.location)
+        }
+
+        val loopEnv = environment.child("for")
+        val previousEnv = environment
+        environment = loopEnv
+
+        var iterations = 0L
+
+        try {
+            for (item in items) {
+                if (runtime.maxLoopIterations > 0 && iterations >= runtime.maxLoopIterations) {
+                    throw RuntimeError("Maximum loop iterations exceeded (${runtime.maxLoopIterations})", stmt.location)
                 }
-            """.trimIndent()
-            // Block returns the inner x
-            exec(source) shouldBe 2
-        }
+                iterations++
 
-        test("outer variable accessible in inner scope") {
-            val source = """
-                var x = 10
-                {
-                    x + 5
+                val varName = stmt.variable ?: "it"
+                if (iterations == 1L) {
+                    loopEnv.define(varName, item, mutable = true)
+                } else {
+                    loopEnv.assign(varName, item)
                 }
-            """.trimIndent()
-            exec(source) shouldBe 15
-        }
 
-        test("inner scope modification affects outer via assignment") {
-            val source = """
-                var x = 10
-                {
-                    x = 20
+                try {
+                    evaluate(stmt.body)
+                } catch (e: ContinueSignal) {
+                    continue
+                } catch (e: BreakSignal) {
+                    break
                 }
-                x
-            """.trimIndent()
-            exec(source) shouldBe 20
+            }
+        } finally {
+            environment = previousEnv
+        }
+
+        return null
+    }
+
+    private fun evaluateWhile(stmt: WhileStmt): Any? {
+        var iterations = 0L
+
+        while (isTruthy(evaluate(stmt.condition))) {
+            if (runtime.maxLoopIterations > 0 && iterations >= runtime.maxLoopIterations) {
+                throw RuntimeError("Maximum loop iterations exceeded (${runtime.maxLoopIterations})", stmt.location)
+            }
+            iterations++
+
+            try {
+                evaluate(stmt.body)
+            } catch (e: ContinueSignal) {
+                continue
+            } catch (e: BreakSignal) {
+                break
+            }
+        }
+
+        return null
+    }
+
+    private fun evaluateThrow(stmt: ThrowStmt): Nothing {
+        val value = evaluate(stmt.expression)
+        throw RuntimeError(stringify(value), stmt.location)
+    }
+
+    // ========================================================================
+    // Control Flow Expressions
+    // ========================================================================
+
+    private fun evaluateIf(expr: IfExpr): Any? {
+        val condition = evaluate(expr.condition)
+        return if (isTruthy(condition)) {
+            evaluate(expr.thenBranch)
+        } else {
+            expr.elseBranch?.let { evaluate(it) }
         }
     }
 
-    // ====================================================================
-    // Constraints
-    // ====================================================================
+    private fun evaluateWhen(expr: WhenExpr): Any? {
+        val subject = expr.subject?.let { evaluate(it) }
 
-    context("Constraints") {
-
-        test("comparison constraint satisfied") {
-            val source = """
-                let age: Int > 0 = 25
-                age
-            """.trimIndent()
-            exec(source) shouldBe 25
+        // Set enum context if subject is an enum constant
+        val previousEnumContext = currentEnumContext
+        if (subject is KSEnumConstant) {
+            currentEnumContext = subject.enum
+        } else if (subject is KSEnum) {
+            currentEnumContext = subject
         }
 
-        test("range constraint satisfied") {
-            val source = """
-                let score: Int 0..100 = 85
-                score
-            """.trimIndent()
-            exec(source) shouldBe 85
-        }
-    }
+        try {
+            for (branch in expr.branches) {
+                if (branch.isElse) {
+                    return evaluate(branch.body)
+                }
 
-    // ====================================================================
-    // Ternary Expressions
-    // ====================================================================
-
-    context("Ternary expressions") {
-
-        test("ternary true branch") {
-            exec("true ? 1 : 2") shouldBe 1
-        }
-
-        test("ternary false branch") {
-            exec("false ? 1 : 2") shouldBe 2
-        }
-
-        test("ternary with complex condition") {
-            val source = """
-                let x = 10
-                (x > 5) ? "big" : "small"
-            """.trimIndent()
-            exec(source) shouldBe "big"
-        }
-    }
-
-    // ====================================================================
-    // Division by Zero & Edge Cases
-    // ====================================================================
-
-    context("Edge cases") {
-
-        test("integer division truncates") {
-            exec("7 / 2") shouldBe 3
-        }
-
-        test("double division preserves fraction") {
-            exec("7.0 / 2.0") shouldBe 3.5
-        }
-
-        test("large exponent") {
-            exec("2 ** 20") shouldBe 1048576
-        }
-
-        test("string + number concatenation") {
-            exec(""""count: " + 42""") shouldBe "count: 42"
-        }
-
-        test("number + string concatenation") {
-            exec("""42 + " items"""") shouldBe "42 items"
-        }
-    }
-
-    // ====================================================================
-    // Containment (in / !in)
-    // ====================================================================
-
-    context("Containment checks") {
-
-        test("in list") {
-            exec("2 in [1, 2, 3]") shouldBe true
-        }
-
-        test("not in list") {
-            exec("5 !in [1, 2, 3]") shouldBe true
-        }
-
-        test("in string") {
-            exec(""""ell" in "hello"""") shouldBe true
-        }
-
-        test("in range") {
-            exec("5 in 1..10") shouldBe true
-        }
-
-        test("in map (checks keys)") {
-            exec(""""a" in ["a" = 1, "b" = 2]""") shouldBe true
-        }
-    }
-
-    // ====================================================================
-    // Complex Integration Tests
-    // ====================================================================
-
-    context("Integration tests") {
-
-        test("FizzBuzz") {
-            val (_, output) = execWithOutput("""
-                for i in 1..15 {
-                    if i % 15 == 0 {
-                        say "FizzBuzz"
-                    } else if i % 3 == 0 {
-                        say "Fizz"
-                    } else if i % 5 == 0 {
-                        say "Buzz"
+                for (matcher in branch.matchers) {
+                    val matches = if (subject != null) {
+                        matchesWithSubject(subject, matcher)
                     } else {
-                        say i
+                        isTruthy(evaluateMatcher(matcher))
+                    }
+
+                    if (matches) {
+                        return evaluate(branch.body)
                     }
                 }
-            """.trimIndent())
-            val lines = output.split("\n")
-            lines[0] shouldBe "1"
-            lines[2] shouldBe "Fizz"
-            lines[4] shouldBe "Buzz"
-            lines[14] shouldBe "FizzBuzz"
-        }
+            }
 
-        test("class with methods and state") {
-            val source = """
-                class Stack(var items = []) {
-                    fun push(item) {
-                        items = items + [item]
-                    }
-                    fun size() = items.size
-                }
-                let s = Stack()
-                s.push(1)
-                s.push(2)
-                s.push(3)
-                s.size()
-            """.trimIndent()
-            exec(source) shouldBe 3
-        }
-
-        test("enum with when and DPEC") {
-            val source = """
-                enum Season { SPRING SUMMER FALL WINTER }
-                fun describe(s) {
-                    return when s {
-                        .SPRING -> "flowers"
-                        .SUMMER -> "sun"
-                        .FALL -> "leaves"
-                        .WINTER -> "snow"
-                        else -> "unknown"
-                    }
-                }
-                describe(Season.FALL)
-            """.trimIndent()
-            exec(source) shouldBe "leaves"
-        }
-
-        test("quantity in expressions with comparisons") {
-            val source = """
-                let distance = 100m
-                let threshold = 50m
-                if distance > threshold { "far" } else { "close" }
-            """.trimIndent()
-            exec(source) shouldBe "far"
-        }
-
-        test("higher-order function pattern") {
-            val source = """
-                fun apply(f, x) = f(x)
-                fun square(n) = n * n
-                apply(square, 7)
-            """.trimIndent()
-            exec(source) shouldBe 49
-        }
-
-        test("complex when with multiple matcher types") {
-            val source = """
-                fun classify(x) {
-                    return when x {
-                        is String -> "text"
-                        in 1..10 -> "small number"
-                        42 -> "the answer"
-                        else -> "something else"
-                    }
-                }
-                let r1 = classify("hi")
-                let r2 = classify(5)
-                let r3 = classify(42)
-                let r4 = classify(100)
-                [r1, r2, r3, r4]
-            """.trimIndent()
-            exec(source) shouldBe listOf("text", "small number", "the answer", "something else")
-        }
-
-        test("multi-line program with many features") {
-            val (_, output) = execWithOutput("""
-                enum Animal { CAT DOG BIRD }
-
-                fun makeSound(animal) {
-                    return when animal {
-                        .CAT -> "meow"
-                        .DOG -> "woof"
-                        .BIRD -> "tweet"
-                        else -> "?"
-                    }
-                }
-
-                for a in Animal {
-                    say "${'$'}{a.name}: ${'$'}{makeSound(a)}"
-                }
-            """.trimIndent())
-            output shouldContain "CAT: meow"
-            output shouldContain "DOG: woof"
-            output shouldContain "BIRD: tweet"
+            throw NonExhaustiveWhenError(subject, expr.location)
+        } finally {
+            currentEnumContext = previousEnumContext
         }
     }
-})
+
+    private fun matchesWithSubject(subject: Any?, matcher: WhenMatcher): Boolean {
+        return when (matcher) {
+            is ExpressionMatcher -> isEqual(subject, evaluate(matcher.expr))
+            is TypeMatcher -> {
+                val typeMatches = checkType(subject, matcher.type)
+                if (matcher.negated) !typeMatches else typeMatches
+            }
+            is InMatcher -> {
+                val container = evaluate(matcher.expr)
+                val contains = checkContains(container, subject)
+                if (matcher.negated) !contains else contains
+            }
+            is PatternMatcher -> {
+                val pattern = evaluate(matcher.pattern)
+                matchesPattern(subject, pattern)
+            }
+            is DPECMatcher -> {
+                // DPEC matching: .RED matches enum constant RED
+                if (subject is KSEnumConstant) {
+                    subject.name == matcher.name
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    private fun evaluateMatcher(matcher: WhenMatcher): Any? {
+        return when (matcher) {
+            is ExpressionMatcher -> evaluate(matcher.expr)
+            else -> throw RuntimeError("Invalid matcher in condition-style when", matcher.location)
+        }
+    }
+
+    private fun evaluateTry(expr: TryExpr): Any? {
+        return try {
+            evaluateBlock(expr.body)
+        } catch (e: RuntimeError) {
+            for (catch in expr.catches) {
+                if (catch.isCatchAll || catchMatches(e, catch)) {
+                    val catchEnv = environment.child("catch")
+                    val previousEnv = environment
+
+                    if (catch.name != null) {
+                        catchEnv.define(catch.name, e.message, mutable = false)
+                    }
+
+                    environment = catchEnv
+                    try {
+                        return evaluateBlock(catch.body)
+                    } finally {
+                        environment = previousEnv
+                    }
+                }
+            }
+            throw e
+        } finally {
+            expr.finallyBlock?.let { evaluateBlock(it) }
+        }
+    }
+
+    private fun catchMatches(error: RuntimeError, catch: CatchClause): Boolean {
+        // For now, all catches match. Type-based matching requires more infrastructure.
+        return true
+    }
+
+    private fun evaluateBlock(block: BlockExpr): Any? {
+        val blockEnv = environment.child("block")
+        val previousEnv = environment
+        environment = blockEnv
+
+        try {
+            var result: Any? = null
+            for (stmt in block.statements) {
+                result = evaluate(stmt)
+            }
+            return result
+        } finally {
+            environment = previousEnv
+        }
+    }
+
+    private fun evaluateTernary(expr: TernaryExpr): Any? {
+        val condition = evaluate(expr.condition)
+        return if (isTruthy(condition)) {
+            evaluate(expr.thenBranch)
+        } else {
+            evaluate(expr.elseBranch)
+        }
+    }
+
+    // ========================================================================
+    // Say Statement
+    // ========================================================================
+
+    private fun evaluateSay(stmt: SayStmt): Any? {
+        val output = stmt.arguments.joinToString(" ") { arg ->
+            stringify(evaluate(arg.value))
+        }
+
+        val colorEnabled = runtime.colorOutput
+
+        when (stmt.variant) {
+            "error" -> runtime.errorWriter.println(ANSI.error(output, colorEnabled))
+            "warn" -> runtime.outputWriter.println(ANSI.warn(output, colorEnabled))
+            "note" -> runtime.outputWriter.println(ANSI.bold(output, colorEnabled))
+            else -> runtime.outputWriter.println(output)
+        }
+        return null
+    }
+
+    // ========================================================================
+    // Literal Evaluation
+    // ========================================================================
+
+    /**
+     * Evaluate a literal expression.
+     *
+     * Most literals are stored directly in the AST node. Quantity and currency
+     * quantity literals store raw text that must be parsed into [Quantity] objects
+     * at evaluation time using Ki.Core's parsing infrastructure.
+     */
+    private fun evaluateLiteral(expr: LiteralExpr): Any? {
+        return when (expr.kind) {
+            LiteralKind.QUANTITY -> parseQuantityLiteral(expr.value as String, expr.location)
+            LiteralKind.CURRENCY_QUANTITY -> parseCurrencyQuantityLiteral(expr.value as String, expr.location)
+            else -> expr.value
+        }
+    }
+
+    /**
+     * Parse a quantity literal from raw text.
+     *
+     * Examples: `23cm`, `51.4m³`, `1000kg`, `25°C`, `97ℓ`, `100USD`, `5.5e(-7)m`
+     *
+     * Delegates to [Quantity.parse] which handles all forms including scientific
+     * notation and type specifiers.
+     */
+    private fun parseQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
+        return try {
+            Quantity.parse(text)
+        } catch (e: Exception) {
+            throw RuntimeError("Invalid quantity literal '$text': ${e.message}", location)
+        }
+    }
+
+    /**
+     * Parse a currency quantity literal from prefix notation.
+     *
+     * Converts prefix notation (`$23.53`) to suffix notation (`23.53USD`) and
+     * delegates to [Quantity.parse].
+     *
+     * Examples: `$23.53` → `23.53USD`, `€50.25:d` → `50.25EUR:d`, `₿0.5` → `0.5BTC`
+     */
+    private fun parseCurrencyQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
+        val prefixChar = text[0]
+        val currency = Currency.fromPrefix(prefixChar)
+            ?: throw RuntimeError("Unknown currency prefix: '$prefixChar'", location)
+
+        // Convert prefix notation to suffix notation for Quantity.parse
+        val numericPart = text.substring(1) // e.g., "23.53" or "23.53:d"
+        val colonIdx = numericPart.indexOf(':')
+        val suffixForm = if (colonIdx >= 0) {
+            // Insert currency symbol before type specifier: "23.53:d" → "23.53USD:d"
+            numericPart.substring(0, colonIdx) + currency.symbol + numericPart.substring(colonIdx)
+        } else {
+            // Append currency symbol: "23.53" → "23.53USD"
+            numericPart + currency.symbol
+        }
+
+        return try {
+            Quantity.parse(suffixForm)
+        } catch (e: Exception) {
+            throw RuntimeError("Invalid currency quantity '$text': ${e.message}", location)
+        }
+    }
+
+    // ========================================================================
+    // String Template
+    // ========================================================================
+
+    private fun evaluateStringTemplate(template: StringTemplateExpr): String {
+        val sb = StringBuilder()
+        for (part in template.parts) {
+            when (part) {
+                is LiteralPart -> sb.append(part.text)
+                is ExpressionPart -> sb.append(stringify(evaluate(part.expr)))
+            }
+        }
+        return sb.toString()
+    }
+
+    // ========================================================================
+    // Collections
+    // ========================================================================
+
+    private fun evaluateList(expr: ListExpr): List<Any?> {
+        return expr.elements.map { evaluate(it) }
+    }
+
+    private fun evaluateMap(expr: MapExpr): Map<Any?, Any?> {
+        val result = mutableMapOf<Any?, Any?>()
+        for (entry in expr.entries) {
+            val key = evaluate(entry.key)
+            val value = evaluate(entry.value)
+            result[key] = value
+        }
+        return result
+    }
+
+    private fun evaluateRange(expr: RangeExpr): Any {
+        val start = expr.start?.let { evaluate(it) }
+        val end = expr.end?.let { evaluate(it) }
+        return KSRange(start, end, expr.startExclusive, expr.endExclusive)
+    }
+
+    // ========================================================================
+    // Member & Index Access
+    // ========================================================================
+
+    private fun evaluateMemberAccess(expr: MemberAccessExpr): Any? {
+        val obj = evaluate(expr.obj)
+
+        if (expr.safe && obj == null) {
+            return null
+        }
+
+        if (obj == null) {
+            throw NullPointerError("Cannot access member '${expr.member}' on nil", expr.location)
+        }
+
+        return when (obj) {
+            is KSObject -> obj.get(expr.member, expr.location)
+            is KSStructInstance -> {
+                // Check for auto-generated copy() method
+                if (expr.member == "copy" && obj.struct.findMethod("copy") == null) {
+                    return StructCopyCallable(obj)
+                }
+                obj.get(expr.member, expr.location)
+            }
+            is KSClass -> obj.getStatic(expr.member)
+                ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is KSStruct -> obj.getStatic(expr.member)
+                ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is KSEnum -> {
+                // Could be a constant or static member
+                obj.getConstant(expr.member)
+                    ?: obj.staticMembers.get(expr.member)
+                    ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            }
+            is KSEnumConstant -> getEnumConstantMember(obj, expr.member, expr.location)
+            is String -> getStringMember(obj, expr.member, expr.location)
+            is List<*> -> getListMember(obj, expr.member, expr.location)
+            is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
+            is KSRange -> getRangeMember(obj, expr.member, expr.location)
+            is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
+            is KDTag -> getKDTagMember(obj, expr.member, expr.location)
+            is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
+            else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
+        }
+    }
+
+    private fun evaluateIndex(expr: IndexExpr): Any? {
+        val obj = evaluate(expr.obj)
+        val indices = expr.indices.map { evaluate(it) }
+
+        // Multi-index: always dispatch to get() method on KSObject
+        if (indices.size > 1) {
+            return when (obj) {
+                is KSObject -> {
+                    val getMethod = obj.klass.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method for multi-index access",
+                            expr.location
+                        )
+                    callMethod(obj, getMethod, indices, expr.location)
+                }
+                is KSStructInstance -> {
+                    val getMethod = obj.struct.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method for multi-index access",
+                            expr.location
+                        )
+                    callStructMethod(obj, getMethod, indices, expr.location)
+                }
+                null -> throw NullPointerError("Cannot index into nil", expr.location)
+                else -> throw TypeError(
+                    "Multi-index access requires a class with a 'get' method, got ${obj::class.simpleName}",
+                    expr.location
+                )
+            }
+        }
+
+        // Single index
+        val index = indices[0]
+
+        return when (obj) {
+            is List<*> -> {
+                val i = toInt(index, expr.indices[0].location)
+                if (i < 0 || i >= obj.size) {
+                    throw IndexOutOfBoundsError(i, obj.size, expr.location)
+                }
+                obj[i]
+            }
+            is Map<*, *> -> obj[index]
+            is String -> {
+                val i = toInt(index, expr.indices[0].location)
+                if (i < 0 || i >= obj.length) {
+                    throw IndexOutOfBoundsError(i, obj.length, expr.location)
+                }
+                obj[i]
+            }
+            is KSObject -> {
+                // Desugar obj[index] -> obj.get(index)
+                val getMethod = obj.klass.findMethod("get")
+                    ?: throw RuntimeError(
+                        "Class '${obj.klass.name}' does not define a 'get' method for index access",
+                        expr.location
+                    )
+                callMethod(obj, getMethod, listOf(index), expr.location)
+            }
+            is KSStructInstance -> {
+                val getMethod = obj.struct.findMethod("get")
+                    ?: throw RuntimeError(
+                        "Struct '${obj.struct.name}' does not define a 'get' method for index access",
+                        expr.location
+                    )
+                callStructMethod(obj, getMethod, listOf(index), expr.location)
+            }
+            is KDTag -> {
+                when (index) {
+                    is Int -> obj.children.getOrNull(index)
+                    is String -> obj.attributes[index]
+                    else -> throw TypeError("KDTag index must be Int or String", expr.location)
+                }
+            }
+            is KDDocument -> {
+                when (index) {
+                    is Int -> obj.tags.getOrNull(index)
+                    is String -> obj.tags.firstOrNull { it.name == index }
+                    else -> throw TypeError("KDDocument index must be Int or String", expr.location)
+                }
+            }
+            null -> throw NullPointerError("Cannot index into nil", expr.location)
+            else -> throw TypeError("Cannot index into ${obj::class.simpleName}", expr.location)
+        }
+    }
+
+    // ========================================================================
+    // Assignment
+    // ========================================================================
+
+    private fun evaluateAssign(expr: AssignExpr): Any? {
+        val value = evaluate(expr.value)
+
+        when (val target = expr.target) {
+            is IdentifierExpr -> {
+                // Check if this is a variable in scope
+                if (environment.isDefined(target.name)) {
+                    val newValue = copyIfStruct(computeAssignment(
+                        expr.operator,
+                        { environment.get(target.name, target.location) },
+                        value
+                    ))
+
+                    val constraint = environment.getConstraint(target.name)
+                    if (constraint != null && newValue != null) {
+                        checkConstraint(target.name, newValue, constraint, expr.location)
+                    }
+
+                    environment.assign(target.name, newValue, expr.location)
+                    return newValue
+                }
+
+                // If not in scope but we're in a method, try implicit 'this' property
+                if (environment.isDefined("this")) {
+                    val thisVal = environment.get("this")
+
+                    val thisObj = thisVal as? KSObject
+                    if (thisObj != null && thisObj.hasProperty(target.name)) {
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { thisObj.get(target.name, target.location) },
+                            value
+                        )
+                        thisObj.set(target.name, newValue, expr.location)
+                        return newValue
+                    }
+
+                    val thisStruct = thisVal as? KSStructInstance
+                    if (thisStruct != null && thisStruct.hasProperty(target.name)) {
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { thisStruct.get(target.name, target.location) },
+                            value
+                        )
+                        thisStruct.set(target.name, newValue, expr.location)
+                        return newValue
+                    }
+                }
+
+                // Not found anywhere
+                throw UndefinedNameError(target.name, NameKind.VARIABLE, expr.location)
+            }
+            is IndexExpr -> {
+                val obj = evaluate(target.obj)
+                val indices = target.indices.map { evaluate(it) }
+
+                // KSObject: dispatch to set() method (single or multi-index)
+                if (obj is KSObject) {
+                    val getMethod = obj.klass.findMethod("get")
+                    val setMethod = obj.klass.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'set' method for index assignment",
+                            target.location
+                        )
+                    val newValue = computeAssignment(expr.operator, {
+                        if (getMethod != null) callMethod(obj, getMethod, indices, target.location)
+                        else throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method (needed for compound assignment)",
+                            target.location
+                        )
+                    }, value)
+                    callMethod(obj, setMethod, indices + newValue, target.location)
+                    return newValue
+                }
+
+                // KSStructInstance: dispatch to set() method (single or multi-index)
+                if (obj is KSStructInstance) {
+                    val getMethod = obj.struct.findMethod("get")
+                    val setMethod = obj.struct.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'set' method for index assignment",
+                            target.location
+                        )
+                    val newValue = computeAssignment(expr.operator, {
+                        if (getMethod != null) callStructMethod(obj, getMethod, indices, target.location)
+                        else throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method (needed for compound assignment)",
+                            target.location
+                        )
+                    }, value)
+                    callStructMethod(obj, setMethod, indices + newValue, target.location)
+                    return newValue
+                }
+
+                // Multi-index on non-KSObject/KSStructInstance is an error
+                if (indices.size > 1) {
+                    throw TypeError(
+                        "Multi-index assignment requires a class with a 'set' method, got ${obj?.javaClass?.simpleName}",
+                        target.location
+                    )
+                }
+
+                // Single index on built-in types
+                val index = indices[0]
+
+                when (obj) {
+                    is MutableList<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val list = obj as MutableList<Any?>
+                        val i = toInt(index, target.indices[0].location)
+                        if (i < 0 || i >= list.size) {
+                            throw IndexOutOfBoundsError(i, list.size, target.location)
+                        }
+                        val newValue = computeAssignment(expr.operator, { list[i] }, value)
+                        list[i] = newValue
+                        return newValue
+                    }
+                    is MutableMap<*, *> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val map = obj as MutableMap<Any?, Any?>
+                        val newValue = computeAssignment(expr.operator, { map[index] }, value)
+                        map[index] = newValue
+                        return newValue
+                    }
+                    is List<*> -> {
+                        // For immutable lists, we need to create a new list
+                        throw RuntimeError("Cannot modify immutable list. Use a mutable list.", target.location)
+                    }
+                    is Map<*, *> -> {
+                        throw RuntimeError("Cannot modify immutable map. Use a mutable map.", target.location)
+                    }
+                    null -> throw NullPointerError("Cannot index-assign into nil", target.location)
+                    else -> throw TypeError("Cannot index-assign into ${obj::class.simpleName}", target.location)
+                }
+            }
+            is MemberAccessExpr -> {
+                val obj = evaluate(target.obj)
+
+                if (obj == null) {
+                    throw NullPointerError("Cannot assign to member '${target.member}' on nil", expr.location)
+                }
+
+                when (obj) {
+                    is KSObject -> {
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { obj.get(target.member, target.location) },
+                            value
+                        )
+                        obj.set(target.member, newValue, expr.location)
+                        return newValue
+                    }
+                    is KSStructInstance -> {
+                        val newValue = copyIfStruct(computeAssignment(
+                            expr.operator,
+                            { obj.get(target.member, target.location) },
+                            value
+                        ))
+                        obj.set(target.member, newValue, expr.location)
+                        return newValue
+                    }
+                    is MutableMap<*, *> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val map = obj as MutableMap<Any?, Any?>
+                        val newValue = computeAssignment(
+                            expr.operator,
+                            { map[target.member] },
+                            value
+                        )
+                        map[target.member] = newValue
+                        return newValue
+                    }
+                    else -> throw RuntimeError(
+                        "Cannot assign to member '${target.member}' on ${obj::class.simpleName}",
+                        expr.location
+                    )
+                }
+            }
+            else -> throw RuntimeError("Invalid assignment target", expr.location)
+        }
+    }
+
+    private fun computeAssignment(op: AssignOp, getCurrent: () -> Any?, newValue: Any?): Any? {
+        return when (op) {
+            AssignOp.ASSIGN -> newValue
+            AssignOp.PLUS_ASSIGN -> add(getCurrent(), newValue)
+            AssignOp.MINUS_ASSIGN -> subtract(getCurrent(), newValue)
+            AssignOp.STAR_ASSIGN -> multiply(getCurrent(), newValue)
+            AssignOp.SLASH_ASSIGN -> divide(getCurrent(), newValue)
+            AssignOp.MODULO_ASSIGN -> modulo(getCurrent(), newValue)
+            AssignOp.POWER_ASSIGN -> power(getCurrent(), newValue)
+        }
+    }
+
+    // ========================================================================
+    // Binary Expressions
+    // ========================================================================
+
+    private fun evaluateBinary(expr: BinaryExpr): Any? {
+        // Short-circuit for logical operators
+        if (expr.operator == BinaryOp.AND) {
+            val left = evaluate(expr.left)
+            if (!isTruthy(left)) return false
+            return isTruthy(evaluate(expr.right))
+        }
+        if (expr.operator == BinaryOp.OR) {
+            val left = evaluate(expr.left)
+            if (isTruthy(left)) return true
+            return isTruthy(evaluate(expr.right))
+        }
+
+        val left = evaluate(expr.left)
+        val right = evaluate(expr.right)
+
+        return when (expr.operator) {
+            BinaryOp.ADD -> add(left, right)
+            BinaryOp.SUBTRACT -> subtract(left, right)
+            BinaryOp.MULTIPLY -> multiply(left, right)
+            BinaryOp.DIVIDE -> divide(left, right)
+            BinaryOp.MODULO -> modulo(left, right)
+            BinaryOp.POWER -> power(left, right)
+
+            BinaryOp.EQUAL -> isEqual(left, right)
+            BinaryOp.NOT_EQUAL -> !isEqual(left, right)
+            BinaryOp.LESS -> compare(left, right) < 0
+            BinaryOp.GREATER -> compare(left, right) > 0
+            BinaryOp.LESS_EQUAL -> compare(left, right) <= 0
+            BinaryOp.GREATER_EQUAL -> compare(left, right) >= 0
+
+            BinaryOp.AND -> isTruthy(left) && isTruthy(right)
+            BinaryOp.OR -> isTruthy(left) || isTruthy(right)
+
+            BinaryOp.ELVIS -> left ?: right
+
+            BinaryOp.COMBINE -> evaluateCombine(left, right, expr.location)
+        }
+    }
+
+    // ========================================================================
+    // Combine (⚭) Operator
+    // ========================================================================
+
+    /**
+     * Evaluate the unit composition operator ⚭.
+     *
+     * Combines two quantities into a higher-dimensional unit:
+     * - Length × Length → Area:   `4cm ⚭ 3cm → 12cm²`
+     * - Length × Area → Volume:  `2m ⚭ 3m² → 6m³`
+     * - Area × Length → Volume:  `3m² ⚭ 2m → 6m³`
+     *
+     * If units match, the combination is direct. If units differ within the
+     * same dimension (e.g., m and cm), both are converted to base units first.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun evaluateCombine(left: Any?, right: Any?, location: SourceLocation?): Quantity<*> {
+        if (left !is Quantity<*> || right !is Quantity<*>) {
+            throw TypeError(
+                "Combine operator ⚭ requires quantity operands, got " +
+                        "${left?.let { it::class.simpleName } ?: "nil"} and " +
+                        "${right?.let { it::class.simpleName } ?: "nil"}",
+                location
+            )
+        }
+
+        val lUnit = left.unit
+        val rUnit = right.unit
+
+        // Try to combine units directly
+        val resultUnit = combineUnits(lUnit, rUnit)
+            ?: throw RuntimeError(
+                "Cannot combine units '${lUnit.symbol}' and '${rUnit.symbol}' " +
+                        "(supported: Length×Length→Area, Length×Area→Volume)",
+                location
+            )
+
+        // If units are the same, multiply values directly
+        val resultValue = if (lUnit == rUnit) {
+            multiplyNumbers(left.value, right.value)
+        } else {
+            // Convert both to base units before multiplying
+            val lBase = (left as Quantity<KiUnit>).convertTo(lUnit.baseUnit as KiUnit)
+            val rBase = (right as Quantity<KiUnit>).convertTo(rUnit.baseUnit as KiUnit)
+            multiplyNumbers(lBase.value, rBase.value)
+        }
+
+        return Quantity(resultValue, resultUnit)
+    }
+
+    /**
+     * Multiply two Number values preserving appropriate types.
+     * Used by [evaluateCombine] for unit composition.
+     */
+    private fun multiplyNumbers(a: Number, b: Number): Number {
+        return when {
+            a is Dec || b is Dec -> toBigDecimal(a).multiply(toBigDecimal(b))
+            a is Double || b is Double -> a.toDouble() * b.toDouble()
+            a is Float || b is Float -> a.toFloat() * b.toFloat()
+            a is Long || b is Long -> a.toLong() * b.toLong()
+            else -> {
+                val result = a.toLong() * b.toLong()
+                if (result in Int.MIN_VALUE..Int.MAX_VALUE) result.toInt() else result
+            }
+        }
+    }
+
+    // ========================================================================
+    // Unary Expressions
+    // ========================================================================
+
+    private fun evaluateUnary(expr: UnaryExpr): Any? {
+        return when (expr.operator) {
+            UnaryOp.NEGATE -> {
+                val operand = evaluate(expr.operand)
+                negate(operand)
+            }
+            UnaryOp.NOT -> {
+                val operand = evaluate(expr.operand)
+                !isTruthy(operand)
+            }
+            UnaryOp.INCREMENT -> {
+                evaluateIncDec(expr, true)
+            }
+            UnaryOp.DECREMENT -> {
+                evaluateIncDec(expr, false)
+            }
+            UnaryOp.NON_NULL -> {
+                val operand = evaluate(expr.operand)
+                operand ?: throw NullAssertionError(expr.location)
+            }
+        }
+    }
+
+    private fun evaluateIncDec(expr: UnaryExpr, isIncrement: Boolean): Any? {
+        when (val operand = expr.operand) {
+            is IdentifierExpr -> {
+                val name = operand.name
+                val current = environment.get(name, expr.location)
+                val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                environment.assign(name, newVal, expr.location)
+                return if (expr.prefix) newVal else current
+            }
+            is MemberAccessExpr -> {
+                val obj = evaluate(operand.obj)
+                if (obj is KSObject) {
+                    val current = obj.get(operand.member, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    obj.set(operand.member, newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+                if (obj is KSStructInstance) {
+                    val current = obj.get(operand.member, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    obj.set(operand.member, newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+                throw RuntimeError("Cannot increment/decrement member of ${obj?.javaClass?.simpleName}", expr.location)
+            }
+            is IndexExpr -> {
+                val obj = evaluate(operand.obj)
+                val indices = operand.indices.map { evaluate(it) }
+
+                // KSObject: dispatch to get/set methods
+                if (obj is KSObject) {
+                    val getMethod = obj.klass.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'get' method for index access",
+                            expr.location
+                        )
+                    val setMethod = obj.klass.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Class '${obj.klass.name}' does not define a 'set' method for index assignment",
+                            expr.location
+                        )
+                    val current = callMethod(obj, getMethod, indices, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    callMethod(obj, setMethod, indices + newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+
+                // KSStructInstance: dispatch to get/set methods
+                if (obj is KSStructInstance) {
+                    val getMethod = obj.struct.findMethod("get")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'get' method for index access",
+                            expr.location
+                        )
+                    val setMethod = obj.struct.findMethod("set")
+                        ?: throw RuntimeError(
+                            "Struct '${obj.struct.name}' does not define a 'set' method for index assignment",
+                            expr.location
+                        )
+                    val current = callStructMethod(obj, getMethod, indices, operand.location)
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    callStructMethod(obj, setMethod, indices + newVal, operand.location)
+                    return if (expr.prefix) newVal else current
+                }
+
+                // Built-in: single index on MutableList
+                if (indices.size == 1 && obj is MutableList<*>) {
+                    val index = indices[0]
+                    @Suppress("UNCHECKED_CAST")
+                    val list = obj as MutableList<Any?>
+                    val i = toInt(index, operand.indices[0].location)
+                    val current = list[i]
+                    val newVal = if (isIncrement) add(current, 1) else subtract(current, 1)
+                    list[i] = newVal
+                    return if (expr.prefix) newVal else current
+                }
+
+                throw RuntimeError("Cannot increment/decrement index of ${obj?.javaClass?.simpleName}", expr.location)
+            }
+            else -> {
+                // For non-assignable operands, just compute the result
+                val current = evaluate(operand)
+                return if (isIncrement) add(current, 1) else subtract(current, 1)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Type Operations
+    // ========================================================================
+
+    private fun evaluateTypeCheck(expr: TypeCheckExpr): Boolean {
+        val value = evaluate(expr.expr)
+        val matches = checkType(value, expr.type)
+        return if (expr.negated) !matches else matches
+    }
+
+    private fun evaluateTypeCast(expr: TypeCastExpr): Any? {
+        val value = evaluate(expr.expr)
+        return castTo(value, expr.type, expr.location)
+    }
+
+    private fun evaluateInCheck(expr: InCheckExpr): Boolean {
+        val value = evaluate(expr.expr)
+        val container = evaluate(expr.container)
+        val contains = checkContains(container, value)
+        return if (expr.negated) !contains else contains
+    }
+
+    private fun evaluateMatches(expr: MatchesExpr): Boolean {
+        val value = evaluate(expr.expr)
+        val pattern = evaluate(expr.pattern)
+        return matchesPattern(value, pattern)
+    }
+
+    private fun checkType(value: Any?, type: TypeRef): Boolean {
+        if (value == null) return type.nullable
+
+        return when (type.name) {
+            "Int" -> value is Int
+            "Long" -> value is Long || value is Int
+            "Float" -> value is Float
+            "Double" -> value is Double || value is Float
+            "Dec" -> value is Dec
+            "Quantity" -> value is Quantity<*>
+            "String" -> value is String
+            "Char" -> value is Char
+            "Bool" -> value is Boolean
+            "List" -> value is List<*>
+            "Map" -> value is Map<*, *>
+            "Any" -> true
+            else -> {
+                // Check user-defined types
+                when (value) {
+                    is KSObject -> {
+                        // Direct class name match or subclass
+                        if (value.klass.name == type.name) return true
+                        classes[type.name]?.let { return value.klass.isSubclassOf(it) }
+                        // Trait conformance check
+                        val trait = traits[type.name]
+                        if (trait != null) return value.klass.implementsTrait(trait)
+                        false
+                    }
+                    is KSStructInstance -> {
+                        // Direct struct name match
+                        if (value.struct.name == type.name) return true
+                        // Trait conformance check
+                        val trait = traits[type.name]
+                        if (trait != null) return value.struct.implementsTrait(trait)
+                        false
+                    }
+                    is KSEnumConstant -> value.enum.name == type.name
+                    else -> false
+                }
+            }
+        }
+    }
+
+    private fun castTo(value: Any?, type: TypeRef, location: SourceLocation?): Any? {
+        if (value == null) {
+            if (type.nullable) return null
+            throw CastError(value, type.name, location)
+        }
+
+        return when (type.name) {
+            "Int" -> toInt(value, location)
+            "Long" -> toLong(value, location)
+            "Float" -> toFloat(value, location)
+            "Double" -> toDouble(value)
+            "String" -> stringify(value)
+            "Bool" -> isTruthy(value)
+            else -> {
+                // For user types, just check and return
+                if (checkType(value, type)) value
+                else throw CastError(value, type.name, location)
+            }
+        }
+    }
+
+    private fun checkContains(container: Any?, value: Any?): Boolean {
+        return when (container) {
+            is List<*> -> value in container
+            is Map<*, *> -> value in container.keys
+            is String -> {
+                val str = value?.toString() ?: return false
+                str in container
+            }
+            is KSRange -> container.contains(value)
+            is KSEnum -> {
+                // Check if value is a constant of this enum
+                when (value) {
+                    is KSEnumConstant -> value.enum == container
+                    is String -> container.getConstant(value) != null
+                    else -> false
+                }
+            }
+            is ClosedRange<*> -> {
+                @Suppress("UNCHECKED_CAST")
+                val range = container as ClosedRange<Comparable<Any>>
+                val comp = value as? Comparable<Any> ?: return false
+                comp in range
+            }
+            else -> false
+        }
+    }
+
+    private fun matchesPattern(value: Any?, pattern: Any?): Boolean {
+        val str = value?.toString() ?: return false
+        val patternStr = pattern?.toString() ?: return false
+
+        return try {
+            val regex = Regex(patternStr)
+            regex.matches(str)
+        } catch (e: Exception) {
+            throw InvalidPatternError(patternStr, e)
+        }
+    }
+
+    // ========================================================================
+    // Constraint Checking
+    // ========================================================================
+
+    private fun checkConstraint(name: String?, value: Any, constraint: Constraint, location: SourceLocation?) {
+        if (!runtime.checkConstraints) return
+
+        val satisfied = when (constraint) {
+            is ComparisonConstraint -> {
+                val threshold = evaluate(constraint.value)
+                val cmp = compare(value, threshold)
+                when (constraint.operator) {
+                    ComparisonOp.GT -> cmp > 0
+                    ComparisonOp.LT -> cmp < 0
+                    ComparisonOp.GTE -> cmp >= 0
+                    ComparisonOp.LTE -> cmp <= 0
+                    ComparisonOp.NEQ -> cmp != 0
+                }
+            }
+            is RangeConstraint -> {
+                val range = evaluate(constraint.range)
+                checkContains(range, value)
+            }
+            is InConstraint -> {
+                val collection = evaluate(constraint.collection)
+                checkContains(collection, value)
+            }
+            is MatchesConstraint -> {
+                val pattern = evaluate(constraint.pattern)
+                matchesPattern(value, pattern)
+            }
+        }
+
+        if (!satisfied) {
+            val constraintExpr = constraintToString(constraint)
+            throw ConstraintError(name, constraintExpr, value, location)
+        }
+    }
+
+    private fun constraintToString(constraint: Constraint): String {
+        return when (constraint) {
+            is ComparisonConstraint -> {
+                val op = when (constraint.operator) {
+                    ComparisonOp.GT -> ">"
+                    ComparisonOp.LT -> "<"
+                    ComparisonOp.GTE -> ">="
+                    ComparisonOp.LTE -> "<="
+                    ComparisonOp.NEQ -> "!="
+                }
+                "$op ..."
+            }
+            is RangeConstraint -> "range"
+            is InConstraint -> "in ..."
+            is MatchesConstraint -> "matches ..."
+        }
+    }
+
+    // ========================================================================
+    // Arithmetic Operations (type-preserving)
+    // ========================================================================
+
+    private fun add(left: Any?, right: Any?): Any {
+        // Quantity + Quantity (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>) + (right as Quantity<KiUnit>)
+        }
+        // Quantity + Number (scalar addition)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "add")
+        }
+        if (left is String || right is String) {
+            return stringify(left) + stringify(right)
+        }
+        if (left is List<*> && right is List<*>) {
+            return left + right
+        }
+        return numericOp(left, right, "add")
+    }
+
+    private fun subtract(left: Any?, right: Any?): Any {
+        // Quantity - Quantity (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>) - (right as Quantity<KiUnit>)
+        }
+        // Quantity - Number (scalar subtraction)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "subtract")
+        }
+        return numericOp(left, right, "subtract")
+    }
+
+    private fun multiply(left: Any?, right: Any?): Any {
+        if (left is String && right is Int) {
+            return left.repeat(right)
+        }
+        if (left is Int && right is String) {
+            return right.repeat(left)
+        }
+        // Quantity * Number (scalar multiplication)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "multiply")
+        }
+        // Number * Quantity (commutative)
+        if (left is Number && right is Quantity<*>) {
+            return quantityScalarOp(right, left, "multiply")
+        }
+        return numericOp(left, right, "multiply")
+    }
+
+    private fun divide(left: Any?, right: Any?): Any {
+        // Quantity / Number (scalar division)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "divide")
+        }
+        return numericOp(left, right, "divide")
+    }
+
+    private fun modulo(left: Any?, right: Any?): Any {
+        // Quantity % Number (scalar modulo)
+        if (left is Quantity<*> && right is Number) {
+            return quantityScalarOp(left, right, "modulo")
+        }
+        return numericOp(left, right, "modulo")
+    }
+
+    private fun power(left: Any?, right: Any?): Any {
+        val base = toDouble(left)
+        val exp = toDouble(right)
+        val result = Math.pow(base, exp)
+
+        if (left is Int && right is Int && result == result.toLong().toDouble() && result <= Int.MAX_VALUE) {
+            return result.toInt()
+        }
+        if ((left is Int || left is Long) && right is Int && result == result.toLong().toDouble()) {
+            return result.toLong()
+        }
+        return result
+    }
+
+    private fun negate(value: Any?): Any {
+        return when (value) {
+            is Quantity<*> -> -value
+            is Int -> -value
+            is Long -> -value
+            is Float -> -value
+            is Double -> -value
+            is Dec -> value.negate()
+            else -> -toDouble(value)
+        }
+    }
+
+    private fun numericOp(left: Any?, right: Any?, op: String): Any {
+        if (left is Dec || right is Dec) {
+            val l = toBigDecimal(left)
+            val r = toBigDecimal(right)
+            return when (op) {
+                "add" -> l.add(r)
+                "subtract" -> l.subtract(r)
+                "multiply" -> l.multiply(r)
+                "divide" -> l.divide(r, 10, RoundingMode.HALF_UP)
+                "modulo" -> l.remainder(r)
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+        }
+
+        // Integer division should truncate (like Kotlin, Java, Python //)
+        if (op == "divide") {
+            if (left is Int && right is Int) {
+                if (right == 0) throw DivisionByZeroError()
+                return left / right  // Kotlin Int / Int truncates toward zero
+            }
+            if (left is Long || right is Long) {
+                val a = (left as Number).toLong()
+                val b = (right as Number).toLong()
+                if (b == 0L) throw DivisionByZeroError()
+                return a / b
+            }
+        }
+
+        val a = toDouble(left)
+        val b = toDouble(right)
+
+        if (op == "divide" && b == 0.0) {
+            throw DivisionByZeroError()
+        }
+
+        val result = when (op) {
+            "add" -> a + b
+            "subtract" -> a - b
+            "multiply" -> a * b
+            "divide" -> a / b
+            "modulo" -> a % b
+            else -> throw RuntimeError("Unknown operation: $op")
+        }
+
+        return when {
+            left is Double || right is Double -> result
+            left is Float || right is Float -> result.toFloat()
+            left is Long || right is Long -> {
+                if (result == result.toLong().toDouble()) result.toLong() else result
+            }
+            left is Int && right is Int -> {
+                if (result == result.toInt().toDouble() &&
+                    result >= Int.MIN_VALUE && result <= Int.MAX_VALUE) {
+                    result.toInt()
+                } else if (result == result.toLong().toDouble()) {
+                    result.toLong()
+                } else {
+                    result
+                }
+            }
+            else -> result
+        }
+    }
+
+    /**
+     * Perform a scalar arithmetic operation on a quantity.
+     *
+     * Delegates to the Quantity class operator overloads which handle
+     * type-preserving arithmetic (Int value stays Int, etc.).
+     *
+     * @param quantity The quantity operand
+     * @param scalar The numeric scalar operand
+     * @param op The operation name: "add", "subtract", "multiply", "divide"
+     */
+    private fun quantityScalarOp(quantity: Quantity<*>, scalar: Number, op: String): Quantity<*> {
+        return when (scalar) {
+            is Int -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Long -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Float -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Double -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            is Dec -> when (op) {
+                "add" -> quantity + scalar
+                "subtract" -> quantity - scalar
+                "multiply" -> quantity * scalar
+                "divide" -> quantity / scalar
+                "modulo" -> quantity % scalar
+                else -> throw RuntimeError("Unknown operation: $op")
+            }
+            else -> throw TypeError("Unsupported scalar type for quantity operation: ${scalar::class.simpleName}")
+        }
+    }
+
+    private fun compare(left: Any?, right: Any?): Int {
+        if (left is String && right is String) return left.compareTo(right)
+        if (left is Char && right is Char) return left.compareTo(right)
+        if (left is KSEnumConstant && right is KSEnumConstant) {
+            return left.ordinal.compareTo(right.ordinal)
+        }
+        // Quantity comparison (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>)
+        }
+        return toDouble(left).compareTo(toDouble(right))
+    }
+
+    // ========================================================================
+    // Type Conversions
+    // ========================================================================
+
+    internal fun stringify(value: Any?): String {
+        return when (value) {
+            null -> "nil"
+            is Quantity<*> -> value.toString()
+            is Double -> {
+                val text = value.toString()
+                if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
+            }
+            is Float -> {
+                val text = value.toString()
+                if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
+            }
+            is Dec -> value.toPlainString()
+            is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
+            is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
+            is KSEnumConstant -> value.name
+            is KSObject -> value.toString()
+            is KSStructInstance -> value.toString()
+            is KDTag -> value.toString()
+            is KDDocument -> value.toString()
+            is KSType -> value.toString()
+            else -> value.toString()
+        }
+    }
+
+    private fun toDouble(value: Any?): Double {
+        return when (value) {
+            is Number -> value.toDouble()
+            is String -> value.toDoubleOrNull()
+                ?: throw TypeError("Cannot convert '$value' to number")
+            is KSEnumConstant -> value.ordinal.toDouble()
+            else -> throw TypeError("Expected number, got ${value?.let { it::class.simpleName } ?: "nil"}")
+        }
+    }
+
+    private fun toInt(value: Any?, location: SourceLocation?): Int {
+        return when (value) {
+            is Int -> value
+            is Long -> value.toInt()
+            is Number -> value.toInt()
+            is String -> value.toIntOrNull()
+                ?: throw TypeError("Cannot convert '$value' to Int", location)
+            is KSEnumConstant -> value.ordinal
+            else -> throw TypeError("Expected Int, got ${value?.let { it::class.simpleName } ?: "nil"}", location)
+        }
+    }
+
+    private fun toLong(value: Any?, location: SourceLocation?): Long {
+        return when (value) {
+            is Long -> value
+            is Int -> value.toLong()
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull()
+                ?: throw TypeError("Cannot convert '$value' to Long", location)
+            else -> throw TypeError("Expected Long, got ${value?.let { it::class.simpleName } ?: "nil"}", location)
+        }
+    }
+
+    private fun toFloat(value: Any?, location: SourceLocation?): Float {
+        return when (value) {
+            is Float -> value
+            is Number -> value.toFloat()
+            is String -> value.toFloatOrNull()
+                ?: throw TypeError("Cannot convert '$value' to Float", location)
+            else -> throw TypeError("Expected Float, got ${value?.let { it::class.simpleName } ?: "nil"}", location)
+        }
+    }
+
+    private fun toBigDecimal(value: Any?): Dec {
+        return when (value) {
+            is Dec -> value
+            is Number -> Dec(value.toDouble())
+            is String -> Dec(value)
+            else -> throw TypeError("Cannot convert to BigDecimal")
+        }
+    }
+
+    internal fun isTruthy(value: Any?): Boolean {
+        return when (value) {
+            null -> false
+            is Boolean -> value
+            is Number -> value.toDouble() != 0.0
+            is Quantity<*> -> true  // Quantities are always truthy
+            is String -> value.isNotEmpty()
+            is List<*> -> value.isNotEmpty()
+            is Map<*, *> -> value.isNotEmpty()
+            else -> true
+        }
+    }
+
+    /**
+     * If [value] is a struct instance, return a copy. Otherwise return as-is.
+     * This is the single interception point for copy-on-assign semantics.
+     */
+    private fun copyIfStruct(value: Any?): Any? {
+        return if (value is KSStructInstance) value.copy() else value
+    }
+
+    private fun isEqual(left: Any?, right: Any?): Boolean {
+        if (left == null && right == null) return true
+        if (left == null || right == null) return false
+
+        if (left is Number && right is Number) {
+            return left.toDouble() == right.toDouble()
+        }
+
+        // Quantity equality (with unit conversion)
+        if (left is Quantity<*> && right is Quantity<*>) {
+            @Suppress("UNCHECKED_CAST")
+            return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>) == 0
+        }
+
+        if (left is KSEnumConstant && right is KSEnumConstant) {
+            return left.enum == right.enum && left.name == right.name
+        }
+
+        // Struct instances use structural equality (via KSStructInstance.equals)
+        if (left is KSStructInstance && right is KSStructInstance) {
+            return left == right
+        }
+
+        return left == right
+    }
+
+    // ========================================================================
+    // Iteration Support
+    // ========================================================================
+
+    private fun toIterable(value: Any?, location: SourceLocation?): Iterable<Any?> {
+        return when (value) {
+            is Iterable<*> -> value
+            is String -> value.toList()
+            is Map<*, *> -> value.entries.toList()
+            is KSRange -> value.toIterable()
+            is KSEnum -> value.constants.values
+            else -> throw TypeError("Cannot iterate over ${value?.let { it::class.simpleName } ?: "nil"}", location)
+        }
+    }
+
+    // ========================================================================
+    // Built-in Member Access
+    // ========================================================================
+
+    private fun getStringMember(str: String, member: String, location: SourceLocation?): Any {
+        return when (member) {
+            "length", "size" -> str.length
+            "isEmpty" -> str.isEmpty()
+            "isNotEmpty" -> str.isNotEmpty()
+            "uppercase" -> str.uppercase()
+            "lowercase" -> str.lowercase()
+            "trim" -> str.trim()
+            "reversed" -> str.reversed()
+            "first" -> if (str.isNotEmpty()) str.first() else throw IndexOutOfBoundsError(0, 0, location)
+            "last" -> if (str.isNotEmpty()) str.last() else throw IndexOutOfBoundsError(0, 0, location)
+            else -> throw MemberNotFoundError(member, "String", location)
+        }
+    }
+
+    private fun getListMember(list: List<*>, member: String, location: SourceLocation?): Any {
+        return when (member) {
+            "size", "length" -> list.size
+            "isEmpty" -> list.isEmpty()
+            "isNotEmpty" -> list.isNotEmpty()
+            "first" -> list.firstOrNull() ?: throw IndexOutOfBoundsError(0, 0, location)
+            "last" -> list.lastOrNull() ?: throw IndexOutOfBoundsError(0, 0, location)
+            "reversed" -> list.reversed()
+            else -> throw MemberNotFoundError(member, "List", location)
+        }
+    }
+
+    private fun getMapMember(map: Map<*, *>, member: String, location: SourceLocation?): Any {
+        return when (member) {
+            "size" -> map.size
+            "isEmpty" -> map.isEmpty()
+            "isNotEmpty" -> map.isNotEmpty()
+            "keys" -> map.keys.toList()
+            "values" -> map.values.toList()
+            else -> throw MemberNotFoundError(member, "Map", location)
+        }
+    }
+
+    private fun getRangeMember(range: KSRange, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "start" -> range.start
+            "end" -> range.end
+            "startExclusive" -> range.startExclusive
+            "endExclusive" -> range.endExclusive
+            else -> throw MemberNotFoundError(member, "Range", location)
+        }
+    }
+
+    private fun getEnumConstantMember(constant: KSEnumConstant, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "name" -> constant.name
+            "ordinal" -> constant.ordinal
+            else -> {
+                // Try to get from constructor args by parameter name
+                val params = constant.enum.declaration.constructorParams
+                for ((index, param) in params.withIndex()) {
+                    if (param.name == member && index < constant.args.size) {
+                        return constant.args[index]
+                    }
+                }
+                throw MemberNotFoundError(member, constant.enum.name, location)
+            }
+        }
+    }
+
+    /**
+     * Access members on a Quantity value.
+     *
+     * Supported members:
+     * - `value` → the numeric value (Int, Long, Float, Double, or Dec)
+     * - `unit` → the unit symbol as a String (e.g., "cm", "kg", "USD")
+     */
+    private fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "value" -> quantity.value
+            "unit" -> quantity.unit.symbol
+            else -> throw MemberNotFoundError(member, "Quantity", location)
+        }
+    }
+
+    private fun getKDTagMember(tag: KDTag, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "name" -> tag.name
+            "namespace" -> tag.namespace
+            "values" -> tag.values
+            "attributes" -> tag.attributes
+            "annotations" -> tag.annotations
+            "children" -> tag.children
+            else -> {
+                // Try attribute lookup
+                tag.attributes[member] ?: throw MemberNotFoundError(member, "KDTag", location)
+            }
+        }
+    }
+
+    private fun getKDDocumentMember(doc: KDDocument, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "tags" -> doc.tags
+            "size" -> doc.tags.size
+            else -> {
+                // Try finding a root tag by name
+                doc.tags.firstOrNull { it.name == member }
+                    ?: throw MemberNotFoundError(member, "KDDocument", location)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// KSRange - Simple Range Implementation
+// ============================================================================
+
+/**
+ * Runtime representation of a KS range.
+ */
+class KSRange(
+    val start: Any?,
+    val end: Any?,
+    val startExclusive: Boolean,
+    val endExclusive: Boolean
+) {
+    fun contains(value: Any?): Boolean {
+        if (value == null) return false
+        if (value !is Number) return false
+
+        val v = value.toDouble()
+
+        val startOk = when {
+            start == null -> true
+            start is Number -> {
+                val s = start.toDouble()
+                if (startExclusive) v > s else v >= s
+            }
+            else -> false
+        }
+
+        val endOk = when {
+            end == null -> true
+            end is Number -> {
+                val e = end.toDouble()
+                if (endExclusive) v < e else v <= e
+            }
+            else -> false
+        }
+
+        return startOk && endOk
+    }
+
+    fun toIterable(): Iterable<Any?> {
+        if (start == null || end == null) {
+            throw RuntimeError("Cannot iterate over open-ended range")
+        }
+
+        val s = (start as Number).toInt()
+        val e = (end as Number).toInt()
+
+        val actualStart = if (startExclusive) s + 1 else s
+        val actualEnd = if (endExclusive) e - 1 else e
+
+        return (actualStart..actualEnd).toList()
+    }
+
+    override fun toString(): String {
+        val startStr = start?.toString() ?: "_"
+        val endStr = end?.toString() ?: "_"
+        val op = when {
+            startExclusive && endExclusive -> "<..<"
+            startExclusive -> "<.."
+            endExclusive -> "..<"
+            else -> ".."
+        }
+        return "$startStr$op$endStr"
+    }
+}
+
+// ============================================================================
+// KSEnum - Enum Runtime Representation
+// ============================================================================
+
+/**
+ * Runtime representation of a KS enum.
+ */
+class KSEnum(
+    val declaration: EnumDecl,
+    val closure: Environment
+) {
+    val name: String get() = declaration.name
+    val constants = mutableMapOf<String, KSEnumConstant>()
+    val staticMembers = closure.child("static:$name")
+
+    fun addConstant(name: String, constant: KSEnumConstant) {
+        constants[name] = constant
+    }
+
+    fun getConstant(name: String): KSEnumConstant? = constants[name]
+
+    override fun toString(): String = "enum $name"
+}
+
+/**
+ * Runtime representation of an enum constant.
+ */
+class KSEnumConstant(
+    val enum: KSEnum,
+    val name: String,
+    val ordinal: Int,
+    val args: List<Any?>
+) {
+    override fun toString(): String = "$name"
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is KSEnumConstant) return false
+        return enum == other.enum && name == other.name
+    }
+
+    override fun hashCode(): Int = 31 * enum.hashCode() + name.hashCode()
+}
+
+// ============================================================================
+// KSType - Type Representation for Reflection
+// ============================================================================
+
+/**
+ * Runtime type representation for `::class` reflection.
+ */
+class KSType(
+    val name: String,
+    val qualifiedName: String? = null
+) {
+    override fun toString(): String = qualifiedName?.let { "$name($it)" } ?: name
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is KSType) return false
+        return name == other.name && qualifiedName == other.qualifiedName
+    }
+
+    override fun hashCode(): Int = 31 * name.hashCode() + (qualifiedName?.hashCode() ?: 0)
+}
+
+// ============================================================================
+// KDTag - KD Tag Runtime Representation
+// ============================================================================
+
+/**
+ * Runtime representation of a KD tag.
+ *
+ * Created from `lang KD { ... }` blocks.
+ */
+class KDTag(
+    val name: String,
+    val namespace: String?,
+    val values: List<Any?>,
+    val attributes: Map<String, Any?>,
+    val annotations: List<KDAnnotation>,
+    val children: List<KDTag>
+) {
+    override fun toString(): String {
+        val sb = StringBuilder()
+
+        // Annotations
+        for (ann in annotations) {
+            sb.append("@${ann.name}")
+            if (ann.values.isNotEmpty() || ann.attributes.isNotEmpty()) {
+                sb.append("(")
+                sb.append(ann.values.joinToString(" "))
+                if (ann.attributes.isNotEmpty()) {
+                    if (ann.values.isNotEmpty()) sb.append(" ")
+                    sb.append(ann.attributes.entries.joinToString(" ") { "${it.key}=${formatValue(it.value)}" })
+                }
+                sb.append(")")
+            }
+            sb.append(" ")
+        }
+
+        // Namespace and name
+        if (namespace != null) {
+            sb.append("$namespace:")
+        }
+        sb.append(name)
+
+        // Values
+        if (values.isNotEmpty()) {
+            sb.append(" ")
+            sb.append(values.joinToString(" ") { formatValue(it) })
+        }
+
+        // Attributes
+        if (attributes.isNotEmpty()) {
+            sb.append(" ")
+            sb.append(attributes.entries.joinToString(" ") { "${it.key}=${formatValue(it.value)}" })
+        }
+
+        // Children
+        if (children.isNotEmpty()) {
+            sb.append(" {\n")
+            for (child in children) {
+                sb.append("    ")
+                sb.append(child.toString().replace("\n", "\n    "))
+                sb.append("\n")
+            }
+            sb.append("}")
+        }
+
+        return sb.toString()
+    }
+
+    private fun formatValue(value: Any?): String {
+        return when (value) {
+            null -> "nil"
+            is String -> "\"$value\""
+            is Char -> "'$value'"
+            else -> value.toString()
+        }
+    }
+}
+
+/**
+ * Runtime representation of a KD annotation.
+ */
+class KDAnnotation(
+    val name: String,
+    val values: List<Any?>,
+    val attributes: Map<String, Any?>
+)
+
+/**
+ * Runtime representation of a KD document with multiple root tags.
+ *
+ * Created from `lang KD { ... }` blocks that contain more than one
+ * top-level tag. Provides indexed and named access to root tags.
+ */
+class KDDocument(val tags: List<KDTag>) {
+    override fun toString(): String {
+        return tags.joinToString("\n") { it.toString() }
+    }
+}

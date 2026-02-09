@@ -650,8 +650,23 @@ class Grid(let rows: Int, let cols: Int) {
     }
 }
 
+# --- Struct with Constrained Constructor Parameters ---
+
+
+struct Temp(var kelvin2: Double >= 0.0) {
+    fun toCelsius(): Double = kelvin2 - 273.15
+    fun toFahrenheit(): Double = (kelvin2 - 273.15) * 9.0 / 5.0 + 32.0
+
+    fun format(): String {
+        return "${kelvin}K (${toCelsius()}°C / ${toFahrenheit()}°F)"
+    }
+}
+
+var structTest = Temp(23.5)
+say "struct Celsius: ${structTest.toCelsius()}"
+
 let grid = Grid(3, 3)
-say "Multi-index access on Grid (3x3):"
+say "struct: Multi-index access on Grid (3x3):"
 say "  Initial grid:"
 say grid.display()
 say ""

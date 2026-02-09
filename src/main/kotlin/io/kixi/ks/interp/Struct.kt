@@ -38,6 +38,13 @@ class KSStruct(
         return null
     }
 
+    /**
+     * Add an extension method to this struct.
+     */
+    fun addMethod(name: String, fn: KSFunction) {
+        methods[name] = fn
+    }
+
     fun getStatic(name: String): Any? = when {
         staticMembers.isDefined(name) -> staticMembers.get(name)
         staticMembers.isFunctionDefined(name) -> staticMembers.getFunction(name)

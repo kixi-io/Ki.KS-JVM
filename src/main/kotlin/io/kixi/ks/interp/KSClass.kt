@@ -106,6 +106,13 @@ class KSClass(
     }
 
     /**
+     * Add an extension method to this class.
+     */
+    fun addMethod(name: String, fn: KSFunction) {
+        methods[name] = fn
+    }
+
+    /**
      * Get a static member (variable or function).
      */
     fun getStatic(name: String): Any? {
@@ -222,6 +229,13 @@ class KSTrait(
             superTrait.findMethod(name)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * Add an extension method (default implementation) to this trait.
+     */
+    fun addMethod(name: String, fn: KSFunction) {
+        methods[name] = fn
     }
 
     /**

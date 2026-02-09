@@ -400,6 +400,25 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSClass -> instantiateClass(callee, args, expr.arguments, location)
             is KSStruct -> instantiateStruct(callee, args, expr.arguments, location)
             is KSEnum -> throw RuntimeError("Cannot instantiate enum '${callee.name}' directly", location)
+            is StructCopyCallable -> {
+                // Auto-generated copy(): no args = plain copy, named args = copy-with-overrides
+                if (expr.arguments.isEmpty()) {
+                    callee.receiver.copy()
+                } else {
+                    val namedArgs = mutableMapOf<String, Any?>()
+                    for ((index, argNode) in expr.arguments.withIndex()) {
+                        if (argNode.name != null) {
+                            namedArgs[argNode.name] = args[index]
+                        } else {
+                            throw RuntimeError(
+                                "copy() requires named arguments: copy(x = 10.0)",
+                                location
+                            )
+                        }
+                    }
+                    callee.receiver.copyWith(namedArgs, location)
+                }
+            }
             is Callable -> callee.call(this, args, location)
             else -> {
                 // Check if it's a function name
@@ -661,6 +680,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val ksStruct = KSStruct(decl, implementedTraits, environment)
         structs[decl.name] = ksStruct
 
+        // Validate trait conformance: every abstract method must be implemented
+        validateStructTraitConformance(ksStruct)
+
         // Initialize static members
         initializeStructStaticMembers(ksStruct, decl.members)
 
@@ -706,7 +728,35 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     /**
-     * Create a new instance of a struct.
+     * Validate that a struct implements all abstract methods required by its traits.
+     *
+     * An abstract method is one with no body in the trait. If a trait provides a
+     * default implementation (body present), the struct is not required to override it.
+     */
+    private fun validateStructTraitConformance(ksStruct: KSStruct) {
+        val missingMethods = mutableListOf<String>()
+
+        for (trait in ksStruct.traits) {
+            for (methodName in trait.abstractMethodNames()) {
+                // findMethod checks struct's own methods first, then falls back to traits.
+                // We need to verify the struct provides a concrete implementation —
+                // not just that the trait's own abstract declaration is reachable.
+                val found = ksStruct.findMethod(methodName)
+                if (found == null || found.declaration.body == null) {
+                    missingMethods.add("${trait.name}.${methodName}")
+                }
+            }
+        }
+
+        if (missingMethods.isNotEmpty()) {
+            throw RuntimeError(
+                "Struct '${ksStruct.name}' does not implement required trait methods: ${missingMethods.joinToString(", ")}",
+                ksStruct.location
+            )
+        }
+    }
+
+    /**
      */
     private fun instantiateStruct(
         ksStruct: KSStruct,
@@ -950,14 +1000,60 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     // ========================================================================
 
     private fun evaluateExtendDecl(decl: ExtendDecl): Any? {
-        // Type extensions add methods to existing types.
-        // For now, we store extension methods separately.
-        // Full implementation would integrate with method resolution.
+        val targetName = decl.target.name
+
+        if (decl.isTraitExtension) {
+            // extend trait Foo { fun bar() = ... }
+            val trait = traits[targetName]
+                ?: throw RuntimeError("Cannot extend unknown trait '$targetName'", decl.location)
+
+            for (member in decl.members) {
+                when (member) {
+                    is FunDecl -> {
+                        val fn = KSFunction(member, environment)
+                        trait.addMethod(member.name, fn)
+                    }
+                    else -> throw RuntimeError(
+                        "Trait extensions can only contain methods",
+                        decl.location
+                    )
+                }
+            }
+        } else {
+            // extend Point { fun distance() = ... }
+            // Resolve target: class, struct, or trait
+            val ksClass = classes[targetName]
+            val ksStruct = structs[targetName]
+
+            if (ksClass == null && ksStruct == null) {
+                throw RuntimeError("Cannot extend unknown type '$targetName'", decl.location)
+            }
+
+            for (member in decl.members) {
+                when (member) {
+                    is FunDecl -> {
+                        val fn = KSFunction(member, environment)
+                        if (ksClass != null) {
+                            ksClass.addMethod(member.name, fn)
+                        } else {
+                            ksStruct!!.addMethod(member.name, fn)
+                        }
+                    }
+                    is VarDecl -> throw RuntimeError(
+                        "Extension properties are not yet supported. Use extension methods instead.",
+                        member.location
+                    )
+                    else -> throw RuntimeError(
+                        "Unsupported member in extension block",
+                        decl.location
+                    )
+                }
+            }
+        }
 
         if (runtime.debugMode) {
-            val target = decl.target.name
             val kind = if (decl.isTraitExtension) "trait " else ""
-            runtime.outputWriter.println("[DEBUG] extend $kind$target with ${decl.members.size} members")
+            runtime.outputWriter.println("[DEBUG] extend $kind$targetName with ${decl.members.size} members")
         }
 
         return null
@@ -2034,8 +2130,23 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             else -> {
                 // Check user-defined types
                 when (value) {
-                    is KSObject -> value.klass.name == type.name || value.klass.isSubclassOf(classes[type.name] ?: return false)
-                    is KSStructInstance -> value.struct.name == type.name
+                    is KSObject -> {
+                        // Direct class name match or subclass
+                        if (value.klass.name == type.name) return true
+                        classes[type.name]?.let { return value.klass.isSubclassOf(it) }
+                        // Trait conformance check
+                        val trait = traits[type.name]
+                        if (trait != null) return value.klass.implementsTrait(trait)
+                        false
+                    }
+                    is KSStructInstance -> {
+                        // Direct struct name match
+                        if (value.struct.name == type.name) return true
+                        // Trait conformance check
+                        val trait = traits[type.name]
+                        if (trait != null) return value.struct.implementsTrait(trait)
+                        false
+                    }
                     is KSEnumConstant -> value.enum.name == type.name
                     else -> false
                 }
