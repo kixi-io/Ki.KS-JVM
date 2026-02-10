@@ -456,7 +456,7 @@ class InheritanceAndTraitsTest : FunSpec({
         test("subclass with own constructor params and methods") {
             val result = run("""
                 class Vehicle {
-                    fun type(): String = "vehicle"
+                    fun kind(): String = "vehicle"
                 }
 
                 class Car(let brand: String): Vehicle {
@@ -464,7 +464,7 @@ class InheritanceAndTraitsTest : FunSpec({
                 }
 
                 let c = Car("Toyota")
-                say c.type()
+                say c.kind()
                 say c.describe()
                 say c.brand
             """.trimIndent())
@@ -612,7 +612,7 @@ class InheritanceAndTraitsTest : FunSpec({
                 }
 
                 class Animal {
-                    fun type(): String = "animal"
+                    fun kind(): String = "animal"
                 }
 
                 class Dog: Animal, Speakable {
@@ -620,7 +620,7 @@ class InheritanceAndTraitsTest : FunSpec({
                 }
 
                 let d = Dog()
-                say d.type()
+                say d.kind()
                 say d.speak()
             """.trimIndent())
             result shouldBe "animal\nWoof!"

@@ -535,6 +535,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val ksClass = KSClass(decl, superclass, implementedTraits, environment)
         classes[decl.name] = ksClass
 
+        // Warn if class declares members that shadow reserved reflection properties
+        warnReservedMemberNames(decl.name, decl.members, decl.constructorParams, decl.location)
+
         // Validate trait conformance
         val missingMethods = mutableListOf<String>()
         for (trait in ksClass.traits) {
@@ -763,6 +766,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         val ksStruct = KSStruct(decl, implementedTraits, environment)
         structs[decl.name] = ksStruct
+
+        // Warn if struct declares members that shadow reserved reflection properties
+        warnReservedMemberNames(decl.name, decl.members, decl.constructorParams, decl.location)
 
         // Validate trait conformance: every abstract method must be implemented
         validateStructTraitConformance(ksStruct)
@@ -1671,6 +1677,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             throw NullPointerError("Cannot access member '${expr.member}' on nil", expr.location)
         }
 
+        // Universal reflection properties: .type and .typeName
+        // These are reserved — always resolved here, never shadowed by
+        // user-defined properties. The interpreter emits a warning if a
+        // class/struct declares a property with one of these names.
+        if (expr.member == "type") return getKSType(obj)
+        if (expr.member == "typeName") return getKSType(obj).name
+
         return when (obj) {
             is KSObject -> obj.get(expr.member, expr.location)
             is KSStructInstance -> {
@@ -2469,6 +2482,42 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 "Cannot assign ${actualType} value to '${name}' of type '${type.name}'",
                 location
             )
+        }
+    }
+
+    /**
+     * Reserved member names that are universal reflection properties.
+     * User-defined properties/methods with these names will be shadowed.
+     */
+    private val RESERVED_MEMBER_NAMES = setOf("type", "typeName")
+
+    /**
+     * Emit warnings if a class or struct declares members with reserved names.
+     * These names are used for universal reflection properties and will be
+     * shadowed — user code will never be able to access them via dot syntax.
+     */
+    private fun warnReservedMemberNames(typeName: String, members: List<Node>, constructorParams: List<ConstructorParam>, location: SourceLocation) {
+        val colorEnabled = runtime.colorOutput
+        for (param in constructorParams) {
+            if (param.name in RESERVED_MEMBER_NAMES && param.binding != null) {
+                runtime.errorWriter.println(ANSI.warn(
+                    "[${location.line}:${location.column}] Warning: '$typeName' declares property '${param.name}' which shadows the built-in .${param.name} reflection property",
+                    colorEnabled
+                ))
+            }
+        }
+        for (member in members) {
+            val memberName = when (member) {
+                is FunDecl -> member.name
+                is VarDecl -> member.name
+                else -> null
+            }
+            if (memberName != null && memberName in RESERVED_MEMBER_NAMES) {
+                runtime.errorWriter.println(ANSI.warn(
+                    "[${location.line}:${location.column}] Warning: '$typeName' declares member '$memberName' which shadows the built-in .$memberName reflection property",
+                    colorEnabled
+                ))
+            }
         }
     }
 
