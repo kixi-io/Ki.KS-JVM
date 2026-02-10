@@ -2129,7 +2129,7 @@ class InterpreterTest : FunSpec({
             """.trimIndent()) shouldBe "10"
         }
 
-        test("nested function calls and expressions 2") {
+        test("nested function calls and expressions: ternary operator") {
             run("""
                 fun max(a: Int, b: Int): Int = a > b ? a : b 
                 fun min(a: Int, b: Int): Int = a < b ? a : b 
