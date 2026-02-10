@@ -1,7 +1,11 @@
-1. Change `` to regex literal rather than a String literal
-2. Add other Core models including Grid, Version and others that make sense.
-3. Add reflection and extensions for use when hostLanguage is set to true.
-4. Work on core library. Keep it light for now.
-5. Discuss memory classes versus byte code classes with Claude.
+1. .rex for string to regex
+2. Ineritance in classes
+3. How to get the type of a variable, literal or class, trait, enum or method.
+4. Add other Core models including Grid, Version and others that make sense.
+5. Add reflection and extensions for use when hostLanguage is set to true.
+6. Work on the core library. Keep it light for now.
+7. Discuss memory classes versus byte code classes with Claude.
+8. Check on the "use" statement for imports.
+9. Make default lists mutable
 
 

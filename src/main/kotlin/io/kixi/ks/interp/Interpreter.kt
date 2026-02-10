@@ -116,7 +116,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /**
      * Evaluate any AST node.
      *
-     * This is the main dispatch method that routes to specialized evaluators.
+     * This is the io.kixi.ks.main dispatch method that routes to specialized evaluators.
      */
     internal fun evaluate(node: Node): Any? {
         return when (node) {
@@ -524,6 +524,27 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val ksClass = KSClass(decl, superclass, implementedTraits, environment)
         classes[decl.name] = ksClass
 
+        // Validate trait conformance
+        val missingMethods = mutableListOf<String>()
+        for (trait in ksClass.traits) {
+            for (methodName in trait.abstractMethodNames()) {
+                val found = ksClass.findMethod(methodName)
+                if (found == null || found.declaration.body == null) {
+                    missingMethods.add("${trait.name}.${methodName}")
+                }
+            }
+        }
+        if (missingMethods.isNotEmpty()) {
+            throw RuntimeError(
+                "Class '${ksClass.name}' does not implement required trait methods: ${missingMethods.joinToString(", ")}",
+                ksClass.location
+            )
+        }
+
+        // Validate trait conformance: every abstract method must be implemented
+        // (by the class's own methods or inherited from superclass)
+        validateClassTraitConformance(ksClass)
+
         // Initialize static members
         initializeStaticMembers(ksClass, decl.members)
 
@@ -618,13 +639,17 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
         }
 
-        // Initialize instance properties from class body
+        // Initialize instance properties from class body (including superclasses)
         val previousEnv = environment
         val instanceEnv = environment.child("instance:${ksClass.name}")
         instanceEnv.define("this", obj, mutable = false, location = location)
         environment = instanceEnv
 
         try {
+            // Initialize superclass body properties first (walk up chain)
+            initSuperclassBodyProperties(ksClass.superclass, obj)
+
+            // Then current class body properties
             for (property in ksClass.getInstanceProperties()) {
                 val value = property.initializer?.let { evaluate(it) }
                 if (property.constraint != null && value != null) {
@@ -637,6 +662,41 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
 
         return obj
+    }
+
+    /**
+     * Recursively initialize body-declared instance properties from superclasses.
+     *
+     * Walks the superclass chain from the root ancestor downward, initializing
+     * each superclass's body-declared `var`/`let` properties on the instance.
+     * This ensures that a subclass inherits its parent's instance properties.
+     *
+     * Properties are only initialized if they haven't already been set (this
+     * prevents a grandparent property from being overwritten by repeated init).
+     *
+     * Note: Constructor parameters with `var`/`let` binding are handled separately
+     * during constructor argument processing. This method only handles properties
+     * declared in the class body (e.g., `var greeting = "Hello"`).
+     *
+     * @param superclass The superclass to process, or null to stop recursion
+     * @param obj The instance being constructed
+     */
+    private fun initSuperclassBodyProperties(superclass: KSClass?, obj: KSObject) {
+        if (superclass == null) return
+
+        // Process grandparent first (so properties initialize top-down)
+        initSuperclassBodyProperties(superclass.superclass, obj)
+
+        // Initialize this superclass's body-declared properties
+        for (property in superclass.getInstanceProperties()) {
+            if (!obj.hasProperty(property.name)) {
+                val value = property.initializer?.let { evaluate(it) }
+                if (property.constraint != null && value != null) {
+                    checkConstraint(property.name, value, property.constraint, property.location)
+                }
+                obj.initProperty(property.name, value, property.mutable)
+            }
+        }
     }
 
     // ========================================================================
@@ -724,6 +784,36 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
         } finally {
             environment = previousEnv
+        }
+    }
+
+    /**
+     * Validate that a class implements all abstract methods required by its traits.
+     *
+     * Checks the class's own methods and methods inherited from the superclass chain.
+     * A concrete method (one with a body) from ANY point in the superclass chain
+     * satisfies the trait requirement. Default implementations in the trait itself
+     * also satisfy the requirement.
+     *
+     * Mirrors [validateStructTraitConformance] for classes.
+     */
+    private fun validateClassTraitConformance(ksClass: KSClass) {
+        val missingMethods = mutableListOf<String>()
+
+        for (trait in ksClass.traits) {
+            for (methodName in trait.abstractMethodNames()) {
+                val found = ksClass.findMethod(methodName)
+                if (found == null || found.declaration.body == null) {
+                    missingMethods.add("${trait.name}.${methodName}")
+                }
+            }
+        }
+
+        if (missingMethods.isNotEmpty()) {
+            throw RuntimeError(
+                "Class '${ksClass.name}' does not implement required trait methods: ${missingMethods.joinToString(", ")}",
+                ksClass.location
+            )
         }
     }
 

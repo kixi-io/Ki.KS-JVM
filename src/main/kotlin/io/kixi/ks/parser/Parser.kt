@@ -102,7 +102,7 @@ class Parser(private val tokens: List<Token>) {
     /**
      * Parse a single item: declaration, statement, or expression-statement.
      *
-     * This is the main dispatch method, used both at the top level and inside
+     * This is the io.kixi.ks.main dispatch method, used both at the top level and inside
      * block bodies. The same constructs are syntactically valid everywhere;
      * semantic analysis (a later phase) enforces scoping rules (e.g. `use`
      * only at top level, `return` only inside functions).

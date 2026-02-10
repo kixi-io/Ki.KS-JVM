@@ -57,7 +57,7 @@ import java.util.logging.Logger
  * ## Usage
  *
  * ```kotlin
- * fun main() {
+ * fun io.kixi.ks.main() {
  *     Repl().run()
  * }
  * ```
@@ -574,7 +574,7 @@ class Repl(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
  *     group = "application"
  *     description = "Launch the KS interactive REPL"
  *     mainClass.set("io.kixi.ks.repl.ReplKt")
- *     classpath = sourceSets["main"].runtimeClasspath
+ *     classpath = sourceSets["io.kixi.ks.main"].runtimeClasspath
  *     standardInput = System.`in`   // critical: pass real TTY to JVM
  * }
  * ```
