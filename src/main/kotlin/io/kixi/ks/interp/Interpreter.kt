@@ -198,6 +198,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             null
         }
 
+        // Check null safety: reject nil for non-nullable types
+        checkNullSafety(decl.name, value, decl.typeAnnotation, decl.location)
+        checkTypeCompatibility(decl.name, value, decl.typeAnnotation, decl.location)
+
         // Check constraint if present
         if (decl.constraint != null && value != null) {
             checkConstraint(decl.name, value, decl.constraint, decl.location)
@@ -266,6 +270,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 // Use default value (must exist since we passed arity check)
                 param.defaultValue?.let { evaluate(it) }
             }
+
+            // Check null safety for non-nullable parameter types
+            checkNullSafety(param.name, value, param.type, location)
+            checkTypeCompatibility(param.name, value, param.type, location)
 
             // Check parameter constraint if present
             if (param.constraint != null && value != null) {
@@ -346,6 +354,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             } else {
                 param.defaultValue?.let { evaluate(it) }
             }
+
+            // Check null safety for non-nullable parameter types
+            checkNullSafety(param.name, value, param.type, location)
+            checkTypeCompatibility(param.name, value, param.type, location)
 
             if (param.constraint != null && value != null) {
                 checkConstraint(param.name, value, param.constraint, param.location)
@@ -566,6 +578,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                             when (staticMember) {
                                 is VarDecl -> {
                                     val value = staticMember.initializer?.let { evaluate(it) }
+                                    // Check null safety for non-nullable static variable types
+                                    checkNullSafety(staticMember.name, value, staticMember.typeAnnotation, staticMember.location)
+                                    checkTypeCompatibility(staticMember.name, value, staticMember.typeAnnotation, staticMember.location)
                                     staticEnv.define(
                                         staticMember.name,
                                         value,
@@ -627,6 +642,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 else -> throw ArityError(ksClass.name, params.size, args.size, location)
             }
 
+            // Check null safety for non-nullable constructor parameter types
+            checkNullSafety(param.name, value, param.type, location)
+            checkTypeCompatibility(param.name, value, param.type, location)
+
             // Check constraint
             if (param.constraint != null && value != null) {
                 checkConstraint(param.name, value, param.constraint, location)
@@ -651,6 +670,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             // Then current class body properties
             for (property in ksClass.getInstanceProperties()) {
                 val value = property.initializer?.let { evaluate(it) }
+                // Check null safety for non-nullable property types
+                checkNullSafety(property.name, value, property.typeAnnotation, property.location)
+                checkTypeCompatibility(property.name, value, property.typeAnnotation, property.location)
                 if (property.constraint != null && value != null) {
                     checkConstraint(property.name, value, property.constraint, property.location)
                 }
@@ -690,6 +712,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         for (property in superclass.getInstanceProperties()) {
             if (!obj.hasProperty(property.name)) {
                 val value = property.initializer?.let { evaluate(it) }
+                // Check null safety for non-nullable property types
+                checkNullSafety(property.name, value, property.typeAnnotation, property.location)
+                checkTypeCompatibility(property.name, value, property.typeAnnotation, property.location)
                 if (property.constraint != null && value != null) {
                     checkConstraint(property.name, value, property.constraint, property.location)
                 }
@@ -764,6 +789,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                             when (staticMember) {
                                 is VarDecl -> {
                                     val value = staticMember.initializer?.let { evaluate(it) }
+                                    // Check null safety for non-nullable static variable types
+                                    checkNullSafety(staticMember.name, value, staticMember.typeAnnotation, staticMember.location)
+                                    checkTypeCompatibility(staticMember.name, value, staticMember.typeAnnotation, staticMember.location)
                                     staticEnv.define(
                                         staticMember.name, value, staticMember.mutable,
                                         staticMember.typeAnnotation, staticMember.constraint,
@@ -879,6 +907,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 else -> throw ArityError(ksStruct.name, params.size, args.size, location)
             }
 
+            // Check null safety for non-nullable constructor parameter types
+            checkNullSafety(param.name, value, param.type, location)
+            checkTypeCompatibility(param.name, value, param.type, location)
+
             // Check constraint
             if (param.constraint != null && value != null) {
                 checkConstraint(param.name, value, param.constraint, location)
@@ -899,6 +931,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         try {
             for (property in ksStruct.getInstanceProperties()) {
                 val value = property.initializer?.let { evaluate(it) }
+                // Check null safety for non-nullable property types
+                checkNullSafety(property.name, value, property.typeAnnotation, property.location)
+                checkTypeCompatibility(property.name, value, property.typeAnnotation, property.location)
                 if (property.constraint != null && value != null) {
                     checkConstraint(property.name, value, property.constraint, property.location)
                 }
@@ -937,6 +972,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             } else {
                 param.defaultValue?.let { evaluate(it) }
             }
+
+            // Check null safety for non-nullable parameter types
+            checkNullSafety(param.name, value, param.type, location)
+            checkTypeCompatibility(param.name, value, param.type, location)
 
             if (param.constraint != null && value != null) {
                 checkConstraint(param.name, value, param.constraint, param.location)
@@ -1766,6 +1805,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                         value
                     ))
 
+                    // Check null safety: reject nil for non-nullable typed variables
+                    checkNullSafety(target.name, newValue, environment.getType(target.name), expr.location)
+                    checkTypeCompatibility(target.name, newValue, environment.getType(target.name), expr.location)
+
                     val constraint = environment.getConstraint(target.name)
                     if (constraint != null && newValue != null) {
                         checkConstraint(target.name, newValue, constraint, expr.location)
@@ -2358,6 +2401,148 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is InConstraint -> "in ..."
             is MatchesConstraint -> "matches ..."
         }
+    }
+
+    // ========================================================================
+    // Null Safety Checking
+    // ========================================================================
+
+    /**
+     * Enforce null safety: reject nil values for non-nullable types.
+     *
+     * Called during variable declarations, assignments, parameter binding,
+     * and constructor parameter binding. If the value is null and the type
+     * annotation is non-nullable (e.g. `String` rather than `String?`),
+     * a TypeError is thrown.
+     *
+     * Respects [KSRuntime.strictNullSafety]. When disabled, null assignments
+     * to non-nullable types silently succeed (useful for migration/testing).
+     *
+     * @param name   The variable/parameter name (for error messages)
+     * @param value  The value being assigned
+     * @param type   The declared type (null means no annotation — skip check)
+     * @param location Source location for error reporting
+     */
+    private fun checkNullSafety(name: String, value: Any?, type: TypeRef?, location: SourceLocation?) {
+        if (!runtime.strictNullSafety) return
+        if (type == null) return          // no type annotation — nothing to check
+        if (type.nullable) return         // nullable type (String?) — nil is allowed
+        if (value != null) return         // non-null value — always OK
+
+        throw TypeError(
+            "Nil cannot be assigned to non-nullable type '${type.name}'. " +
+                    "Use '${type.name}?' to allow nil for '$name'",
+            location
+        )
+    }
+
+    /**
+     * Check that a value is compatible with a declared type annotation.
+     *
+     * Enforces type safety for explicitly typed variables and parameters:
+     *
+     *     var thing: Int = 4
+     *     thing = "apple"          // → TypeError
+     *     thing = 42               // OK
+     *
+     * Skips the check when:
+     *   - No type annotation (dynamic/untyped variable)
+     *   - Value is null (handled separately by [checkNullSafety])
+     *   - Type is `Any` or `Any?` (accepts all values)
+     *
+     * @param name Variable/parameter name for error messages
+     * @param value The value being assigned
+     * @param type The declared type annotation (null = no annotation)
+     * @param location Source location for error reporting
+     * @throws TypeError if value is incompatible with the declared type
+     */
+    private fun checkTypeCompatibility(name: String, value: Any?, type: TypeRef?, location: SourceLocation?) {
+        if (type == null) return              // no annotation — dynamic, no check
+        if (value == null) return             // null handled by checkNullSafety
+        if (type.name == "Any") return        // Any accepts everything
+
+        val actualType = runtimeTypeName(value)
+        if (actualType == null) return        // unknown type — skip check
+
+        if (!isTypeCompatible(actualType, type.name)) {
+            throw TypeError(
+                "Cannot assign ${actualType} value to '${name}' of type '${type.name}'",
+                location
+            )
+        }
+    }
+
+    /**
+     * Get the KS type name for a runtime value.
+     */
+    private fun runtimeTypeName(value: Any): String? = when (value) {
+        is Int -> "Int"
+        is Long -> "Long"
+        is Float -> "Float"
+        is Double -> "Double"
+        is java.math.BigDecimal -> "Dec"
+        is String -> "String"
+        is Char -> "Char"
+        is Boolean -> "Bool"
+        is List<*> -> "List"
+        is Map<*, *> -> "Map"
+        is KSObject -> value.klass.name
+        is KSStructInstance -> value.struct.name
+        is KSEnumConstant -> value.enum.name
+        is io.kixi.uom.Quantity<*> -> "Quantity"
+        is KSRange -> "Range"
+        is KSFunction -> "Function"
+        else -> null
+    }
+
+    /**
+     * Check if a runtime type is compatible with a declared type name.
+     *
+     * Handles exact matches and numeric widening (Int → Long → Double, etc.).
+     * Class/trait subtype relationships are checked via the runtime class hierarchy.
+     */
+    private fun isTypeCompatible(actualType: String, declaredType: String): Boolean {
+        // Exact match
+        if (actualType == declaredType) return true
+
+        // Numeric widening: Int can be assigned to Long, Double, Dec, etc.
+        val numericCompatibility = mapOf(
+            "Int" to setOf("Long", "Float", "Double", "Dec"),
+            "Long" to setOf("Float", "Double", "Dec"),
+            "Float" to setOf("Double", "Dec"),
+            "Double" to setOf("Dec")
+        )
+        if (numericCompatibility[actualType]?.contains(declaredType) == true) return true
+
+        // Class/trait subtype check: is the actual type a subclass/implementor of the declared type?
+        try {
+            val actualClass = classes[actualType]
+            val declaredClass = classes[declaredType]
+            if (actualClass != null && declaredClass != null) {
+                if (isSubclassOf(actualClass, declaredClass)) return true
+            }
+            // Check trait compatibility
+            val declaredTrait = traits[declaredType]
+            if (declaredTrait != null && actualClass != null) {
+                if (actualClass.implementsTrait(declaredTrait)) return true
+            }
+        } catch (_: Exception) {
+            // Type not found — skip subtype check
+        }
+
+        return false
+    }
+
+    /**
+     * Check if one class is a subclass of another (walks the superclass chain).
+     */
+    private fun isSubclassOf(subclass: KSClass, superclass: KSClass): Boolean {
+        var current: KSClass? = subclass
+        while (current != null) {
+            if (current === superclass) return true
+            current = current.superclass
+        }
+        return false
     }
 
     // ========================================================================
