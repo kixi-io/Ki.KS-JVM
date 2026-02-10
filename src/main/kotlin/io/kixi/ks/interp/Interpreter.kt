@@ -28,7 +28,7 @@ import java.math.RoundingMode
  *
  * - Variables: `var`/`let` declarations, assignments (=, +=, -=, etc.)
  * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL, Quantity
- * - Quantities: unit quantities (23cm, 25°C), currency ($50.25), combine (⚭)
+ * - Quantities: unit quantities (23cm, 25Â°C), currency ($50.25), combine (âš­)
  * - String interpolation: `"Hello $name"`, `"Sum: ${a + b}"`
  * - Operators: arithmetic, comparison, logical, elvis (?:)
  * - Unary: -, !, ++, --, !!
@@ -297,8 +297,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             } else {
                 // Block body: { ... }
                 try {
-                    evaluate(body)
-                    null // Block without explicit return returns null
+                    evaluate(body) // Last expression value is implicitly returned
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
@@ -376,7 +375,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             } else {
                 try {
                     evaluate(body)
-                    null
+                    // Last expression value is implicitly returned
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
@@ -726,7 +725,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Resolve traits (structs can only implement traits, no superclass)
         val implementedTraits = decl.traits.mapNotNull { typeRef ->
             traits[typeRef.name] ?: run {
-                // Check if it's a class — structs can't extend classes
+                // Check if it's a class â€” structs can't extend classes
                 if (classes.containsKey(typeRef.name)) {
                     throw RuntimeError(
                         "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
@@ -829,7 +828,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         for (trait in ksStruct.traits) {
             for (methodName in trait.abstractMethodNames()) {
                 // findMethod checks struct's own methods first, then falls back to traits.
-                // We need to verify the struct provides a concrete implementation —
+                // We need to verify the struct provides a concrete implementation â€”
                 // not just that the trait's own abstract declaration is reachable.
                 val found = ksStruct.findMethod(methodName)
                 if (found == null || found.declaration.body == null) {
@@ -959,7 +958,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             } else {
                 try {
                     evaluate(body)
-                    null
+                    // Last expression value is implicitly returned
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
@@ -1535,7 +1534,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /**
      * Parse a quantity literal from raw text.
      *
-     * Examples: `23cm`, `51.4m³`, `1000kg`, `25°C`, `97ℓ`, `100USD`, `5.5e(-7)m`
+     * Examples: `23cm`, `51.4mÂ³`, `1000kg`, `25Â°C`, `97â„“`, `100USD`, `5.5e(-7)m`
      *
      * Delegates to [Quantity.parse] which handles all forms including scientific
      * notation and type specifiers.
@@ -1554,7 +1553,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Converts prefix notation (`$23.53`) to suffix notation (`23.53USD`) and
      * delegates to [Quantity.parse].
      *
-     * Examples: `$23.53` → `23.53USD`, `€50.25:d` → `50.25EUR:d`, `₿0.5` → `0.5BTC`
+     * Examples: `$23.53` â†’ `23.53USD`, `â‚¬50.25:d` â†’ `50.25EUR:d`, `â‚¿0.5` â†’ `0.5BTC`
      */
     private fun parseCurrencyQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
         val prefixChar = text[0]
@@ -1565,10 +1564,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val numericPart = text.substring(1) // e.g., "23.53" or "23.53:d"
         val colonIdx = numericPart.indexOf(':')
         val suffixForm = if (colonIdx >= 0) {
-            // Insert currency symbol before type specifier: "23.53:d" → "23.53USD:d"
+            // Insert currency symbol before type specifier: "23.53:d" â†’ "23.53USD:d"
             numericPart.substring(0, colonIdx) + currency.symbol + numericPart.substring(colonIdx)
         } else {
-            // Append currency symbol: "23.53" → "23.53USD"
+            // Append currency symbol: "23.53" â†’ "23.53USD"
             numericPart + currency.symbol
         }
 
@@ -1993,16 +1992,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     // ========================================================================
-    // Combine (⚭) Operator
+    // Combine (âš­) Operator
     // ========================================================================
 
     /**
-     * Evaluate the unit composition operator ⚭.
+     * Evaluate the unit composition operator âš­.
      *
      * Combines two quantities into a higher-dimensional unit:
-     * - Length × Length → Area:   `4cm ⚭ 3cm → 12cm²`
-     * - Length × Area → Volume:  `2m ⚭ 3m² → 6m³`
-     * - Area × Length → Volume:  `3m² ⚭ 2m → 6m³`
+     * - Length Ã— Length â†’ Area:   `4cm âš­ 3cm â†’ 12cmÂ²`
+     * - Length Ã— Area â†’ Volume:  `2m âš­ 3mÂ² â†’ 6mÂ³`
+     * - Area Ã— Length â†’ Volume:  `3mÂ² âš­ 2m â†’ 6mÂ³`
      *
      * If units match, the combination is direct. If units differ within the
      * same dimension (e.g., m and cm), both are converted to base units first.
@@ -2011,7 +2010,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun evaluateCombine(left: Any?, right: Any?, location: SourceLocation?): Quantity<*> {
         if (left !is Quantity<*> || right !is Quantity<*>) {
             throw TypeError(
-                "Combine operator ⚭ requires quantity operands, got " +
+                "Combine operator âš­ requires quantity operands, got " +
                         "${left?.let { it::class.simpleName } ?: "nil"} and " +
                         "${right?.let { it::class.simpleName } ?: "nil"}",
                 location
@@ -2025,7 +2024,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val resultUnit = combineUnits(lUnit, rUnit)
             ?: throw RuntimeError(
                 "Cannot combine units '${lUnit.symbol}' and '${rUnit.symbol}' " +
-                        "(supported: Length×Length→Area, Length×Area→Volume)",
+                        "(supported: LengthÃ—Lengthâ†’Area, LengthÃ—Areaâ†’Volume)",
                 location
             )
 
@@ -2807,8 +2806,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Access members on a Quantity value.
      *
      * Supported members:
-     * - `value` → the numeric value (Int, Long, Float, Double, or Dec)
-     * - `unit` → the unit symbol as a String (e.g., "cm", "kg", "USD")
+     * - `value` â†’ the numeric value (Int, Long, Float, Double, or Dec)
+     * - `unit` â†’ the unit symbol as a String (e.g., "cm", "kg", "USD")
      */
     private fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
