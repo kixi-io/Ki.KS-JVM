@@ -1642,11 +1642,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     // Collections
     // ========================================================================
 
-    private fun evaluateList(expr: ListExpr): List<Any?> {
-        return expr.elements.map { evaluate(it) }
+    private fun evaluateList(expr: ListExpr): MutableList<Any?> {
+        return expr.elements.map { evaluate(it) }.toMutableList()
     }
 
-    private fun evaluateMap(expr: MapExpr): Map<Any?, Any?> {
+    private fun evaluateMap(expr: MapExpr): MutableMap<Any?, Any?> {
         val result = mutableMapOf<Any?, Any?>()
         for (entry in expr.entries) {
             val key = evaluate(entry.key)
@@ -1994,8 +1994,29 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun computeAssignment(op: AssignOp, getCurrent: () -> Any?, newValue: Any?): Any? {
         return when (op) {
             AssignOp.ASSIGN -> newValue
-            AssignOp.PLUS_ASSIGN -> add(getCurrent(), newValue)
-            AssignOp.MINUS_ASSIGN -> subtract(getCurrent(), newValue)
+            AssignOp.PLUS_ASSIGN -> {
+                val current = getCurrent()
+                if (current is MutableList<*>) {
+                    // In-place mutation: list += element or list += otherList
+                    @Suppress("UNCHECKED_CAST")
+                    val list = current as MutableList<Any?>
+                    if (newValue is List<*>) list.addAll(newValue) else list.add(newValue)
+                    current
+                } else {
+                    add(current, newValue)
+                }
+            }
+            AssignOp.MINUS_ASSIGN -> {
+                val current = getCurrent()
+                if (current is MutableList<*>) {
+                    // In-place mutation: list -= element (remove first occurrence)
+                    @Suppress("UNCHECKED_CAST")
+                    (current as MutableList<Any?>).remove(newValue)
+                    current
+                } else {
+                    subtract(current, newValue)
+                }
+            }
             AssignOp.STAR_ASSIGN -> multiply(getCurrent(), newValue)
             AssignOp.SLASH_ASSIGN -> divide(getCurrent(), newValue)
             AssignOp.MODULO_ASSIGN -> modulo(getCurrent(), newValue)
@@ -2612,7 +2633,15 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             return stringify(left) + stringify(right)
         }
         if (left is List<*> && right is List<*>) {
-            return left + right
+            val result = left.toMutableList()
+            result.addAll(right)
+            return result
+        }
+        // List + element → new list with element appended
+        if (left is List<*>) {
+            val result = left.toMutableList()
+            result.add(right)
+            return result
         }
         return numericOp(left, right, "add")
     }
@@ -2626,6 +2655,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Quantity - Number (scalar subtraction)
         if (left is Quantity<*> && right is Number) {
             return quantityScalarOp(left, right, "subtract")
+        }
+        // List - element → new list without first occurrence of element
+        if (left is List<*>) {
+            val result = left.toMutableList()
+            result.remove(right)
+            return result
         }
         return numericOp(left, right, "subtract")
     }

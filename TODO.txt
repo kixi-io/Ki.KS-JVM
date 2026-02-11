@@ -6,6 +6,7 @@
 6. Work on the core library. Keep it light for now.
 7. Discuss memory classes versus byte code classes with Claude.
 8. Check on the "use" statement for imports.
-9. Make default lists mutable
-
-
+9. Make default lists and maps mutable
+10. Infix methods
+11. Add higher-order functions like map, filter, fold, let, apply
+12. Extension methods (but I think we already have that) Just verify.
