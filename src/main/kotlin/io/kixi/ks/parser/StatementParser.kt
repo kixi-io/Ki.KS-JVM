@@ -132,13 +132,25 @@ class StatementParser(internal val p: Parser) {
      *     say("hello", bold=true)   // parenthesized: full argument list
      *     say "hello"               // bare: single expression
      *     say "Sum: " + a + b       // bare: single expression (operator chain)
+     *     say (1..10).start         // bare: grouped expression with member access
+     *     say (1..10).toList()      // bare: grouped expression with method call
      *
      * For bare arguments, the expression continues until a statement terminator
      * (newline, semicolon, EOF, or closing brace).
+     *
+     * ## Parenthesized vs. Grouped Disambiguation
+     *
+     * When `say` is followed by `(`, there's an ambiguity:
+     *   - `say("hello", bold=true)` — function-call-style argument list
+     *   - `say (1..10).start`       — bare expression starting with grouping parens
+     *
+     * To distinguish, we look past the matching `)`:
+     *   - If a postfix operator follows (`.`, `?.`, `[`, `(`), it's a grouping expression
+     *   - Otherwise it's function-call-style parenthesized arguments
      */
     private fun parseSayArguments(): List<Argument> {
-        // Parenthesized form
-        if (p.check(LPAREN)) {
+        // Parenthesized form — only if '(' is NOT followed by postfix after matching ')'
+        if (p.check(LPAREN) && !isGroupingExpression()) {
             p.advance() // consume (
             val args = p.expr.parseArgumentList()
             p.expect(RPAREN, "Expected ')' after say arguments")
@@ -160,6 +172,43 @@ class StatementParser(internal val p: Parser) {
             args.add(Argument(null, value, argLoc))
         }
         return args
+    }
+
+    /**
+     * Lookahead to determine whether the current `(` starts a grouping expression
+     * (as opposed to function-call-style parenthesized arguments to `say`).
+     *
+     * Scans forward to find the matching `)`, then checks whether a postfix operator
+     * follows. If so, the `(` is a grouping expression like `(1..10).start`.
+     * If not, it's function-call-style like `say("hello", bold=true)`.
+     *
+     * Handles nested parentheses correctly.
+     *
+     * @return `true` if `(` starts a grouping expression (postfix follows matching `)`)
+     */
+    private fun isGroupingExpression(): Boolean {
+        // p.peekAt(0) is the '(' — start scanning from offset 1
+        var depth = 1
+        var offset = 1
+
+        while (depth > 0) {
+            val token = p.peekAt(offset)
+            when (token.type) {
+                LPAREN -> depth++
+                RPAREN -> depth--
+                EOF -> return false
+                else -> {}
+            }
+            if (depth > 0) offset++
+        }
+
+        // offset is now at the matching ')'. Check what follows.
+        val afterParen = p.peekAt(offset + 1)
+
+        return when (afterParen.type) {
+            DOT, QUESTION_DOT, LBRACKET, LPAREN, BANG_BANG, COLON_COLON -> true
+            else -> false
+        }
     }
 
     // ====================================================================

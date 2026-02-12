@@ -1,6 +1,10 @@
 package io.kixi.ks.interp
 
+import io.kixi.Range
 import io.kixi.ks.*
+import io.kixi.ks.ext.toList as rangeToList
+import io.kixi.ks.ext.asSequence as rangeAsSequence
+import io.kixi.ks.ext.count as rangeCount
 import io.kixi.ks.lexer.*
 import io.kixi.ks.parser.*
 import io.kixi.uom.Currency
@@ -10,6 +14,10 @@ import io.kixi.uom.combineUnits
 
 import java.math.BigDecimal as Dec
 import java.math.RoundingMode
+import java.net.URL
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 
 /**
  * KS Interpreter
@@ -1311,7 +1319,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSTrait -> KSType("Trait", value.name)
             is KSEnum -> KSType("Enum", value.name)
             is KSFunction -> KSType("Function", value.name)
-            is KSRange -> KSType("Range")
+            is NativeCallable -> KSType("Function", value.name)
+            is Range<*> -> KSType("Range")
             is KDTag -> KSType("KDTag")
             is KDDocument -> KSType("KDDocument")
             else -> KSType(value::class.simpleName ?: "Unknown")
@@ -1572,6 +1581,12 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         return when (expr.kind) {
             LiteralKind.QUANTITY -> parseQuantityLiteral(expr.value as String, expr.location)
             LiteralKind.CURRENCY_QUANTITY -> parseCurrencyQuantityLiteral(expr.value as String, expr.location)
+            LiteralKind.URL -> {
+                val text = expr.value as String
+                try { URL(text) } catch (e: Exception) {
+                    throw RuntimeError("Invalid URL literal '$text': ${e.message}", expr.location)
+                }
+            }
             else -> expr.value
         }
     }
@@ -1659,7 +1674,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun evaluateRange(expr: RangeExpr): Any {
         val start = expr.start?.let { evaluate(it) }
         val end = expr.end?.let { evaluate(it) }
-        return KSRange(start, end, expr.startExclusive, expr.endExclusive)
+        val bound = when {
+            expr.startExclusive && expr.endExclusive -> Range.Bound.Exclusive
+            expr.startExclusive -> Range.Bound.ExclusiveStart
+            expr.endExclusive -> Range.Bound.ExclusiveEnd
+            else -> Range.Bound.Inclusive
+        }
+        return Range(start, end, bound)
     }
 
     // ========================================================================
@@ -1707,7 +1728,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is String -> getStringMember(obj, expr.member, expr.location)
             is List<*> -> getListMember(obj, expr.member, expr.location)
             is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
-            is KSRange -> getRangeMember(obj, expr.member, expr.location)
+            is Range<*> -> getRangeMember(obj, expr.member, expr.location)
             is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
@@ -2292,6 +2313,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "Bool" -> value is Boolean
             "List" -> value is List<*>
             "Map" -> value is Map<*, *>
+            "Range" -> value is Range<*>
             "Any" -> true
             else -> {
                 // Check user-defined types
@@ -2349,7 +2371,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 val str = value?.toString() ?: return false
                 str in container
             }
-            is KSRange -> container.contains(value)
+            is Range<*> -> {
+                @Suppress("UNCHECKED_CAST")
+                (container as Range<Any>).contains(value as Any)
+            }
             is KSEnum -> {
                 // Check if value is a constant of this enum
                 when (value) {
@@ -2560,8 +2585,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         is KSStructInstance -> value.struct.name
         is KSEnumConstant -> value.enum.name
         is io.kixi.uom.Quantity<*> -> "Quantity"
-        is KSRange -> "Range"
+        is Range<*> -> "Range"
         is KSFunction -> "Function"
+        is NativeCallable -> "Function"
         else -> null
     }
 
@@ -2876,6 +2902,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
             }
             is Dec -> value.toPlainString()
+            is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
+            is LocalDateTime -> stringifyLocalDateTime(value)
+            is OffsetDateTime -> stringifyOffsetDateTime(value)
+            is URL -> value.toString()
             is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
             is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
             is KSEnumConstant -> value.name
@@ -2885,6 +2915,37 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KDDocument -> value.toString()
             is KSType -> value.toString()
             else -> value.toString()
+        }
+    }
+
+    private fun stringifyLocalDateTime(dt: LocalDateTime): String {
+        val sb = StringBuilder()
+        sb.append("${dt.year}/${dt.monthValue}/${dt.dayOfMonth}")
+        sb.append("@${dt.hour}:${dt.minute.toString().padStart(2, '0')}")
+        if (dt.second != 0 || dt.nano != 0) {
+            sb.append(":${dt.second.toString().padStart(2, '0')}")
+            if (dt.nano != 0) {
+                val frac = dt.nano.toString().padStart(9, '0').trimEnd('0')
+                sb.append(".$frac")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun stringifyOffsetDateTime(odt: OffsetDateTime): String {
+        val base = stringifyLocalDateTime(odt.toLocalDateTime())
+        val offset = odt.offset
+        return when {
+            offset == java.time.ZoneOffset.UTC -> "$base-Z"
+            offset.totalSeconds % 3600 == 0 -> {
+                val hours = offset.totalSeconds / 3600
+                "$base${if (hours >= 0) "+" else ""}$hours"
+            }
+            else -> {
+                val hours = offset.totalSeconds / 3600
+                val minutes = Math.abs(offset.totalSeconds % 3600) / 60
+                "$base${if (hours >= 0) "+" else ""}$hours:${minutes.toString().padStart(2, '0')}"
+            }
         }
     }
 
@@ -2996,9 +3057,23 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Iterable<*> -> value
             is String -> value.toList()
             is Map<*, *> -> value.entries.toList()
-            is KSRange -> value.toIterable()
+            is Range<*> -> rangeToIterable(value, location)
             is KSEnum -> value.constants.values
             else -> throw TypeError("Cannot iterate over ${value?.let { it::class.simpleName } ?: "nil"}", location)
+        }
+    }
+
+    /**
+     * Convert an io.kixi.Range to an iterable sequence for for-loops.
+     *
+     * Supports Int, Long, and Char ranges. Supports forward and reversed
+     * ranges, respecting exclusivity bounds. Delegates to RangeExt.toList().
+     */
+    private fun rangeToIterable(range: Range<*>, location: SourceLocation?): Iterable<Any?> {
+        try {
+            return range.rangeToList()
+        } catch (e: IllegalArgumentException) {
+            throw RuntimeError(e.message ?: "Cannot iterate over range", location)
         }
     }
 
@@ -3044,12 +3119,88 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
-    private fun getRangeMember(range: KSRange, member: String, location: SourceLocation?): Any? {
+    private fun getRangeMember(range: Range<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
+            // Core properties
             "start" -> range.start
             "end" -> range.end
-            "startExclusive" -> range.startExclusive
-            "endExclusive" -> range.endExclusive
+            "bound" -> range.bound.operator
+
+            // Computed properties
+            "min" -> range.min
+            "max" -> range.max
+            "reversed" -> range.reversed
+
+            // Openness properties
+            "isOpen" -> range.isOpen
+            "isClosed" -> range.isClosed
+            "isOpenStart" -> range.isOpenStart
+            "isOpenEnd" -> range.isOpenEnd
+
+            // Convenience booleans derived from bound
+            "startExclusive" -> range.bound == Range.Bound.ExclusiveStart || range.bound == Range.Bound.Exclusive
+            "endExclusive" -> range.bound == Range.Bound.ExclusiveEnd || range.bound == Range.Bound.Exclusive
+
+            // Methods
+            "contains" -> NativeCallable("contains") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("contains() requires 1 argument", loc)
+                val element = args[0] ?: return@NativeCallable false
+                @Suppress("UNCHECKED_CAST")
+                (range as Range<Any>).contains(element)
+            }
+            "overlaps" -> NativeCallable("overlaps") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("overlaps() requires 1 argument", loc)
+                val other = args[0] as? Range<*>
+                    ?: throw TypeError("overlaps() requires a Range argument", loc)
+                @Suppress("UNCHECKED_CAST")
+                (range as Range<Any>).overlaps(other as Range<Any>)
+            }
+            "clamp" -> NativeCallable("clamp") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("clamp() requires 1 argument", loc)
+                @Suppress("UNCHECKED_CAST")
+                (range as Range<Any>).clamp(args[0] as Any)
+            }
+            "intersect" -> NativeCallable("intersect") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("intersect() requires 1 argument", loc)
+                val other = args[0] as? Range<*>
+                    ?: throw TypeError("intersect() requires a Range argument", loc)
+                @Suppress("UNCHECKED_CAST")
+                (range as Range<Any>).intersect(other as Range<Any>)
+            }
+            "toList" -> NativeCallable("toList") { args, loc ->
+                val step = if (args.isNotEmpty()) {
+                    (args[0] as? Number)?.toInt()
+                        ?: throw TypeError("toList() step must be an Int", loc)
+                } else 1
+                try {
+                    range.rangeToList(step)
+                } catch (e: IllegalArgumentException) {
+                    throw RuntimeError(e.message ?: "Cannot convert range to list", loc)
+                }
+            }
+            "toSequence" -> NativeCallable("toSequence") { args, loc ->
+                val step = if (args.isNotEmpty()) {
+                    (args[0] as? Number)?.toInt()
+                        ?: throw TypeError("toSequence() step must be an Int", loc)
+                } else 1
+                try {
+                    range.rangeAsSequence(step).toList()
+                } catch (e: IllegalArgumentException) {
+                    throw RuntimeError(e.message ?: "Cannot convert range to sequence", loc)
+                }
+            }
+            "count" -> NativeCallable("count") { args, loc ->
+                val step = if (args.isNotEmpty()) {
+                    (args[0] as? Number)?.toInt()
+                        ?: throw TypeError("count() step must be an Int", loc)
+                } else 1
+                try {
+                    range.rangeCount(step)
+                } catch (e: IllegalArgumentException) {
+                    throw RuntimeError(e.message ?: "Cannot count range", loc)
+                }
+            }
+
             else -> throw MemberNotFoundError(member, "Range", location)
         }
     }
@@ -3111,73 +3262,6 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     ?: throw MemberNotFoundError(member, "KDDocument", location)
             }
         }
-    }
-}
-
-// ============================================================================
-// KSRange - Simple Range Implementation
-// ============================================================================
-
-/**
- * Runtime representation of a KS range.
- */
-class KSRange(
-    val start: Any?,
-    val end: Any?,
-    val startExclusive: Boolean,
-    val endExclusive: Boolean
-) {
-    fun contains(value: Any?): Boolean {
-        if (value == null) return false
-        if (value !is Number) return false
-
-        val v = value.toDouble()
-
-        val startOk = when {
-            start == null -> true
-            start is Number -> {
-                val s = start.toDouble()
-                if (startExclusive) v > s else v >= s
-            }
-            else -> false
-        }
-
-        val endOk = when {
-            end == null -> true
-            end is Number -> {
-                val e = end.toDouble()
-                if (endExclusive) v < e else v <= e
-            }
-            else -> false
-        }
-
-        return startOk && endOk
-    }
-
-    fun toIterable(): Iterable<Any?> {
-        if (start == null || end == null) {
-            throw RuntimeError("Cannot iterate over open-ended range")
-        }
-
-        val s = (start as Number).toInt()
-        val e = (end as Number).toInt()
-
-        val actualStart = if (startExclusive) s + 1 else s
-        val actualEnd = if (endExclusive) e - 1 else e
-
-        return (actualStart..actualEnd).toList()
-    }
-
-    override fun toString(): String {
-        val startStr = start?.toString() ?: "_"
-        val endStr = end?.toString() ?: "_"
-        val op = when {
-            startExclusive && endExclusive -> "<..<"
-            startExclusive -> "<.."
-            endExclusive -> "..<"
-            else -> ".."
-        }
-        return "$startStr$op$endStr"
     }
 }
 
@@ -3319,7 +3403,42 @@ class KDTag(
             null -> "nil"
             is String -> "\"$value\""
             is Char -> "'$value'"
+            is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
+            is LocalDateTime -> formatLocalDateTime(value)
+            is OffsetDateTime -> formatOffsetDateTime(value)
+            is URL -> value.toString()
             else -> value.toString()
+        }
+    }
+
+    private fun formatLocalDateTime(dt: LocalDateTime): String {
+        val sb = StringBuilder()
+        sb.append("${dt.year}/${dt.monthValue}/${dt.dayOfMonth}")
+        sb.append("@${dt.hour}:${dt.minute.toString().padStart(2, '0')}")
+        if (dt.second != 0 || dt.nano != 0) {
+            sb.append(":${dt.second.toString().padStart(2, '0')}")
+            if (dt.nano != 0) {
+                val frac = dt.nano.toString().padStart(9, '0').trimEnd('0')
+                sb.append(".$frac")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun formatOffsetDateTime(odt: OffsetDateTime): String {
+        val base = formatLocalDateTime(odt.toLocalDateTime())
+        val offset = odt.offset
+        return when {
+            offset == java.time.ZoneOffset.UTC -> "$base-Z"
+            offset.totalSeconds % 3600 == 0 -> {
+                val hours = offset.totalSeconds / 3600
+                "$base${if (hours >= 0) "+" else ""}$hours"
+            }
+            else -> {
+                val hours = offset.totalSeconds / 3600
+                val minutes = Math.abs(offset.totalSeconds % 3600) / 60
+                "$base${if (hours >= 0) "+" else ""}$hours:${minutes.toString().padStart(2, '0')}"
+            }
         }
     }
 }
@@ -3343,4 +3462,22 @@ class KDDocument(val tags: List<KDTag>) {
     override fun toString(): String {
         return tags.joinToString("\n") { it.toString() }
     }
+}
+
+/**
+ * A callable backed by a Kotlin lambda, used for built-in methods on
+ * primitive types (Range.contains, Range.clamp, etc.).
+ *
+ * @param name Display name for error messages
+ * @param body The lambda to execute when called
+ */
+class NativeCallable(
+    val name: String,
+    private val body: (List<Any?>, SourceLocation?) -> Any?
+) : Callable {
+    override fun call(interpreter: Interpreter, arguments: List<Any?>, location: SourceLocation?): Any? {
+        return body(arguments, location)
+    }
+
+    override fun toString(): String = "<native method $name>"
 }
