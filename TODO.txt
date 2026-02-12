@@ -1,3 +1,4 @@
+0. Create a better was to test KS files.
 1. .rex for string to regex
 2. Inheritance in classes
 3. How to get the type of a variable, literal or class, trait, enum or method.
@@ -13,3 +14,5 @@
 13. Fix KDTag and KDDocument - They should both be io.kixi.kd.Tag. KD blocks should return a Tag.
 14. Add namespace (or space) similar to C#.
 15. Take the first step with compiling "hello world" in JVM byte code.
+16. Write a ClearWell style mini IDE for KS.
+17. Address the single root issues for KD blocks. See KD docs for review.
