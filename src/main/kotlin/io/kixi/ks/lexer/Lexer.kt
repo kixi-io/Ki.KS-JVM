@@ -386,6 +386,11 @@ class Lexer(private val source: String) {
                 // Must have digits after the decimal point for it to be a number
                 if (isDigit(peek())) {
                     consumeDigits()
+                    // Check for version pattern: 5.0 followed by .digit (e.g., 5.0.0, 1.2.3)
+                    if (peek() == '.' && isDigit(peekNext())) {
+                        scanVersionContinuation()
+                        return
+                    }
                     finishNumberWithSuffix(hasDecimalPoint = true)
                 } else {
                     // It's an integer followed by a dot (member access)
@@ -730,6 +735,43 @@ class Lexer(private val source: String) {
     // ========================================================================
     // Date / DateTime scanning
     // ========================================================================
+
+    /**
+     * Scans a version continuation after an initial "major.minor" has been consumed.
+     *
+     * Called when we've consumed digits like "5.0" and see another "." followed by
+     * a digit, indicating a version literal like "5.0.0" or "1.2.3.4".
+     *
+     * Continues consuming ".digit" sequences and an optional "-qualifier" suffix
+     * (e.g., "5.0.0-beta", "1.2.3-rc1", "5.0.0-beta-2").
+     *
+     * Emits a STRING_LITERAL token (consistent with date/duration handling) so
+     * the parser/interpreter can convert it to a Version object.
+     */
+    private fun scanVersionContinuation() {
+        // We've already consumed "major.minor" (e.g., "5.0").
+        // Continue consuming ".digits" sequences.
+        while (peek() == '.' && isDigit(peekNext())) {
+            advance() // consume '.'
+            consumeDigits()
+        }
+
+        // Check for optional qualifier: -alpha, -beta, -rc1, -beta-2, etc.
+        if (peek() == '-' && peekNext().isLetter()) {
+            advance() // consume '-'
+            // Consume qualifier: alphanumeric, hyphens, underscores, dots
+            while (!isAtEnd()) {
+                val c = peek()
+                if (c.isLetterOrDigit() || c == '-' || c == '_') {
+                    advance()
+                } else {
+                    break
+                }
+            }
+        }
+
+        addToken(TokenType.STRING_LITERAL, currentText())
+    }
 
     /**
      * Scans a date or datetime literal.
@@ -1162,6 +1204,13 @@ class Lexer(private val source: String) {
     private fun scanIdentifier() {
         while (isAlphaNumeric(peek())) advance()
 
+        // Check for naked URL: identifier followed by ://
+        // e.g., http://example.com, https://foo.bar/path
+        if (peek() == ':' && peekNext() == '/' && peekAt(current + 2) == '/') {
+            scanNakedUrl()
+            return
+        }
+
         val text = currentText()
         val keywordType = TokenType.KEYWORDS[text]
 
@@ -1176,6 +1225,38 @@ class Lexer(private val source: String) {
             addToken(TokenType.IDENTIFIER)
         }
     }
+
+    /**
+     * Scans a naked URL literal (no angle brackets): http://example.com/path
+     *
+     * Called from [scanIdentifier] when the identifier is followed by `://`.
+     * The protocol identifier (e.g., "http", "https") has already been consumed.
+     * Consumes `://` and the rest of the URL until whitespace or a delimiter.
+     *
+     * Naked URLs are common in KD data blocks:
+     *     module http://kixi.io/packages/widgets version=5.0.0
+     */
+    private fun scanNakedUrl() {
+        advance() // consume ':'
+        advance() // consume first '/'
+        advance() // consume second '/'
+
+        // Consume URL characters until a terminator
+        while (!isAtEnd() && !isNakedUrlTerminator(peek())) {
+            if (peek() == '\n') break
+            advance()
+        }
+
+        addToken(TokenType.URL_LITERAL, currentText())
+    }
+
+    /**
+     * Characters that terminate a naked URL.
+     * Matches KD parser behavior for naked URL boundaries.
+     */
+    private fun isNakedUrlTerminator(c: Char): Boolean =
+        c.isWhitespace() || c == '{' || c == '}' || c == '[' || c == ']' ||
+                c == '(' || c == ')' || c == ',' || c == ';'
 
     // ========================================================================
     // Comments

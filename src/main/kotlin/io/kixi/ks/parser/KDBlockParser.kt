@@ -213,9 +213,92 @@ class KDBlockParser(internal val p: Parser) {
      * lists, maps, and ranges. Complex expressions (operators, calls) are
      * not typically used in KD data, but we delegate to the expression
      * parser to handle them uniformly.
+     *
+     * Before delegating, we check for KD-specific patterns that would
+     * confuse the expression parser:
+     * - Version literals like `5.2.beta-2` (DOUBLE DOT IDENTIFIER pattern)
+     *   which the expression parser would misinterpret as member access
      */
     private fun parseKDValue(): Expr {
+        val versionExpr = tryParseVersionLiteral()
+        if (versionExpr != null) {
+            // Check for range continuation: version .. end
+            return tryParseRangeContinuation(versionExpr) ?: versionExpr
+        }
+
         return p.expr.parseExpression()
+    }
+
+    /**
+     * Tries to parse a version-like literal in KD context.
+     *
+     * Detects patterns where a number is followed by `.identifier` which in
+     * KD represents a version qualifier (e.g., `5.2.beta-2`) rather than
+     * member access.
+     *
+     * Standard multi-dot-digit versions like `5.0.0` are already handled by
+     * the lexer. This method catches the remaining case where a dot-separated
+     * component is an identifier (qualifier) rather than digits.
+     *
+     * Returns null if the pattern doesn't match a version.
+     */
+    private fun tryParseVersionLiteral(): Expr? {
+        // Pattern: (DOUBLE|INT) DOT IDENTIFIER (MINUS (INT|IDENTIFIER))*
+        val numType = p.peek().type
+        if (numType != DOUBLE_LITERAL && numType != INT_LITERAL) return null
+        if (p.peekNext().type != DOT) return null
+
+        val afterDot = p.peekAt(2)
+        if (afterDot.type != IDENTIFIER) return null
+
+        // This looks like a version qualifier: 5.2.beta or 5.2.rc1
+        val loc = p.currentLocation()
+
+        val numToken = p.advance() // consume the number
+        p.advance() // consume DOT
+        val qualPart = p.advance().value // consume IDENTIFIER (e.g., "beta")
+
+        var versionText = "${numToken.value}.$qualPart"
+
+        // Continue consuming dash-separated qualifier parts: -2, -rc1, etc.
+        while (p.check(MINUS) && !isTagBoundary()) {
+            val afterMinus = p.peekNext()
+            if (afterMinus.type == INT_LITERAL || afterMinus.type == IDENTIFIER) {
+                p.advance() // consume MINUS
+                versionText += "-${p.advance().value}"
+            } else {
+                break
+            }
+        }
+
+        return LiteralExpr(versionText, LiteralKind.STRING, loc)
+    }
+
+    /**
+     * Checks for a range operator after a parsed value and constructs a
+     * RangeExpr if found.
+     *
+     * This handles cases like `5.2.beta-2 .. 5.9` where the left side was
+     * parsed by [tryParseVersionLiteral] and the range operator needs to be
+     * consumed separately.
+     */
+    private fun tryParseRangeContinuation(left: Expr): Expr? {
+        val loc = p.currentLocation()
+        val startExclusive: Boolean
+        val endExclusive: Boolean
+
+        when {
+            p.match(DOT_DOT) -> { startExclusive = false; endExclusive = false }
+            p.match(DOT_DOT_LESS) -> { startExclusive = false; endExclusive = true }
+            p.match(LESS_DOT_DOT) -> { startExclusive = true; endExclusive = false }
+            p.match(LESS_DOT_DOT_LESS) -> { startExclusive = true; endExclusive = true }
+            else -> return null
+        }
+
+        // Parse right side: _ means open-end (null)
+        val right: Expr? = if (p.match(UNDERSCORE)) null else parseKDValue()
+
+        return RangeExpr(left, right, startExclusive, endExclusive, loc)
     }
 
     /**

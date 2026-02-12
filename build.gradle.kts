@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.kixi"
-version = "2.3.1"
+version = "2.3.2"
 description = "ki-ks"
 
 // Application config goes HERE - outside plugins block
@@ -24,8 +24,8 @@ repositories {
 
 dependencies {
     // === Ki Dependencies (resolved via composite builds — see settings.gradle.kts) ===
-    implementation("io.kixi:Ki.Core-JVM:2.3.1")
-    implementation("io.kixi:Ki.KD-JVM:2.3.1")
+    implementation("io.kixi:Ki.Core-JVM:2.3.2")
+    implementation("io.kixi:Ki.KD-JVM:2.3.2")
 
     // === JLine (REPL terminal handling) ===
     implementation("org.jline:jline:3.26.3")
