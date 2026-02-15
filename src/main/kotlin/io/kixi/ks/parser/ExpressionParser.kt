@@ -20,7 +20,7 @@ import io.kixi.ks.lexer.TokenType.*
  *   8. Elvis:          ?:
  *   9. Range:          ..  ..<  <..  <..<
  *  10. Addition:       +  -
- *  11. Multiplication: *  /  %  âš­
+ *  11. Multiplication: *  /  %  ⚭
  *  12. Exponentiation: **                            (right-assoc)
  *  13. Unary prefix:   -  !  ++  --
  *  14. Postfix:        .  ?.  ()  []  !!  ++  --  ::class
@@ -307,7 +307,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 11. Multiplication: * / % âš­
+    // 11. Multiplication: * / % ⚭
     // ====================================================================
 
     private fun parseMultiplication(): Expr {
@@ -399,12 +399,12 @@ class ExpressionParser(internal val p: Parser) {
             val loc = p.currentLocation()
             expr = when {
                 p.match(DOT) -> {
-                    val member = p.expectIdentifier("Expected member name after '.'")
+                    val member = p.expectMemberName("Expected member name after '.'")
                     MemberAccessExpr(expr, member, safe = false, loc)
                 }
 
                 p.match(QUESTION_DOT) -> {
-                    val member = p.expectIdentifier("Expected member name after '?.'")
+                    val member = p.expectMemberName("Expected member name after '?.'")
                     MemberAccessExpr(expr, member, safe = true, loc)
                 }
 

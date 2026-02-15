@@ -280,6 +280,50 @@ class Parser(private val tokens: List<Token>) {
         return expect(IDENTIFIER, message).value
     }
 
+    /**
+     * Expect a member name after `.` or `?.`.
+     *
+     * In member-access position, keywords are valid names (e.g. `regex.matches()`
+     * `list.in`, `obj.class`). This accepts either an [IDENTIFIER] or any keyword
+     * token and returns its text value.
+     */
+    internal fun expectMemberName(message: String = "Expected member name"): String {
+        val token = peek()
+        if (token.type == IDENTIFIER || token.type in MEMBER_NAME_KEYWORDS) {
+            advance()
+            return token.value
+        }
+        throw errorAt(token, "$message (got ${token.type}: '${token.value}')")
+    }
+
+    companion object {
+        /**
+         * Keyword token types that are valid as member/method names after `.` or `?.`.
+         *
+         * After a dot, these keywords lose their keyword meaning and behave as
+         * plain identifiers. This follows the same convention as Kotlin and Swift.
+         */
+        val MEMBER_NAME_KEYWORDS: Set<TokenType> = setOf(
+            // Type/check keywords commonly used as method names
+            MATCHES, IN, IS, AS,
+
+            // Declaration keywords (e.g. obj.class, obj.enum, obj.trait)
+            VAR, LET, FUN, CLASS, TRAIT, ENUM, STRUCT, STATIC, EXTEND,
+
+            // Control flow keywords (e.g. obj.if, obj.for — rare but legal)
+            IF, ELSE, FOR, WHILE, WHEN, RETURN, BREAK, CONTINUE,
+
+            // Error handling
+            TRY, CATCH, FINALLY, THROW,
+
+            // Other keywords
+            USE, SAY, LANG,
+
+            // Literal keywords (e.g. obj.true — rare but legal)
+            TRUE, FALSE, NIL,
+        )
+    }
+
     // ====================================================================
     // Newline / Separator Handling
     // ====================================================================

@@ -1,18 +1,17 @@
-0. Create a better was to test KS files.
+0. Create a better way to test KS files.
 1. .rex for string to regex
-2. Inheritance in classes
-3. How to get the type of a variable, literal or class, trait, enum or method.
-4. Add other Core models including Grid, Version and others that make sense.
-5. Add reflection and extensions for use when hostLanguage is set to true.
-6. Work on the core library. Keep it light for now.
-7. Discuss memory classes versus byte code classes with Claude.
-8. Check on the "use" statement for imports.
-9. Infix methods
-10. Add higher-order functions like map, filter, fold, let, apply
-11. Extension methods (but I think we already have that) Just verify.
-12. Add Version literals. Make sure to handle things like 5.2.beta-2 and 5.0.0.._
-13. Fix KDTag and KDDocument - They should both be io.kixi.kd.Tag. KD blocks should return a Tag.
-14. Add namespace (or space) similar to C#.
-15. Take the first step with compiling "hello world" in JVM byte code.
-16. Write a ClearWell style mini IDE for KS.
-17. Address the single root issues for KD blocks. See KD docs for review.
+2. How to get the type of a variable, literal or class, trait, enum or method.
+3. Add other Core models including Grid, Version and others that make sense.
+4. Add reflection and extensions for use when hostLanguage is set to true.
+5. Work on the core library. Keep it light for now.
+6. Discuss memory classes versus byte code classes with Claude.
+7. Check on the "use" statement for imports.
+8. Infix methods
+9. Add higher-order functions like map, filter, fold, let, apply
+10. Extension methods (but I think we already have that) Just verify.
+11. Add Version literals. Make sure to handle things like 5.2.beta-2 and 5.0.0.._
+12. Fix KDTag and KDDocument - They should both be io.kixi.kd.Tag. KD blocks should return a Tag.
+13. Add namespace (or space) similar to C#.
+14. Take the first step with compiling "hello world" in JVM byte code.
+15. Write a ClearWell style mini IDE for KS.
+16. Address the single root issues for KD blocks. See KD docs for review.

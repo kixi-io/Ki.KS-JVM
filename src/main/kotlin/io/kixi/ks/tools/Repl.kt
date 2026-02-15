@@ -14,6 +14,7 @@ import org.jline.reader.EndOfFileException
 import org.jline.reader.LineReader
 import org.jline.reader.LineReaderBuilder
 import org.jline.reader.UserInterruptException
+import org.jline.reader.impl.DefaultParser
 import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
 
@@ -96,9 +97,28 @@ class Repl(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         .encoding(Charsets.UTF_8)
         .build()
 
-    /** JLine line reader — handles prompts, line editing, and history. */
+    /**
+     * JLine parser configured to pass input through verbatim.
+     *
+     * By default, JLine's DefaultParser treats `\` as an escape character
+     * (escapeChars = {'\\'}), which causes it to collapse `\\` into `\`
+     * before the application receives the input. This breaks string escape
+     * sequences in KS -- e.g. the user types `"\\d"` intending the KS
+     * Lexer to process `\\` as an escaped backslash producing `\d`, but
+     * JLine silently eats one backslash and the Lexer only sees `"\d"`,
+     * triggering an unknown escape error.
+     *
+     * KS handles all escape processing in its own Lexer, so JLine must
+     * not interfere. Setting escapeChars to empty disables this behavior.
+     */
+    private val jlineParser = DefaultParser().apply {
+        escapeChars = charArrayOf()   // no escape processing -- KS Lexer handles it
+    }
+
+    /** JLine line reader -- handles prompts, line editing, and history. */
     private val lineReader: LineReader = LineReaderBuilder.builder()
         .terminal(terminal)
+        .parser(jlineParser)
         .build()
 
     /** Writer for output, taken from JLine's terminal for correct coordination. */

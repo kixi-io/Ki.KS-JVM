@@ -992,6 +992,21 @@ class Lexer(private val source: String) {
      * Scans a standard string: "..."
      * Supports escape characters and string interpolation ($var, ${expr}).
      *
+     * ## Escape processing and regex
+     *
+     * Basic strings ("...") process escape sequences strictly -- unknown
+     * escapes like `\d` produce a compile-time error. This catches typos
+     * and keeps the escape system predictable (same convention as Kotlin
+     * and Swift).
+     *
+     * For regex patterns, use raw strings which need no escaping:
+     *
+     *     `\d{3}-\d{2}-\d{4}`.rex   // idiomatic -- raw string + .rex
+     *     "\\d{3}-\\d{2}-\\d{4}".rex // also works -- explicit double escape
+     *     "\d{3}".rex                // ERROR -- \d is not a recognized escape
+     *
+     * ## Interpolation
+     *
      * For interpolation, the lexer emits the string parts as STRING_LITERAL tokens.
      * A more sophisticated approach would be to emit interpolation markers, but
      * for the initial implementation we resolve the string as a whole and mark
@@ -1089,6 +1104,26 @@ class Lexer(private val source: String) {
 
     /**
      * Scans escape character after backslash.
+     *
+     * ## Recognized escapes
+     *
+     *     \t  tab           \b  backspace       \n  newline
+     *     \r  carriage ret   \\  literal \       \'  single quote
+     *     \"  double quote   \uXXXX  Unicode code point
+     *
+     * ## Design: strict escapes with actionable errors
+     *
+     * Unknown escapes (e.g. `\d`, `\w`, `\s`) produce a compile-time error.
+     * This is intentional -- it catches typos like `"\nane"` vs `"\name"`
+     * and keeps the escape system predictable. Same convention as Kotlin
+     * and Swift.
+     *
+     * The error message guides developers toward raw strings, making the
+     * correct pattern discoverable at the point of failure:
+     *
+     *     let r = `\d+`.rex          // idiomatic -- raw string, no escaping
+     *     let r = "\\d+".rex         // works -- double escape in basic string
+     *     let r = "\d+".rex          // ERROR with suggestion to use `..`
      */
     private fun scanEscapeChar(): Char {
         if (isAtEnd()) error("Unterminated escape sequence")
@@ -1111,7 +1146,9 @@ class Lexer(private val source: String) {
                 }
                 hex.toString().toInt(16).toChar()
             }
-            else -> error("Unknown escape character '\\$c'")
+            else -> error(
+                "Unknown escape '\\$c'. For regex patterns use a raw string: `\\$c`.rex"
+            )
         }
     }
 

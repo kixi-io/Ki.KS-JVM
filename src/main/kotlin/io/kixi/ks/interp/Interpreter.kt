@@ -36,7 +36,7 @@ import java.time.OffsetDateTime
  *
  * - Variables: `var`/`let` declarations, assignments (=, +=, -=, etc.)
  * - Literals: Int, Long, Float, Double, Dec, String, Char, Bool, Nil, URL, Quantity
- * - Quantities: unit quantities (23cm, 25Â°C), currency ($50.25), combine (âš­)
+ * - Quantities: unit quantities (23cm, 25°C), currency ($50.25), combine (⚭)
  * - String interpolation: `"Hello $name"`, `"Sum: ${a + b}"`
  * - Operators: arithmetic, comparison, logical, elvis (?:)
  * - Unary: -, !, ++, --, !!
@@ -761,7 +761,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Resolve traits (structs can only implement traits, no superclass)
         val implementedTraits = decl.traits.mapNotNull { typeRef ->
             traits[typeRef.name] ?: run {
-                // Check if it's a class â€” structs can't extend classes
+                // Check if it's a class — structs can't extend classes
                 if (classes.containsKey(typeRef.name)) {
                     throw RuntimeError(
                         "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
@@ -870,7 +870,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         for (trait in ksStruct.traits) {
             for (methodName in trait.abstractMethodNames()) {
                 // findMethod checks struct's own methods first, then falls back to traits.
-                // We need to verify the struct provides a concrete implementation â€”
+                // We need to verify the struct provides a concrete implementation —
                 // not just that the trait's own abstract declaration is reachable.
                 val found = ksStruct.findMethod(methodName)
                 if (found == null || found.declaration.body == null) {
@@ -1321,6 +1321,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSFunction -> KSType("Function", value.name)
             is NativeCallable -> KSType("Function", value.name)
             is Range<*> -> KSType("Range")
+            is Regex -> KSType("Regex")
+            is MatchResult -> KSType("MatchResult")
             is KDTag -> KSType("KDTag")
             is KDDocument -> KSType("KDDocument")
             else -> KSType(value::class.simpleName ?: "Unknown")
@@ -1594,7 +1596,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /**
      * Parse a quantity literal from raw text.
      *
-     * Examples: `23cm`, `51.4mÂ³`, `1000kg`, `25Â°C`, `97â„“`, `100USD`, `5.5e(-7)m`
+     * Examples: `23cm`, `51.4m³`, `1000kg`, `25°C`, `97ℓ`, `100USD`, `5.5e(-7)m`
      *
      * Delegates to [Quantity.parse] which handles all forms including scientific
      * notation and type specifiers.
@@ -1613,7 +1615,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Converts prefix notation (`$23.53`) to suffix notation (`23.53USD`) and
      * delegates to [Quantity.parse].
      *
-     * Examples: `$23.53` â†’ `23.53USD`, `â‚¬50.25:d` â†’ `50.25EUR:d`, `â‚¿0.5` â†’ `0.5BTC`
+     * Examples: `$23.53` → `23.53USD`, `€50.25:d` → `50.25EUR:d`, `₿0.5` → `0.5BTC`
      */
     private fun parseCurrencyQuantityLiteral(text: String, location: SourceLocation?): Quantity<*> {
         val prefixChar = text[0]
@@ -1624,10 +1626,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val numericPart = text.substring(1) // e.g., "23.53" or "23.53:d"
         val colonIdx = numericPart.indexOf(':')
         val suffixForm = if (colonIdx >= 0) {
-            // Insert currency symbol before type specifier: "23.53:d" â†’ "23.53USD:d"
+            // Insert currency symbol before type specifier: "23.53:d" → "23.53USD:d"
             numericPart.substring(0, colonIdx) + currency.symbol + numericPart.substring(colonIdx)
         } else {
-            // Append currency symbol: "23.53" â†’ "23.53USD"
+            // Append currency symbol: "23.53" → "23.53USD"
             numericPart + currency.symbol
         }
 
@@ -1732,6 +1734,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
+            is Regex -> getRegexMember(obj, expr.member, expr.location)
+            is MatchResult -> getMatchResultMember(obj, expr.member, expr.location)
             else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
         }
     }
@@ -1815,6 +1819,18 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     is Int -> obj.tags.getOrNull(index)
                     is String -> obj.tags.firstOrNull { it.name == index }
                     else -> throw TypeError("KDDocument index must be Int or String", expr.location)
+                }
+            }
+            is MatchResult -> {
+                when (index) {
+                    is Int -> {
+                        if (index < 0 || index >= obj.groupValues.size) {
+                            throw IndexOutOfBoundsError(index, obj.groupValues.size, expr.location)
+                        }
+                        obj.groupValues[index]
+                    }
+                    is String -> obj.groups[index]?.value
+                    else -> throw TypeError("MatchResult index must be Int or String", expr.location)
                 }
             }
             null -> throw NullPointerError("Cannot index into nil", expr.location)
@@ -2090,16 +2106,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     // ========================================================================
-    // Combine (âš­) Operator
+    // Combine (⚭) Operator
     // ========================================================================
 
     /**
-     * Evaluate the unit composition operator âš­.
+     * Evaluate the unit composition operator ⚭.
      *
      * Combines two quantities into a higher-dimensional unit:
-     * - Length Ã— Length â†’ Area:   `4cm âš­ 3cm â†’ 12cmÂ²`
-     * - Length Ã— Area â†’ Volume:  `2m âš­ 3mÂ² â†’ 6mÂ³`
-     * - Area Ã— Length â†’ Volume:  `3mÂ² âš­ 2m â†’ 6mÂ³`
+     * - Length × Length → Area:   `4cm ⚭ 3cm → 12cm²`
+     * - Length × Area → Volume:  `2m ⚭ 3m² → 6m³`
+     * - Area × Length → Volume:  `3m² ⚭ 2m → 6m³`
      *
      * If units match, the combination is direct. If units differ within the
      * same dimension (e.g., m and cm), both are converted to base units first.
@@ -2108,7 +2124,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     private fun evaluateCombine(left: Any?, right: Any?, location: SourceLocation?): Quantity<*> {
         if (left !is Quantity<*> || right !is Quantity<*>) {
             throw TypeError(
-                "Combine operator âš­ requires quantity operands, got " +
+                "Combine operator ⚭ requires quantity operands, got " +
                         "${left?.let { it::class.simpleName } ?: "nil"} and " +
                         "${right?.let { it::class.simpleName } ?: "nil"}",
                 location
@@ -2122,7 +2138,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val resultUnit = combineUnits(lUnit, rUnit)
             ?: throw RuntimeError(
                 "Cannot combine units '${lUnit.symbol}' and '${rUnit.symbol}' " +
-                        "(supported: LengthÃ—Lengthâ†’Area, LengthÃ—Areaâ†’Volume)",
+                        "(supported: Length×Length→Area, Length×Area→Volume)",
                 location
             )
 
@@ -2314,6 +2330,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "List" -> value is List<*>
             "Map" -> value is Map<*, *>
             "Range" -> value is Range<*>
+            "Regex" -> value is Regex
+            "MatchResult" -> value is MatchResult
             "Any" -> true
             else -> {
                 // Check user-defined types
@@ -2914,6 +2932,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KDTag -> value.toString()
             is KDDocument -> value.toString()
             is KSType -> value.toString()
+            is Regex -> value.pattern
+            is MatchResult -> value.value
             else -> value.toString()
         }
     }
@@ -3081,6 +3101,28 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     // Built-in Member Access
     // ========================================================================
 
+    /**
+     * Member access on String values.
+     *
+     * ## `.rex` -- regex creation
+     *
+     * The `.rex` property converts a string to a `Regex`. The idiomatic
+     * pattern pairs raw strings with `.rex`, since raw strings pass
+     * through backslashes literally -- no double-escaping needed:
+     *
+     *     let r = `\d{3}-\d{2}-\d{4}`.rex   // raw string -- backslashes literal
+     *     let r = "\\d{3}-\\d{2}-\\d{4}".rex // basic string -- \\ escape for \
+     *
+     * Basic strings process escapes strictly, so `"\d"` is a compile error
+     * (unknown escape), not a silent bug. The error message guides developers
+     * toward raw strings, making the correct pattern discoverable.
+     *
+     * All four KS string types work with `.rex`:
+     *   - basic:          `"\\d+".rex`                (requires double escaping)
+     *   - raw:            `` `\d+`.rex ``             (idiomatic for regex)
+     *   - multiline:      `"""\\d+""".rex`            (requires double escaping)
+     *   - raw multiline:  triple-backtick + `.rex`    (no escaping needed)
+     */
     private fun getStringMember(str: String, member: String, location: SourceLocation?): Any {
         return when (member) {
             "length", "size" -> str.length
@@ -3092,6 +3134,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "reversed" -> str.reversed()
             "first" -> if (str.isNotEmpty()) str.first() else throw IndexOutOfBoundsError(0, 0, location)
             "last" -> if (str.isNotEmpty()) str.last() else throw IndexOutOfBoundsError(0, 0, location)
+            "rex" -> Regex(str)
             else -> throw MemberNotFoundError(member, "String", location)
         }
     }
@@ -3205,6 +3248,75 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
+    private fun getRegexMember(regex: Regex, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            // Properties
+            "pattern" -> regex.pattern
+
+            // Methods
+            "matches" -> NativeCallable("matches") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("matches() requires 1 argument", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("matches() requires a String argument", loc)
+                regex.matches(input)
+            }
+            "containsMatchIn" -> NativeCallable("containsMatchIn") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("containsMatchIn() requires 1 argument", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("containsMatchIn() requires a String argument", loc)
+                regex.containsMatchIn(input)
+            }
+            "find" -> NativeCallable("find") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("find() requires 1 argument", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("find() requires a String argument", loc)
+                // Returns MatchResult or nil
+                regex.find(input)
+            }
+            "findAll" -> NativeCallable("findAll") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("findAll() requires 1 argument", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("findAll() requires a String argument", loc)
+                regex.findAll(input).toList()
+            }
+            "replace" -> NativeCallable("replace") { args, loc ->
+                if (args.size < 2) throw RuntimeError("replace() requires 2 arguments", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("replace() first argument must be a String", loc)
+                val replacement = args[1]?.toString()
+                    ?: throw TypeError("replace() second argument must be a String", loc)
+                regex.replace(input, replacement)
+            }
+            "replaceFirst" -> NativeCallable("replaceFirst") { args, loc ->
+                if (args.size < 2) throw RuntimeError("replaceFirst() requires 2 arguments", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("replaceFirst() first argument must be a String", loc)
+                val replacement = args[1]?.toString()
+                    ?: throw TypeError("replaceFirst() second argument must be a String", loc)
+                regex.replaceFirst(input, replacement)
+            }
+            "split" -> NativeCallable("split") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("split() requires 1 argument", loc)
+                val input = args[0]?.toString()
+                    ?: throw TypeError("split() requires a String argument", loc)
+                regex.split(input).toMutableList()
+            }
+
+            else -> throw MemberNotFoundError(member, "Regex", location)
+        }
+    }
+
+    private fun getMatchResultMember(match: MatchResult, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            // Properties
+            "value" -> match.value
+            "groupValues" -> match.groupValues.toMutableList()
+            "groupCount" -> match.groupValues.size - 1  // exclude group 0 (full match)
+
+            else -> throw MemberNotFoundError(member, "MatchResult", location)
+        }
+    }
+
     private fun getEnumConstantMember(constant: KSEnumConstant, member: String, location: SourceLocation?): Any? {
         return when (member) {
             "name" -> constant.name
@@ -3226,8 +3338,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Access members on a Quantity value.
      *
      * Supported members:
-     * - `value` â†’ the numeric value (Int, Long, Float, Double, or Dec)
-     * - `unit` â†’ the unit symbol as a String (e.g., "cm", "kg", "USD")
+     * - `value` → the numeric value (Int, Long, Float, Double, or Dec)
+     * - `unit` → the unit symbol as a String (e.g., "cm", "kg", "USD")
      */
     private fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
