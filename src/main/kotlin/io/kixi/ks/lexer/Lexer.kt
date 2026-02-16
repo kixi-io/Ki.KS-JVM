@@ -745,13 +745,16 @@ class Lexer(private val source: String) {
      * Scans a version continuation after an initial "major.minor" has been consumed.
      *
      * Called when we've consumed digits like "5.0" and see another "." followed by
-     * a digit, indicating a version literal like "5.0.0" or "1.2.3.4".
+     * a digit, indicating a version literal like "5.0.0" or "1.2.3".
      *
-     * Continues consuming ".digit" sequences and an optional "-qualifier" suffix
-     * (e.g., "5.0.0-beta", "1.2.3-rc1", "5.0.0-beta-2").
+     * Continues consuming ".digit" sequences and an optional "_qualifier" suffix
+     * (e.g., "5.0.0_beta", "1.2.3_rc1", "5.0.0_beta_2").
      *
-     * Emits a STRING_LITERAL token (consistent with date/duration handling) so
-     * the parser/interpreter can convert it to a Version object.
+     * KS uses underscore (`_`) as the qualifier separator in version literals,
+     * rather than dash (`-`), to avoid ambiguity with the subtraction operator.
+     *
+     * Emits a VERSION_LITERAL token with the raw text as the literal value.
+     * The interpreter converts the KS syntax to the internal Version format.
      */
     private fun scanVersionContinuation() {
         // We've already consumed "major.minor" (e.g., "5.0").
@@ -761,13 +764,14 @@ class Lexer(private val source: String) {
             consumeDigits()
         }
 
-        // Check for optional qualifier: -alpha, -beta, -rc1, -beta-2, etc.
-        if (peek() == '-' && peekNext().isLetter()) {
-            advance() // consume '-'
-            // Consume qualifier: alphanumeric, hyphens, underscores, dots
+        // Check for optional qualifier: _alpha, _beta, _rc1, _beta_2, etc.
+        // Uses '_' (not '-') to avoid ambiguity with the subtraction operator.
+        if (peek() == '_' && peekNext().isLetter()) {
+            advance() // consume '_'
+            // Consume qualifier: alphanumeric and underscores
             while (!isAtEnd()) {
                 val c = peek()
-                if (c.isLetterOrDigit() || c == '-' || c == '_') {
+                if (c.isLetterOrDigit() || c == '_') {
                     advance()
                 } else {
                     break
@@ -775,7 +779,7 @@ class Lexer(private val source: String) {
             }
         }
 
-        addToken(TokenType.STRING_LITERAL, currentText())
+        addToken(TokenType.VERSION_LITERAL, currentText())
     }
 
     /**

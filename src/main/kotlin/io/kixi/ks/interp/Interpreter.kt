@@ -1,6 +1,7 @@
 package io.kixi.ks.interp
 
 import io.kixi.Range
+import io.kixi.Version
 import io.kixi.ks.*
 import io.kixi.ks.ext.toList as rangeToList
 import io.kixi.ks.ext.asSequence as rangeAsSequence
@@ -86,6 +87,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         "Range"    to KSBuiltinType("Range"),
         "Regex"    to KSBuiltinType("Regex"),
         "Quantity" to KSBuiltinType("Quantity"),
+        "Version"  to KSBuiltinType("Version"),
         "Nil"      to KSBuiltinType("Nil"),
         "Any"      to KSBuiltinType("Any"),
         "Type"     to KSBuiltinType("Type"),
@@ -1332,6 +1334,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is String -> KSType("String")
             is Char -> KSType("Char")
             is Boolean -> KSType("Bool")
+            is Version -> KSType("Version")
             is List<*> -> KSType("List")
             is Map<*, *> -> KSType("Map")
             is KSObject -> KSType(value.klass.name)
@@ -1610,6 +1613,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         return when (expr.kind) {
             LiteralKind.QUANTITY -> parseQuantityLiteral(expr.value as String, expr.location)
             LiteralKind.CURRENCY_QUANTITY -> parseCurrencyQuantityLiteral(expr.value as String, expr.location)
+            LiteralKind.VERSION -> parseVersionLiteral(expr.value as String, expr.location)
             LiteralKind.URL -> {
                 val text = expr.value as String
                 try { URL(text) } catch (e: Exception) {
@@ -1664,6 +1668,47 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             Quantity.parse(suffixForm)
         } catch (e: Exception) {
             throw RuntimeError("Invalid currency quantity '$text': ${e.message}", location)
+        }
+    }
+
+    /**
+     * Parse a KS version literal into a [Version] object.
+     *
+     * KS uses underscores for qualifier separation (to avoid ambiguity with the
+     * minus operator), while [Version.parse] uses dashes internally.
+     *
+     * Conversion examples:
+     *   "5.0.0"         → "5.0.0"         → Version(5, 0, 0)
+     *   "5.2.7"         → "5.2.7"         → Version(5, 2, 7)
+     *   "0.2.0_beta"    → "0.2.0-beta"    → Version(0, 2, 0, "beta")
+     *   "0.2.0_beta_1"  → "0.2.0-beta-1"  → Version(0, 2, 0, "beta", 1)
+     *   "1_000.0.0_rc"  → "1000.0.0-rc"   → Version(1000, 0, 0, "rc")
+     */
+    private fun parseVersionLiteral(text: String, location: SourceLocation?): Version {
+        // Find qualifier boundary: first '_' followed by a letter
+        var qualStart = -1
+        for (i in text.indices) {
+            if (text[i] == '_' && i + 1 < text.length && text[i + 1].isLetter()) {
+                qualStart = i
+                break
+            }
+        }
+
+        val versionText = if (qualStart >= 0) {
+            // Numeric part: remove digit-separator underscores
+            val numericPart = text.substring(0, qualStart).replace("_", "")
+            // Qualifier part: convert underscores to dashes for Version.parse
+            val qualifierPart = text.substring(qualStart + 1).replace("_", "-")
+            "$numericPart-$qualifierPart"
+        } else {
+            // No qualifier — just remove digit-separator underscores
+            text.replace("_", "")
+        }
+
+        return try {
+            Version.parse(versionText)
+        } catch (e: Exception) {
+            throw RuntimeError("Invalid version literal '$text': ${e.message}", location)
         }
     }
 
@@ -1723,16 +1768,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             return null
         }
 
+        // Universal reflection properties: .type and .typeName
+        // These are reserved — always resolved here, never shadowed by
+        // user-defined properties. Must be checked BEFORE the nil guard
+        // so that `nil.type` returns KSType("Nil") rather than throwing.
+        if (expr.member == "type") return getKSType(obj)
+        if (expr.member == "typeName") return getKSType(obj).name
+
         if (obj == null) {
             throw NullPointerError("Cannot access member '${expr.member}' on nil", expr.location)
         }
-
-        // Universal reflection properties: .type and .typeName
-        // These are reserved — always resolved here, never shadowed by
-        // user-defined properties. The interpreter emits a warning if a
-        // class/struct declares a property with one of these names.
-        if (expr.member == "type") return getKSType(obj)
-        if (expr.member == "typeName") return getKSType(obj).name
 
         return when (obj) {
             is KSObject -> obj.get(expr.member, expr.location)
@@ -1760,6 +1805,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
             is Range<*> -> getRangeMember(obj, expr.member, expr.location)
             is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
+            is Version -> getVersionMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
             is Regex -> getRegexMember(obj, expr.member, expr.location)
@@ -2358,6 +2404,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "List" -> value is List<*>
             "Map" -> value is Map<*, *>
             "Range" -> value is Range<*>
+            "Version" -> value is Version
             "Regex" -> value is Regex
             "MatchResult" -> value is MatchResult
             "Any" -> true
@@ -2631,6 +2678,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         is KSStructInstance -> value.struct.name
         is KSEnumConstant -> value.enum.name
         is io.kixi.uom.Quantity<*> -> "Quantity"
+        is Version -> "Version"
         is Range<*> -> "Range"
         is KSFunction -> "Function"
         is NativeCallable -> "Function"
@@ -2948,6 +2996,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
             }
             is Dec -> value.toPlainString()
+            is Version -> stringifyVersion(value)
             is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
             is LocalDateTime -> stringifyLocalDateTime(value)
             is OffsetDateTime -> stringifyOffsetDateTime(value)
@@ -2964,6 +3013,22 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is MatchResult -> value.value
             else -> value.toString()
         }
+    }
+
+    /**
+     * Format a Version using KS literal syntax (underscores for qualifier separation).
+     *
+     * Examples: "5.0.0", "0.2.0_beta", "0.2.0_beta_1"
+     */
+    private fun stringifyVersion(v: Version): String {
+        var text = "${v.major}.${v.minor}.${v.micro}"
+        if (v.qualifier.isNotEmpty()) {
+            text += "_${v.qualifier}"
+            if (v.qualifierNumber != 0) {
+                text += "_${v.qualifierNumber}"
+            }
+        }
+        return text
     }
 
     private fun stringifyLocalDateTime(dt: LocalDateTime): String {
@@ -3374,6 +3439,24 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "value" -> quantity.value
             "unit" -> quantity.unit.symbol
             else -> throw MemberNotFoundError(member, "Quantity", location)
+        }
+    }
+
+    private fun getVersionMember(version: Version, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "major" -> version.major
+            "minor" -> version.minor
+            "micro" -> version.micro
+            "qualifier" -> version.qualifier
+            "qualifierNumber" -> version.qualifierNumber
+            "hasQualifier" -> version.hasQualifier
+            "isStable" -> version.isStable
+            "isPreRelease" -> version.isPreRelease
+            "toStable" -> NativeCallable("toStable") { _, _ -> version.toStable() }
+            "incrementMajor" -> NativeCallable("incrementMajor") { _, _ -> version.incrementMajor() }
+            "incrementMinor" -> NativeCallable("incrementMinor") { _, _ -> version.incrementMinor() }
+            "incrementMicro" -> NativeCallable("incrementMicro") { _, _ -> version.incrementMicro() }
+            else -> throw MemberNotFoundError(member, "Version", location)
         }
     }
 

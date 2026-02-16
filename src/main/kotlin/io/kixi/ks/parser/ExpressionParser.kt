@@ -492,6 +492,11 @@ class ExpressionParser(internal val p: Parser) {
                 LiteralExpr(t.literal, LiteralKind.CURRENCY_QUANTITY, t.location)
             }
 
+            VERSION_LITERAL -> {
+                val t = p.advance()
+                LiteralExpr(t.literal, LiteralKind.VERSION, t.location)
+            }
+
             // --- String literals ---
             STRING_LITERAL -> {
                 val t = p.advance()

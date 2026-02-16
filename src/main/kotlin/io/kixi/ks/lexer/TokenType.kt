@@ -33,6 +33,9 @@ enum class TokenType {
     QUANTITY_LITERAL,           // 23cm, 51.4m³, 1000kg, 25°C, 97ℓ, 100USD, 5.5e(-7)m
     CURRENCY_QUANTITY_LITERAL,  // $23.53, €50.25, ¥10000, £75.50, ₿0.5, Ξ2.5
 
+    // --- Version Literals ---
+    VERSION_LITERAL,            // 5.0.0, 1.2.3_beta, 0.2.0_rc_1
+
     // --- String Literals ---
     STRING_LITERAL,         // "hello" (with escapes & interpolation)
     VERBATIM_STRING,        // @"no escapes"
