@@ -71,6 +71,26 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /** Registry of defined structs by name. */
     private val structs = mutableMapOf<String, KSStruct>()
 
+    /** Built-in type sentinels for reflective access (e.g. String.type). */
+    private val builtinTypes = mapOf(
+        "String"   to KSBuiltinType("String"),
+        "Int"      to KSBuiltinType("Int"),
+        "Long"     to KSBuiltinType("Long"),
+        "Float"    to KSBuiltinType("Float"),
+        "Double"   to KSBuiltinType("Double"),
+        "Dec"      to KSBuiltinType("Dec"),
+        "Bool"     to KSBuiltinType("Bool"),
+        "Char"     to KSBuiltinType("Char"),
+        "List"     to KSBuiltinType("List"),
+        "Map"      to KSBuiltinType("Map"),
+        "Range"    to KSBuiltinType("Range"),
+        "Regex"    to KSBuiltinType("Regex"),
+        "Quantity" to KSBuiltinType("Quantity"),
+        "Nil"      to KSBuiltinType("Nil"),
+        "Any"      to KSBuiltinType("Any"),
+        "Type"     to KSBuiltinType("Type"),
+    )
+
     /** Current enum context for DPEC resolution (set during when subject evaluation). */
     private var currentEnumContext: KSEnum? = null
 
@@ -518,6 +538,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
             }
         }
+
+        // Try as a built-in type (String, Int, Bool, etc.)
+        builtinTypes[name]?.let { return it }
 
         throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
     }
@@ -1314,12 +1337,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSObject -> KSType(value.klass.name)
             is KSStructInstance -> KSType(value.struct.name)
             is KSEnumConstant -> KSType(value.enum.name)
-            is KSClass -> KSType("Class", value.name)
-            is KSStruct -> KSType("Struct", value.name)
-            is KSTrait -> KSType("Trait", value.name)
-            is KSEnum -> KSType("Enum", value.name)
-            is KSFunction -> KSType("Function", value.name)
-            is NativeCallable -> KSType("Function", value.name)
+            is KSClass -> KSType("class ${value.name}")
+            is KSStruct -> KSType("struct ${value.name}")
+            is KSTrait -> KSType("trait ${value.name}")
+            is KSEnum -> KSType("enum ${value.name}")
+            is KSBuiltinType -> KSType("${value.kind} ${value.name}")
+            is KSFunction -> KSType("fun ${value.name}")
+            is NativeCallable -> KSType("fun ${value.name}")
+            is BoundMethod -> KSType("fun ${value.method.name}")
+            is StructBoundMethod -> KSType("fun ${value.method.name}")
+            is KSFunctionCallable -> KSType("fun ${value.function.name}")
             is Range<*> -> KSType("Range")
             is Regex -> KSType("Regex")
             is MatchResult -> KSType("MatchResult")
@@ -1720,6 +1747,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
             is KSStruct -> obj.getStatic(expr.member)
                 ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is KSBuiltinType -> throw MemberNotFoundError(expr.member, obj.name, expr.location)
             is KSEnum -> {
                 // Could be a constant or static member
                 obj.getConstant(expr.member)
@@ -3441,6 +3469,20 @@ class KSType(
     }
 
     override fun hashCode(): Int = 31 * name.hashCode() + (qualifiedName?.hashCode() ?: 0)
+}
+
+/**
+ * Sentinel object representing a built-in KS type (String, Int, Bool, etc.).
+ *
+ * Built-in types are not defined in the user environment the way classes,
+ * structs, and enums are. This class allows them to be resolved as
+ * first-class values so that expressions like `String.type` work.
+ *
+ * @property name The KS type name (e.g. "String", "Int", "Bool")
+ * @property kind The type kind keyword (e.g. "class")
+ */
+class KSBuiltinType(val name: String, val kind: String = "class") {
+    override fun toString(): String = "$kind $name"
 }
 
 // ============================================================================

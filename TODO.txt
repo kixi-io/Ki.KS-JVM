@@ -1,5 +1,3 @@
-0. Create a better way to test KS files.
-1. .rex for string to regex
 2. How to get the type of a variable, literal or class, trait, enum or method.
 3. Add other Core models including Grid, Version and others that make sense.
 4. Add reflection and extensions for use when hostLanguage is set to true.
