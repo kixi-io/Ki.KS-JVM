@@ -759,9 +759,12 @@ class Lexer(private val source: String) {
     private fun scanVersionContinuation() {
         // We've already consumed "major.minor" (e.g., "5.0").
         // Continue consuming ".digits" sequences.
+        // NOTE: We consume only digits here (not underscores via consumeDigits()),
+        // because '_' in versions is the qualifier separator (e.g., 0.2.0_beta),
+        // not a numeric grouping separator.
         while (peek() == '.' && isDigit(peekNext())) {
             advance() // consume '.'
-            consumeDigits()
+            while (isDigit(peek())) advance()
         }
 
         // Check for optional qualifier: _alpha, _beta, _rc1, _beta_2, etc.
