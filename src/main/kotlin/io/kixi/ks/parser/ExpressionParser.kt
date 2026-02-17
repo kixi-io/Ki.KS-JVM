@@ -51,7 +51,7 @@ class ExpressionParser(internal val p: Parser) {
      *     arr[0] -= 2     MINUS_ASSIGN
      *     obj.f **= 3     POWER_ASSIGN
      *
-     * Assignment is right-associative: `a = b = c` â†’ `a = (b = c)`.
+     * Assignment is right-associative: `a = b = c` → `a = (b = c)`.
      * The left side must be a valid target: [IdentifierExpr], [MemberAccessExpr],
      * or [IndexExpr].
      */
@@ -331,7 +331,7 @@ class ExpressionParser(internal val p: Parser) {
     // 12. Exponentiation: ** (right-associative)
     // ====================================================================
 
-    /** Right-associative: `2**3**4` â†’ `2**(3**4)`. */
+    /** Right-associative: `2**3**4` → `2**(3**4)`. */
     private fun parsePower(): Expr {
         val base = parseUnaryPrefix()
         if (p.match(STAR_STAR)) {
@@ -358,7 +358,7 @@ class ExpressionParser(internal val p: Parser) {
                 val operand = parseUnaryPrefix()
                 UnaryExpr(UnaryOp.NOT, operand, prefix = true, loc)
             }
-            // !! in prefix position is double logical NOT: !!true â†’ !(!true)
+            // !! in prefix position is double logical NOT: !!true → !(!true)
             // (In postfix position it remains the non-null assertion operator)
             p.match(BANG_BANG) -> {
                 val operand = parseUnaryPrefix()
@@ -463,7 +463,7 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     /**
-     * Parse a primary expression â€” the atoms of the expression grammar.
+     * Parse a primary expression — the atoms of the expression grammar.
      *
      * Handles: literals, identifiers, `this`, grouping `(expr)`, collections
      * `[...]`, DPEC `.NAME`, quantities (`23cm`, `$50.25`), open-left ranges
@@ -481,12 +481,12 @@ class ExpressionParser(internal val p: Parser) {
             DEC_LITERAL    -> { val t = p.advance(); LiteralExpr(t.literal, LiteralKind.DEC, t.location) }
 
             // --- Quantity literals ---
-            // Unit quantities: 23cm, 51.4mÂ³, 1000kg, 25Â°C, 97â„“, 100USD, 5.5e(-7)m
+            // Unit quantities: 23cm, 51.4m³, 1000kg, 25°C, 97ℓ, 100USD, 5.5e(-7)m
             QUANTITY_LITERAL -> {
                 val t = p.advance()
                 LiteralExpr(t.literal, LiteralKind.QUANTITY, t.location)
             }
-            // Currency quantities with prefix notation: $23.53, â‚¬50.25, Â¥10000, Â£75.50
+            // Currency quantities with prefix notation: $23.53, €50.25, ¥10000, £75.50
             CURRENCY_QUANTITY_LITERAL -> {
                 val t = p.advance()
                 LiteralExpr(t.literal, LiteralKind.CURRENCY_QUANTITY, t.location)
@@ -564,11 +564,15 @@ class ExpressionParser(internal val p: Parser) {
             TRY  -> parseTryExpr()
             LANG -> parseLangBlock()
 
-            // --- DPEC: .NAME (Dot-Prefixed Enum Constant) ---
+            // --- Dot-prefixed: DPEC (.NAME) or Ki literals (.grid, .coordinate) ---
             DOT -> {
                 p.advance() // consume .
-                val name = p.expectIdentifier("Expected enum constant name after '.'")
-                DPECExpr(name, loc)
+                val name = p.expectIdentifier("Expected name after '.'")
+                when (name) {
+                    "grid" -> parseGridLiteral(loc)
+                    "coordinate" -> parseCoordinateLiteral(loc)
+                    else -> DPECExpr(name, loc)
+                }
             }
 
             // --- Open-left range: _..x or _<..x ---
@@ -636,12 +640,12 @@ class ExpressionParser(internal val p: Parser) {
             if (text[i] == '$' && i + 1 < text.length) {
                 val next = text[i + 1]
                 when {
-                    // ${expr} â€” complex interpolation
+                    // ${expr} — complex interpolation
                     next == '{' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val closeIdx = findMatchingBrace(text, i + 2)
                         if (closeIdx == -1) {
-                            // Malformed â€” treat rest as literal
+                            // Malformed — treat rest as literal
                             sb.append(text.substring(i))
                             i = text.length
                         } else {
@@ -651,7 +655,7 @@ class ExpressionParser(internal val p: Parser) {
                             i = closeIdx + 1
                         }
                     }
-                    // $identifier â€” simple interpolation
+                    // $identifier — simple interpolation
                     next.isLetter() || next == '_' -> {
                         if (sb.isNotEmpty()) { parts.add(LiteralPart(sb.toString())); sb.clear() }
                         val start = i + 1
@@ -662,7 +666,7 @@ class ExpressionParser(internal val p: Parser) {
                         i = end
                     }
                     else -> {
-                        // $ followed by something unexpected â€” treat as literal $
+                        // $ followed by something unexpected — treat as literal $
                         sb.append('$')
                         i++
                     }
@@ -738,7 +742,7 @@ class ExpressionParser(internal val p: Parser) {
         val elseBranch = if (p.match(ELSE)) {
             p.skipNewlines()
             if (p.check(IF)) {
-                // else if chain â€” parse as another IfExpr
+                // else if chain — parse as another IfExpr
                 parseIfExpr()
             } else {
                 p.parseSingleOrBlock()
@@ -798,7 +802,7 @@ class ExpressionParser(internal val p: Parser) {
 
         while (!p.check(RBRACE) && !p.isAtEnd()) {
             if (p.check(ELSE)) {
-                // Else branch â€” must be last
+                // Else branch — must be last
                 val elseLoc = p.advance().location
                 p.expect(ARROW, "Expected '->' after 'else' in when")
                 val body = p.parseSingleOrBlock()
@@ -929,7 +933,7 @@ class ExpressionParser(internal val p: Parser) {
             p.expect(LPAREN, "Expected '(' after 'catch'")
 
             if (p.match(STAR)) {
-                // catch(*) â€” wildcard catch-all
+                // catch(*) — wildcard catch-all
                 p.expect(RPAREN, "Expected ')' after '*' in catch")
                 p.skipNewlines()
                 val catchBody = p.parseBlock()
@@ -1081,7 +1085,7 @@ class ExpressionParser(internal val p: Parser) {
      * Parse a comma/newline-separated argument list (inside parentheses).
      *
      * The opening `(` must already be consumed. The closing `)` is NOT
-     * consumed here â€” the caller handles it.
+     * consumed here — the caller handles it.
      *
      * Arguments can be positional or named:
      *     foo(1, 2, 3)
@@ -1112,7 +1116,7 @@ class ExpressionParser(internal val p: Parser) {
     /**
      * Parse a single argument (positional or named).
      *
-     * Named argument: `name = value` â€” disambiguated from assignment by
+     * Named argument: `name = value` — disambiguated from assignment by
      * checking IDENTIFIER followed by single `=` (not `==`).
      */
     private fun parseArgument(): Argument {
@@ -1133,5 +1137,123 @@ class ExpressionParser(internal val p: Parser) {
         // Positional argument
         val value = parseExpression()
         return Argument(null, value, loc)
+    }
+
+    // ====================================================================
+    // Ki Dot-Prefixed Literals: .grid, .coordinate
+    // ====================================================================
+
+    /**
+     * Parse a grid literal after `.grid` has been consumed.
+     *
+     * Syntax:
+     *     .grid(                           // untyped
+     *         1    2    3
+     *         4    5    6
+     *     )
+     *
+     *     .grid<Int>(                      // typed
+     *         10   20   30
+     *         40   50   60
+     *     )
+     *
+     *     .grid(1 2 3; 4 5 6; 7 8 9)      // semicolons separate rows
+     *
+     * Rows are separated by newlines or semicolons. Values within a row
+     * are space-separated (commas optional, KD-style). All rows must
+     * have the same number of values.
+     */
+    private fun parseGridLiteral(loc: io.kixi.ks.SourceLocation): GridLiteralExpr {
+        // Optional type parameter: <Type>
+        val typeParam = if (p.check(LESS)) {
+            p.advance() // consume <
+            val typeRef = p.types.parseTypeRef()
+            p.expect(GREATER, "Expected '>' after grid type parameter")
+            typeRef
+        } else {
+            null
+        }
+
+        p.expect(LPAREN, "Expected '(' after .grid${if (typeParam != null) "<${typeParam.name}>" else ""}")
+
+        val rows = mutableListOf<List<Expr>>()
+
+        // Skip leading separators (newlines/semicolons) inside the parens
+        p.skipSeparators()
+
+        // Parse rows until closing paren
+        while (!p.check(RPAREN) && !p.isAtEnd()) {
+            val row = parseGridRow()
+            if (row.isNotEmpty()) {
+                rows.add(row)
+            }
+            // Rows separated by newlines or semicolons
+            p.skipSeparators()
+        }
+
+        p.expect(RPAREN, "Expected ')' to close grid literal")
+
+        return GridLiteralExpr(typeParam, rows, loc)
+    }
+
+    /**
+     * Parse a single row of grid values.
+     *
+     * Values are space-separated (commas optional). A row ends at a
+     * newline, semicolon, or closing paren.
+     */
+    private fun parseGridRow(): List<Expr> {
+        val values = mutableListOf<Expr>()
+
+        while (!isGridRowBoundary() && !p.isAtEnd()) {
+            if (!p.canStartExpression()) break
+            values.add(parseExpression())
+            p.match(COMMA) // optional comma between values
+        }
+
+        return values
+    }
+
+    /**
+     * Check if the current token marks the end of a grid row.
+     *
+     * Rows end at: newline, semicolon, closing paren, or EOF.
+     */
+    private fun isGridRowBoundary(): Boolean {
+        val type = p.peek().type
+        return type == NEWLINE || type == SEMICOLON || type == RPAREN || type == EOF
+    }
+
+    /**
+     * Parse a coordinate literal after `.coordinate` has been consumed.
+     *
+     * Syntax:
+     *     .coordinate(x=0, y=0)               // standard notation
+     *     .coordinate(x=4, y=7)
+     *     .coordinate(x=0, y=0, z=5)          // with optional z
+     *     .coordinate(c="A", r=1)             // sheet notation
+     *     .coordinate(c="E", r=8)
+     *     .coordinate(c="AA", r=100, z=5)
+     *
+     * All arguments must be named. Commas are optional.
+     */
+    private fun parseCoordinateLiteral(loc: io.kixi.ks.SourceLocation): CoordinateLiteralExpr {
+        p.expect(LPAREN, "Expected '(' after .coordinate")
+
+        val args = parseArgumentList()
+
+        p.expect(RPAREN, "Expected ')' to close coordinate literal")
+
+        // Validate that all arguments are named
+        for (arg in args) {
+            if (arg.name == null) {
+                p.errorAt(
+                    p.previous(),
+                    "Coordinate arguments must be named (e.g., x=0, y=0 or c=\"A\", r=1)"
+                )
+            }
+        }
+
+        return CoordinateLiteralExpr(args, loc)
     }
 }

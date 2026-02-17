@@ -4,7 +4,7 @@ import io.kixi.ks.SourceLocation
 
 /*
  * ============================================================================
- * KS Language ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Abstract Syntax Tree
+ * KS Language — Abstract Syntax Tree
  * ============================================================================
  *
  * Sealed hierarchy enabling exhaustive pattern matching in Kotlin `when`.
@@ -188,7 +188,7 @@ data class StaticBlock(
 ) : Decl
 
 /**
- * Type extension (future-proofed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â syntax TBD).
+ * Type extension (future-proofed — syntax TBD).
  *
  *     extend trait Comparable
  *     extend String { fun isPalindrome(): Bool = ... }
@@ -252,12 +252,12 @@ data class SayStmt(
 ) : Stmt
 
 /**
- * For loop ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â two forms:
+ * For loop — two forms:
  *
- * Traditional:  `for i in list { ... }`   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ variable = "i"
- * Simplified:   `for list { ... }`        ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ variable = null (uses implicit `it`)
- *               `for list say it`         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ single-statement body
- *               `for Color { say it }`    ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ enum iteration
+ * Traditional:  `for i in list { ... }`   → variable = "i"
+ * Simplified:   `for list { ... }`        → variable = null (uses implicit `it`)
+ *               `for list say it`         → single-statement body
+ *               `for Color { say it }`    → enum iteration
  */
 data class ForStmt(
     val variable: String?,          // null for simplified (implicit `it`)
@@ -311,7 +311,7 @@ enum class LiteralKind {
  *
  * The parser splits the raw string into alternating literal text segments
  * and embedded expression segments. Verbatim and backtick strings are never
- * templates ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â they always become plain [LiteralExpr].
+ * templates — they always become plain [LiteralExpr].
  */
 data class StringTemplateExpr(
     val parts: List<StringPart>,
@@ -507,7 +507,7 @@ data class RangeExpr(
 ) : Expr
 
 /**
- * If expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â returns a value (like Kotlin).
+ * If expression — returns a value (like Kotlin).
  *
  *     if condition { thenBlock }
  *     if condition { thenBlock } else { elseBlock }
@@ -521,7 +521,7 @@ data class IfExpr(
 ) : Expr
 
 /**
- * When expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Kotlin-style exhaustive branching.
+ * When expression — Kotlin-style exhaustive branching.
  *
  *     when subject { matchers -> body; else -> body }
  *     when { condition -> body }                      // no subject
@@ -533,7 +533,7 @@ data class WhenExpr(
 ) : Expr
 
 /**
- * Try expression ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â returns the value of the body or catch block.
+ * Try expression — returns the value of the body or catch block.
  *
  *     try { expr } catch(e: Type) { handler } finally { cleanup }
  *     try { expr } catch(*) { handler }
@@ -627,6 +627,53 @@ data class ReflectionExpr(
     override val location: SourceLocation
 ) : Expr
 
+/**
+ * Grid literal: `.grid(...)` or `.grid<Type>(...)`
+ *
+ * Grids are two-dimensional arrays of values using Ki's dot-prefixed
+ * literal syntax. Values within a row are space-separated (commas optional).
+ * Rows are separated by newlines or semicolons.
+ *
+ *     .grid(
+ *         1    2    3
+ *         4    5    6
+ *         7    8    9
+ *     )
+ *
+ *     .grid<Int>(
+ *         10   20   30
+ *         40   50   60
+ *     )
+ *
+ *     .grid(1 2 3; 4 5 6; 7 8 9)    // semicolons separate rows
+ *
+ * The [typeParam] is null for untyped grids. When present, the interpreter
+ * verifies that all values conform to the specified type.
+ *
+ * @see io.kixi.Grid
+ */
+data class GridLiteralExpr(
+    val typeParam: TypeRef?,        // null for untyped grids
+    val rows: List<List<Expr>>,     // each inner list is one row of values
+    override val location: SourceLocation
+) : Expr
+
+/**
+ * Coordinate literal: `.coordinate(x=0, y=0)` or `.coordinate(c="A", r=1)`
+ *
+ * Coordinates support two addressing styles:
+ * - **Standard notation**: `.coordinate(x=0, y=0)` or `.coordinate(x=0, y=0, z=5)`
+ * - **Sheet notation**: `.coordinate(c="A", r=1)` or `.coordinate(c="AA", r=100, z=5)`
+ *
+ * Uses named arguments to distinguish between the two styles.
+ *
+ * @see io.kixi.Coordinate
+ */
+data class CoordinateLiteralExpr(
+    val arguments: List<Argument>,  // named args: x, y, z or c, r, z
+    override val location: SourceLocation
+) : Expr
+
 // ============================================================================
 // 6. Supporting Types
 // ============================================================================
@@ -650,7 +697,7 @@ data class Parameter(
 )
 
 /**
- * Primary constructor parameter ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â may declare a property with var/let.
+ * Primary constructor parameter — may declare a property with var/let.
  *
  *     let name: String                immutable property
  *     var age: Int = 0                mutable property with default
@@ -669,7 +716,7 @@ data class ConstructorParam(
 enum class BindingType { VAR, LET }
 
 /**
- * Call argument ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â positional or named.
+ * Call argument — positional or named.
  *
  *     42                   positional (name = null)
  *     color = "purple"     named
@@ -706,8 +753,8 @@ data class EnumConstant(
  *     String?              nullable
  *     List<Int>            generic
  *     Map<String, Any?>    multi-param generic
- *     [Int]                list shorthand ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ List<Int>
- *     [String:Int]         map shorthand  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Map<String, Int>
+ *     [Int]                list shorthand → List<Int>
+ *     [String:Int]         map shorthand  → Map<String, Int>
  *     (Int, Int) -> Int    function type (future)
  */
 data class TypeRef(
@@ -717,11 +764,11 @@ data class TypeRef(
     val location: SourceLocation = SourceLocation()
 ) {
     companion object {
-        /** `[Int]` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `List<Int>` */
+        /** `[Int]` → `List<Int>` */
         fun listOf(element: TypeRef, loc: SourceLocation) =
             TypeRef("List", listOf(element), false, loc)
 
-        /** `[String:Int]` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `Map<String, Int>` */
+        /** `[String:Int]` → `Map<String, Int>` */
         fun mapOf(key: TypeRef, value: TypeRef, loc: SourceLocation) =
             TypeRef("Map", listOf(key, value), false, loc)
     }
@@ -730,7 +777,7 @@ data class TypeRef(
 // --- When Branches & Matchers ---
 
 /**
- * A branch in a when expression: matchers ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ body.
+ * A branch in a when expression: matchers → body.
  *
  *     in 90..100 -> say "A"
  *     .SUCCESS, .WARNING -> "Good or warning"
@@ -822,7 +869,7 @@ data class ComparisonConstraint(
 
 enum class ComparisonOp { GT, LT, GTE, LTE, NEQ }
 
-/** `1..100`, `0.0..<1.0` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a range expression as constraint */
+/** `1..100`, `0.0..<1.0` — a range expression as constraint */
 data class RangeConstraint(
     val range: Expr,                // should be a RangeExpr
     override val location: SourceLocation

@@ -2,6 +2,8 @@ package io.kixi.ks.interp
 
 import io.kixi.Range
 import io.kixi.Version
+import io.kixi.Grid
+import io.kixi.Coordinate
 import io.kixi.ks.*
 import io.kixi.ks.ext.toList as rangeToList
 import io.kixi.ks.ext.asSequence as rangeAsSequence
@@ -88,6 +90,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         "Regex"    to KSBuiltinType("Regex"),
         "Quantity" to KSBuiltinType("Quantity"),
         "Version"  to KSBuiltinType("Version"),
+        "Grid"     to KSBuiltinType("Grid"),
+        "Coordinate" to KSBuiltinType("Coordinate"),
         "Nil"      to KSBuiltinType("Nil"),
         "Any"      to KSBuiltinType("Any"),
         "Type"     to KSBuiltinType("Type"),
@@ -205,6 +209,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is InCheckExpr -> evaluateInCheck(node)
             is MatchesExpr -> evaluateMatches(node)
             is RangeExpr -> evaluateRange(node)
+
+            // --- Expressions: Ki Literals ---
+            is GridLiteralExpr -> evaluateGridLiteral(node)
+            is CoordinateLiteralExpr -> evaluateCoordinateLiteral(node)
 
             // --- Expressions: Special ---
             is LangBlockExpr -> evaluateLangBlock(node)
@@ -1351,6 +1359,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is StructBoundMethod -> KSType("fun ${value.method.name}")
             is KSFunctionCallable -> KSType("fun ${value.function.name}")
             is Range<*> -> KSType("Range")
+            is Grid<*> -> KSType("Grid")
+            is Coordinate -> KSType("Coordinate")
             is Regex -> KSType("Regex")
             is MatchResult -> KSType("MatchResult")
             is KDTag -> KSType("KDTag")
@@ -1758,6 +1768,112 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     // ========================================================================
+    // Grid & Coordinate Literals
+    // ========================================================================
+
+    /**
+     * Evaluate a grid literal expression.
+     *
+     * Creates a [Grid] from the parsed rows of values. All rows must have
+     * the same number of values; otherwise a RuntimeError is thrown.
+     *
+     * Untyped grids use `Grid.ofNulls<Any?>` and can contain mixed types.
+     * Typed grids validate that all non-null values conform to the type parameter.
+     *
+     *     .grid(1 2 3; 4 5 6)             → Grid<Any?>(3, 2)
+     *     .grid<Int>(10 20 30; 40 50 60)  → Grid<Any?>(3, 2) with Int validation
+     */
+    private fun evaluateGridLiteral(expr: GridLiteralExpr): Any {
+        if (expr.rows.isEmpty()) {
+            return Grid.ofNulls<Any?>(0, 0)
+        }
+
+        // Evaluate all values
+        val evaluatedRows = expr.rows.map { row ->
+            row.map { evaluate(it) }
+        }
+
+        // Validate all rows have the same width
+        val width = evaluatedRows[0].size
+        for ((i, row) in evaluatedRows.withIndex()) {
+            if (row.size != width) {
+                throw RuntimeError(
+                    "Grid row ${i + 1} has ${row.size} values, expected $width " +
+                            "(all rows must have the same number of values)",
+                    expr.location
+                )
+            }
+        }
+
+        val height = evaluatedRows.size
+
+        // Create the grid and populate it
+        val grid = Grid.ofNulls<Any?>(width, height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                grid[x, y] = evaluatedRows[y][x]
+            }
+        }
+
+        return grid
+    }
+
+    /**
+     * Evaluate a coordinate literal expression.
+     *
+     * Supports two addressing styles:
+     *
+     * Standard notation (zero-based):
+     *     .coordinate(x=0, y=0)
+     *     .coordinate(x=4, y=7)
+     *     .coordinate(x=0, y=0, z=5)
+     *
+     * Sheet notation (letter column, one-based row):
+     *     .coordinate(c="A", r=1)
+     *     .coordinate(c="E", r=8)
+     *     .coordinate(c="AA", r=100, z=5)
+     *
+     * The notation is detected by checking whether the arguments contain
+     * "x"/"y" (standard) or "c"/"r" (sheet).
+     */
+    private fun evaluateCoordinateLiteral(expr: CoordinateLiteralExpr): Any {
+        val argMap = mutableMapOf<String, Any?>()
+        for (arg in expr.arguments) {
+            val name = arg.name ?: throw RuntimeError(
+                "Coordinate arguments must be named (e.g., x=0, y=0 or c=\"A\", r=1)",
+                expr.location
+            )
+            argMap[name] = evaluate(arg.value)
+        }
+
+        val z = argMap["z"]?.let { toInt(it, expr.location) }
+
+        return when {
+            // Standard notation: x, y (, z)
+            "x" in argMap && "y" in argMap -> {
+                val x = toInt(argMap["x"]!!, expr.location)
+                val y = toInt(argMap["y"]!!, expr.location)
+                if (z != null) Coordinate.standard(x, y, z)
+                else Coordinate.standard(x, y)
+            }
+
+            // Sheet notation: c, r (, z)
+            "c" in argMap && "r" in argMap -> {
+                val c = argMap["c"]?.toString()
+                    ?: throw RuntimeError("Coordinate column 'c' cannot be nil", expr.location)
+                val r = toInt(argMap["r"]!!, expr.location)
+                if (z != null) Coordinate.sheet(c, r, z)
+                else Coordinate.sheet(c, r)
+            }
+
+            else -> throw RuntimeError(
+                "Coordinate requires either (x=, y=) for standard or (c=, r=) for sheet notation",
+                expr.location
+            )
+        }
+    }
+
+    // ========================================================================
     // Member & Index Access
     // ========================================================================
 
@@ -1806,6 +1922,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Range<*> -> getRangeMember(obj, expr.member, expr.location)
             is Quantity<*> -> getQuantityMember(obj, expr.member, expr.location)
             is Version -> getVersionMember(obj, expr.member, expr.location)
+            is Grid<*> -> getGridMember(obj, expr.member, expr.location)
+            is Coordinate -> getCoordinateMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
             is Regex -> getRegexMember(obj, expr.member, expr.location)
@@ -1818,9 +1936,26 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val obj = evaluate(expr.obj)
         val indices = expr.indices.map { evaluate(it) }
 
-        // Multi-index: always dispatch to get() method on KSObject
+        // Multi-index: dispatch to get() method or built-in Grid access
         if (indices.size > 1) {
             return when (obj) {
+                is Grid<*> -> {
+                    if (indices.size != 2) {
+                        throw RuntimeError(
+                            "Grid access requires exactly 2 indices (x, y), got ${indices.size}",
+                            expr.location
+                        )
+                    }
+                    val x = toInt(indices[0]!!, expr.location)
+                    val y = toInt(indices[1]!!, expr.location)
+                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
+                        throw RuntimeError(
+                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
+                            expr.location
+                        )
+                    }
+                    obj[x, y]
+                }
                 is KSObject -> {
                     val getMethod = obj.klass.findMethod("get")
                         ?: throw RuntimeError(
@@ -1863,6 +1998,25 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     throw IndexOutOfBoundsError(i, obj.length, expr.location)
                 }
                 obj[i]
+            }
+            is Grid<*> -> {
+                // Grid single-index access with Coordinate: grid[coord]
+                if (index is Coordinate) {
+                    val x = index.x
+                    val y = index.y
+                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
+                        throw RuntimeError(
+                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
+                            expr.location
+                        )
+                    }
+                    obj[x, y]
+                } else {
+                    throw TypeError(
+                        "Grid single-index access requires a Coordinate, got ${index?.let { runtimeTypeName(it) ?: it.javaClass.simpleName } ?: "nil"}",
+                        expr.location
+                    )
+                }
             }
             is KSObject -> {
                 // Desugar obj[index] -> obj.get(index)
@@ -2015,6 +2169,29 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
 
                 // Multi-index on non-KSObject/KSStructInstance is an error
+                // (except for Grid which supports [x, y] = value)
+                if (obj is Grid<*>) {
+                    if (indices.size != 2) {
+                        throw RuntimeError(
+                            "Grid assignment requires exactly 2 indices (x, y), got ${indices.size}",
+                            target.location
+                        )
+                    }
+                    val x = toInt(indices[0]!!, target.location)
+                    val y = toInt(indices[1]!!, target.location)
+                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
+                        throw RuntimeError(
+                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
+                            target.location
+                        )
+                    }
+                    @Suppress("UNCHECKED_CAST")
+                    val grid = obj as Grid<Any?>
+                    val newValue = computeAssignment(expr.operator, { grid[x, y] }, value)
+                    grid[x, y] = newValue
+                    return newValue
+                }
+
                 if (indices.size > 1) {
                     throw TypeError(
                         "Multi-index assignment requires a class with a 'set' method, got ${obj?.javaClass?.simpleName}",
@@ -2050,6 +2227,29 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     }
                     is Map<*, *> -> {
                         throw RuntimeError("Cannot modify immutable map. Use a mutable map.", target.location)
+                    }
+                    is Grid<*> -> {
+                        // Grid single-index assignment with Coordinate: grid[coord] = value
+                        if (index is Coordinate) {
+                            val x = index.x
+                            val y = index.y
+                            if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
+                                throw RuntimeError(
+                                    "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
+                                    target.location
+                                )
+                            }
+                            @Suppress("UNCHECKED_CAST")
+                            val grid = obj as Grid<Any?>
+                            val newValue = computeAssignment(expr.operator, { grid[x, y] }, value)
+                            grid[x, y] = newValue
+                            return newValue
+                        } else {
+                            throw TypeError(
+                                "Grid single-index assignment requires a Coordinate, got ${index?.let { runtimeTypeName(it) ?: it.javaClass.simpleName } ?: "nil"}",
+                                target.location
+                            )
+                        }
                     }
                     null -> throw NullPointerError("Cannot index-assign into nil", target.location)
                     else -> throw TypeError("Cannot index-assign into ${obj::class.simpleName}", target.location)
@@ -2404,6 +2604,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "List" -> value is List<*>
             "Map" -> value is Map<*, *>
             "Range" -> value is Range<*>
+            "Grid" -> value is Grid<*>
+            "Coordinate" -> value is Coordinate
             "Version" -> value is Version
             "Regex" -> value is Regex
             "MatchResult" -> value is MatchResult
@@ -2680,6 +2882,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         is io.kixi.uom.Quantity<*> -> "Quantity"
         is Version -> "Version"
         is Range<*> -> "Range"
+        is Grid<*> -> "Grid"
+        is Coordinate -> "Coordinate"
         is KSFunction -> "Function"
         is NativeCallable -> "Function"
         else -> null
@@ -3008,6 +3212,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSStructInstance -> value.toString()
             is KDTag -> value.toString()
             is KDDocument -> value.toString()
+            is Grid<*> -> stringifyGrid(value)
+            is Coordinate -> value.toString()
             is KSType -> value.toString()
             is Regex -> value.pattern
             is MatchResult -> value.value
@@ -3485,6 +3691,102 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     ?: throw MemberNotFoundError(member, "KDDocument", location)
             }
         }
+    }
+
+    // ========================================================================
+    // Grid Member Access
+    // ========================================================================
+
+    private fun getGridMember(grid: Grid<*>, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "width" -> grid.width
+            "height" -> grid.height
+            "size" -> grid.width * grid.height
+            "isEmpty" -> grid.width == 0 || grid.height == 0
+            "data" -> grid.data.toList()
+            "transpose" -> NativeCallable("transpose") { _, _ -> grid.transpose() }
+            "fill" -> NativeCallable("fill") { args, _ ->
+                @Suppress("UNCHECKED_CAST")
+                (grid as Grid<Any?>).fill(args.firstOrNull())
+                null
+            }
+            "toList" -> NativeCallable("toList") { _, _ -> grid.data.toList() }
+            else -> throw MemberNotFoundError(member, "Grid", location)
+        }
+    }
+
+    // ========================================================================
+    // Coordinate Member Access
+    // ========================================================================
+
+    private fun getCoordinateMember(coord: Coordinate, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            "x" -> coord.x
+            "y" -> coord.y
+            "column" -> coord.column
+            "row" -> coord.row
+            "hasZ" -> coord.hasZ
+            "z" -> coord.z
+            "toSheetNotation" -> NativeCallable("toSheetNotation") { _, _ -> coord.toSheetNotation() }
+            "toStandardNotation" -> NativeCallable("toStandardNotation") { _, _ -> coord.toStandardNotation() }
+            "right" -> NativeCallable("right") { args, loc ->
+                val n = if (args.isNotEmpty()) toInt(args[0]!!, loc) else 1
+                coord.right(n)
+            }
+            "left" -> NativeCallable("left") { args, loc ->
+                val n = if (args.isNotEmpty()) toInt(args[0]!!, loc) else 1
+                coord.left(n)
+            }
+            "up" -> NativeCallable("up") { args, loc ->
+                val n = if (args.isNotEmpty()) toInt(args[0]!!, loc) else 1
+                coord.up(n)
+            }
+            "down" -> NativeCallable("down") { args, loc ->
+                val n = if (args.isNotEmpty()) toInt(args[0]!!, loc) else 1
+                coord.down(n)
+            }
+            else -> throw MemberNotFoundError(member, "Coordinate", location)
+        }
+    }
+
+    // ========================================================================
+    // Grid Stringify
+    // ========================================================================
+
+    /**
+     * Format a Grid as a readable string in Ki literal format.
+     *
+     *     .grid(
+     *         1    2    3
+     *         4    5    6
+     *     )
+     */
+    private fun stringifyGrid(grid: Grid<*>): String {
+        if (grid.width == 0 || grid.height == 0) return ".grid {}"
+
+        // Build string representations of all cells
+        val cellStrings = Array(grid.height) { y ->
+            Array(grid.width) { x ->
+                stringify(grid[x, y])
+            }
+        }
+
+        // Calculate max width for each column for alignment
+        val colWidths = IntArray(grid.width) { x ->
+            (0 until grid.height).maxOf { y -> cellStrings[y][x].length }
+        }
+
+        val sb = StringBuilder(".grid {\n")
+        for (y in 0 until grid.height) {
+            sb.append("    ")
+            for (x in 0 until grid.width) {
+                if (x > 0) sb.append("  ")
+                sb.append(cellStrings[y][x].padStart(colWidths[x]))
+            }
+            sb.append("\n")
+        }
+        sb.append("}")
+        return sb.toString()
     }
 }
 
