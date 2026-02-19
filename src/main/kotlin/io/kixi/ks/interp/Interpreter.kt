@@ -1784,9 +1784,19 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      *     .grid<Int>(10 20 30; 40 50 60)  → Grid<Any?>(3, 2) with Int validation
      */
     private fun evaluateGridLiteral(expr: GridLiteralExpr): Any {
+        // Resolve element type from type parameter if specified
+        val elementType: Class<*>? = expr.typeParam?.let { resolveGridElementType(it, expr.location) }
+        val typeParamNullable = expr.typeParam?.nullable ?: false
+
+        // --- Empty grid ---
         if (expr.rows.isEmpty()) {
-            return Grid.ofNulls<Any?>(0, 0)
+            // For Any / Any? typed grids, store elementType as null so the type isn't displayed
+            val storedType = if (elementType == Any::class.java) null else elementType
+            val nullable = if (storedType == null && elementType == null) true else typeParamNullable
+            return Grid<Any?>(0, 0, emptyArray(), storedType, nullable)
         }
+
+        // --- Non-empty grid ---
 
         // Evaluate all values
         val evaluatedRows = expr.rows.map { row ->
@@ -1807,15 +1817,99 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         val height = evaluatedRows.size
 
-        // Create the grid and populate it
-        val grid = Grid.ofNulls<Any?>(width, height)
+        // Populate the flat data array
+        val data = Array<Any?>(width * height) { null }
+        var hasNull = false
+
         for (y in 0 until height) {
             for (x in 0 until width) {
-                grid[x, y] = evaluatedRows[y][x]
+                val value = evaluatedRows[y][x]
+                data[y * width + x] = value
+                if (value == null) hasNull = true
             }
         }
 
-        return grid
+        // Type validation for typed grids (skip for Any)
+        if (elementType != null && elementType != Any::class.java) {
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val value = data[y * width + x]
+                    if (value != null && !isGridValueCompatible(value, elementType)) {
+                        val actualType = runtimeTypeName(value) ?: value.javaClass.simpleName
+                        val expectedType = gridElementTypeName(elementType)
+                        throw RuntimeError(
+                            "Grid<$expectedType> cannot contain value of type $actualType at [$x, $y]",
+                            expr.location
+                        )
+                    }
+                    if (value == null && !typeParamNullable) {
+                        val expectedType = gridElementTypeName(elementType)
+                        throw RuntimeError(
+                            "Grid<$expectedType> cannot contain nil values (use Grid<$expectedType?> for nullable)",
+                            expr.location
+                        )
+                    }
+                }
+            }
+        }
+
+        // For Any / Any? typed grids, store elementType as null so the type isn't displayed
+        val storedType = if (elementType == Any::class.java) null else elementType
+        val nullable = hasNull || typeParamNullable
+
+        return Grid<Any?>(width, height, data, storedType, nullable)
+    }
+
+    /**
+     * Resolve a grid type parameter name to a JVM class.
+     *
+     * Maps KS type names to their native JVM classes since KS uses
+     * native types directly (no wrapping).
+     */
+    private fun resolveGridElementType(typeRef: TypeRef, location: SourceLocation?): Class<*> {
+        return when (typeRef.name) {
+            "Int" -> Int::class.javaObjectType
+            "Long" -> Long::class.javaObjectType
+            "Float" -> Float::class.javaObjectType
+            "Double" -> Double::class.javaObjectType
+            "Dec" -> java.math.BigDecimal::class.java
+            "String" -> String::class.java
+            "Bool" -> Boolean::class.javaObjectType
+            "Char" -> Char::class.javaObjectType
+            "Number" -> Number::class.java
+            "Any" -> Any::class.java
+            else -> throw RuntimeError(
+                "Unknown grid element type '${typeRef.name}'",
+                location,
+                suggestion = "Supported types: Int, Long, Float, Double, Dec, String, Bool, Char, Number, Any"
+            )
+        }
+    }
+
+    /**
+     * Check if a runtime value is compatible with the expected grid element type.
+     */
+    private fun isGridValueCompatible(value: Any, expectedType: Class<*>): Boolean {
+        if (expectedType == Any::class.java) return true
+        if (expectedType == Number::class.java) return value is Number
+        return expectedType.isInstance(value)
+    }
+
+    /**
+     * Map a JVM class back to a KS type name for error messages.
+     */
+    private fun gridElementTypeName(type: Class<*>): String = when (type) {
+        Int::class.java, java.lang.Integer::class.java -> "Int"
+        Long::class.java, java.lang.Long::class.java -> "Long"
+        Float::class.java, java.lang.Float::class.java -> "Float"
+        Double::class.java, java.lang.Double::class.java -> "Double"
+        java.math.BigDecimal::class.java -> "Dec"
+        String::class.java -> "String"
+        Boolean::class.java, java.lang.Boolean::class.java -> "Bool"
+        Char::class.java, java.lang.Character::class.java -> "Char"
+        Number::class.java -> "Number"
+        Any::class.java -> "Any"
+        else -> type.simpleName
     }
 
     /**
@@ -3762,9 +3856,22 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      *     )
      */
     private fun stringifyGrid(grid: Grid<*>): String {
-        if (grid.width == 0 || grid.height == 0) return ".grid {}"
+        // Build type annotation string
+        // Show type when elementType is set (and not Any — Any/Any? grids don't display the type)
+        val typeStr = if (grid.elementType != null && grid.elementType != Any::class.java) {
+            val typeName = gridElementTypeName(grid.elementType!!)
+            val nullSuffix = if (grid.elementNullable) "?" else ""
+            "<$typeName$nullSuffix>"
+        } else {
+            ""
+        }
 
-        // Build string representations of all cells
+        // Empty grid: .grid() or .grid<Int>()
+        if (grid.width == 0 || grid.height == 0) {
+            return ".grid$typeStr()"
+        }
+
+        // Non-empty grid: .grid { ... } or .grid<Int> { ... }
         val cellStrings = Array(grid.height) { y ->
             Array(grid.width) { x ->
                 stringify(grid[x, y])
@@ -3776,7 +3883,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             (0 until grid.height).maxOf { y -> cellStrings[y][x].length }
         }
 
-        val sb = StringBuilder(".grid {\n")
+        val sb = StringBuilder(".grid$typeStr {\n")
         for (y in 0 until grid.height) {
             sb.append("    ")
             for (x in 0 until grid.width) {
