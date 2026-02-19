@@ -1,4 +1,4 @@
-3. Add other Core models including Grid and others that make sense.
+3. Grid: Add useful functions and properies. Add sheet style access (i.e. ["A", 3])
 4. Add reflection and extensions for use when hostLanguage is set to true.
 5. Work on the core library. Keep it light for now.
 6. Discuss memory classes versus byte code classes with Claude.
@@ -11,4 +11,4 @@
 13. Add namespace (or space) similar to C#.
 14. Take the first step with compiling "hello world" in JVM byte code.
 15. Write a ClearWell style mini IDE for KS.
-16. Address the sinvarbgle root issues for KD blocks. See KD docs for review.
+16. Address the single root issues for KD blocks. See KD docs for review.
