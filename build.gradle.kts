@@ -67,6 +67,12 @@ tasks.test {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    testLogging {
+        showStandardStreams = true
+    }
+}
+
 // ============================================================================
 // Run Configuration - also outside plugins block!
 // ============================================================================

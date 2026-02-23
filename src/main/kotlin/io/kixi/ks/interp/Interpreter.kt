@@ -7,6 +7,8 @@ import io.kixi.Coordinate
 import io.kixi.Blob
 import io.kixi.NSID
 import io.kixi.Call
+import io.kixi.Email
+import io.kixi.GeoPoint
 import io.kixi.kd.Tag as KiTag
 import io.kixi.ks.*
 import io.kixi.ks.ext.toList as rangeToList
@@ -1380,6 +1382,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KiTag -> KSType("Tag")
             is Call -> KSType("Call")
             is Currency -> KSType("Currency")
+            is Email -> KSType("Email")
+            is GeoPoint -> KSType("GeoPoint")
             is Regex -> KSType("Regex")
             is MatchResult -> KSType("MatchResult")
             is KDTag -> KSType("KDTag")
@@ -2041,6 +2045,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Grid<*> -> getGridMember(obj, expr.member, expr.location)
             is Coordinate -> getCoordinateMember(obj, expr.member, expr.location)
             is Currency -> nativeTypes.getCurrencyMember(obj, expr.member, expr.location)
+            is Email -> nativeTypes.getEmailMember(obj, expr.member, expr.location)
+            is GeoPoint -> nativeTypes.getGeoPointMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
             is Regex -> getRegexMember(obj, expr.member, expr.location)
@@ -2761,6 +2767,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "Call" -> value is Call  // includes Tag (Tag extends Call)
             "Tag" -> value is KiTag
             "Currency" -> value is Currency
+            "Email" -> value is Email
+            "GeoPoint" -> value is GeoPoint
             "Version" -> value is Version
             "Regex" -> value is Regex
             "MatchResult" -> value is MatchResult
@@ -3044,6 +3052,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         is KiTag -> "Tag"
         is Call -> "Call"
         is Currency -> "Currency"
+        is Email -> "Email"
+        is GeoPoint -> "GeoPoint"
         is Regex -> "Regex"
         is MatchResult -> "MatchResult"
         is KSFunction -> "Function"

@@ -1,7 +1,6 @@
 3. Grid: Add useful functions and properies. Add sheet style access (i.e. ["A", 3])
 4. Add reflection and extensions for use when hostLanguage is set to true.
 5. Work on the core library. Keep it light for now.
-6. Discuss memory classes versus byte code classes with Claude.
 7. Check on the "use" statement for imports.
 8. Infix methods
 9. Add higher-order functions like map, filter, fold, let, apply

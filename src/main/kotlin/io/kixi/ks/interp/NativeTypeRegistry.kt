@@ -9,6 +9,7 @@ import io.kixi.uom.Currency
 import io.kixi.ks.RuntimeError
 import io.kixi.uom.Quantity
 import io.kixi.uom.Unit as KiUnit
+import java.math.BigDecimal as Dec
 
 /**
  * Registry for native Ki.Core and Ki.KD types exposed to the KS language.
@@ -71,6 +72,8 @@ class NativeTypeRegistry {
         "NSID" -> value is NSID
         "Call" -> value is Call
         "Tag" -> value is Tag
+        "Email" -> value is Email
+        "GeoPoint" -> value is GeoPoint
         else -> false
     }
 
@@ -88,6 +91,8 @@ class NativeTypeRegistry {
         "Quantity" -> quantityType()
         "Range" -> rangeType()
         "Coordinate" -> coordinateType()
+        "Email" -> emailType()
+        "GeoPoint" -> geoPointType()
         else -> null
     }
 
@@ -491,6 +496,123 @@ class NativeTypeRegistry {
     )
 
     // ========================================================================
+    // Email
+    // ========================================================================
+
+    private fun emailType() = NativeTypeConstructor("Email",
+        construct = { args, loc ->
+            when {
+                args.size == 1 && args[0] is String -> Email.of(args[0] as String)
+                args.size == 2 && args[0] is String && args[1] is String ->
+                    Email.of(args[0] as String, args[1] as String)
+                else -> throw RuntimeError(
+                    "Email() expects (address) or (localPart, domain)", loc
+                )
+            }
+        },
+        statics = mapOf(
+            "of" to NativeCallable("of") { args, loc ->
+                when {
+                    args.size == 1 && args[0] is String -> Email.of(args[0] as String)
+                    args.size == 2 && args[0] is String && args[1] is String ->
+                        Email.of(args[0] as String, args[1] as String)
+                    else -> throw RuntimeError(
+                        "Email.of() expects (address) or (localPart, domain)", loc
+                    )
+                }
+            },
+            "ofOrNull" to NativeCallable("ofOrNull") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("Email.ofOrNull() requires a String argument", loc)
+                Email.ofOrNull(args[0] as String)
+            },
+            "isValid" to NativeCallable("isValid") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("Email.isValid() requires a String argument", loc)
+                Email.isValid(args[0] as String)
+            },
+            "isLiteral" to NativeCallable("isLiteral") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("Email.isLiteral() requires a String argument", loc)
+                Email.isLiteral(args[0] as String)
+            },
+            "parseLiteral" to NativeCallable("parseLiteral") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("Email.parseLiteral() requires a String argument", loc)
+                Email.parseLiteral(args[0] as String)
+            }
+        )
+    )
+
+    // ========================================================================
+    // GeoPoint
+    // ========================================================================
+
+    private fun geoPointType() = NativeTypeConstructor("GeoPoint",
+        construct = { args, loc ->
+            when {
+                args.size == 2 -> {
+                    val lat = toDoubleArg(args[0], "latitude", loc)
+                    val lon = toDoubleArg(args[1], "longitude", loc)
+                    GeoPoint.of(lat, lon)
+                }
+                args.size == 3 -> {
+                    val lat = toDoubleArg(args[0], "latitude", loc)
+                    val lon = toDoubleArg(args[1], "longitude", loc)
+                    val alt = toDoubleArg(args[2], "altitude", loc)
+                    GeoPoint.of(lat, lon, alt)
+                }
+                else -> throw RuntimeError(
+                    "GeoPoint() expects (latitude, longitude) or (latitude, longitude, altitude)", loc
+                )
+            }
+        },
+        statics = mapOf(
+            "of" to NativeCallable("of") { args, loc ->
+                when (args.size) {
+                    2 -> GeoPoint.of(
+                        toDoubleArg(args[0], "latitude", loc),
+                        toDoubleArg(args[1], "longitude", loc)
+                    )
+                    3 -> GeoPoint.of(
+                        toDoubleArg(args[0], "latitude", loc),
+                        toDoubleArg(args[1], "longitude", loc),
+                        toDoubleArg(args[2], "altitude", loc)
+                    )
+                    else -> throw RuntimeError(
+                        "GeoPoint.of() expects 2 or 3 arguments", loc
+                    )
+                }
+            },
+            "parse" to NativeCallable("parse") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("GeoPoint.parse() requires a String argument", loc)
+                GeoPoint.parse(args[0] as String)
+            },
+            "isLiteral" to NativeCallable("isLiteral") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("GeoPoint.isLiteral() requires a String argument", loc)
+                GeoPoint.isLiteral(args[0] as String)
+            },
+            "center" to NativeCallable("center") { args, loc ->
+                if (args.isEmpty() || args[0] !is List<*>)
+                    throw RuntimeError("GeoPoint.center() requires a List of GeoPoints", loc)
+                @Suppress("UNCHECKED_CAST")
+                val points = (args[0] as List<*>).map {
+                    it as? GeoPoint ?: throw RuntimeError(
+                        "GeoPoint.center() list must contain only GeoPoints", loc
+                    )
+                }
+                GeoPoint.center(points)
+            },
+            "ORIGIN" to GeoPoint.ORIGIN,
+            "NORTH_POLE" to GeoPoint.NORTH_POLE,
+            "SOUTH_POLE" to GeoPoint.SOUTH_POLE,
+            "DEFAULT_PRECISION" to GeoPoint.DEFAULT_PRECISION
+        )
+    )
+
+    // ========================================================================
     // Instance Member Access
     // ========================================================================
 
@@ -742,6 +864,117 @@ class NativeTypeRegistry {
     }
 
     // ========================================================================
+    // Email Members
+    // ========================================================================
+
+    /**
+     * Access members on an [Email] instance.
+     *
+     * Properties: `address`, `localPart`, `domain`, `tld`, `hasTag`, `tag`,
+     *             `baseLocalPart`
+     * Methods: `withoutTag()`, `withTag(tag)`, `equalsIgnoreDomainCase(other)`
+     */
+    fun getEmailMember(email: Email, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            // Properties
+            "address" -> email.address
+            "localPart" -> email.localPart
+            "domain" -> email.domain
+            "tld" -> email.tld
+            "hasTag" -> email.hasTag
+            "tag" -> email.tag
+            "baseLocalPart" -> email.baseLocalPart
+
+            // Methods
+            "withoutTag" -> NativeCallable("withoutTag") { _, _ -> email.withoutTag() }
+            "withTag" -> NativeCallable("withTag") { args, loc ->
+                if (args.isEmpty() || args[0] !is String)
+                    throw RuntimeError("Email.withTag() requires a String argument", loc)
+                email.withTag(args[0] as String)
+            }
+            "equalsIgnoreDomainCase" -> NativeCallable("equalsIgnoreDomainCase") { args, loc ->
+                if (args.isEmpty() || args[0] !is Email)
+                    throw RuntimeError("Email.equalsIgnoreDomainCase() requires an Email argument", loc)
+                email.equalsIgnoreDomainCase(args[0] as Email)
+            }
+
+            else -> throw MemberNotFoundError(member, "Email", location)
+        }
+    }
+
+    // ========================================================================
+    // GeoPoint Members
+    // ========================================================================
+
+    /**
+     * Access members on a [GeoPoint] instance.
+     *
+     * Properties: `latitude`, `longitude`, `altitude`, `lat`, `lon`, `alt`,
+     *             `hasAltitude`, `isOrigin`, `isNorthern`, `isSouthern`,
+     *             `isEastern`, `isWestern`
+     * Methods: `distanceTo(other)`, `bearingTo(other)`,
+     *          `destination(distanceKm, bearing)`, `withAltitude(meters)`,
+     *          `withoutAltitude()`, `toDecimalDegrees()`, `toDMS()`,
+     *          `toCompactString()`
+     */
+    fun getGeoPointMember(geoPoint: GeoPoint, member: String, location: SourceLocation?): Any? {
+        return when (member) {
+            // Properties
+            "latitude" -> geoPoint.latitude
+            "longitude" -> geoPoint.longitude
+            "altitude" -> geoPoint.altitude
+            "lat" -> geoPoint.lat
+            "lon" -> geoPoint.lon
+            "alt" -> geoPoint.alt
+            "hasAltitude" -> geoPoint.hasAltitude
+            "isOrigin" -> geoPoint.isOrigin
+            "isNorthern" -> geoPoint.isNorthern
+            "isSouthern" -> geoPoint.isSouthern
+            "isEastern" -> geoPoint.isEastern
+            "isWestern" -> geoPoint.isWestern
+
+            // Methods
+            "distanceTo" -> NativeCallable("distanceTo") { args, loc ->
+                if (args.isEmpty() || args[0] !is GeoPoint)
+                    throw RuntimeError("GeoPoint.distanceTo() requires a GeoPoint argument", loc)
+                geoPoint.distanceTo(args[0] as GeoPoint)
+            }
+            "bearingTo" -> NativeCallable("bearingTo") { args, loc ->
+                if (args.isEmpty() || args[0] !is GeoPoint)
+                    throw RuntimeError("GeoPoint.bearingTo() requires a GeoPoint argument", loc)
+                geoPoint.bearingTo(args[0] as GeoPoint)
+            }
+            "destination" -> NativeCallable("destination") { args, loc ->
+                if (args.size < 2)
+                    throw RuntimeError("GeoPoint.destination() requires (distanceKm, bearing)", loc)
+                geoPoint.destination(
+                    toDoubleArg(args[0], "distanceKm", loc),
+                    toDoubleArg(args[1], "bearing", loc)
+                )
+            }
+            "withAltitude" -> NativeCallable("withAltitude") { args, loc ->
+                if (args.isEmpty())
+                    throw RuntimeError("GeoPoint.withAltitude() requires a number argument", loc)
+                geoPoint.withAltitude(toDoubleArg(args[0], "altitude", loc))
+            }
+            "withoutAltitude" -> NativeCallable("withoutAltitude") { _, _ ->
+                geoPoint.withoutAltitude()
+            }
+            "toDecimalDegrees" -> NativeCallable("toDecimalDegrees") { _, _ ->
+                geoPoint.toDecimalDegrees()
+            }
+            "toDMS" -> NativeCallable("toDMS") { _, _ ->
+                geoPoint.toDMS()
+            }
+            "toCompactString" -> NativeCallable("toCompactString") { _, _ ->
+                geoPoint.toCompactString()
+            }
+
+            else -> throw MemberNotFoundError(member, "GeoPoint", location)
+        }
+    }
+
+    // ========================================================================
     // Helpers
     // ========================================================================
 
@@ -754,6 +987,24 @@ class NativeTypeRegistry {
                 is Int -> value
                 is Long -> value.toInt()
                 is Number -> value.toInt()
+                else -> throw RuntimeError(
+                    "'$paramName' must be a number, got ${value?.let { it::class.simpleName } ?: "nil"}",
+                    location
+                )
+            }
+        }
+
+        /**
+         * Safely convert a value to Double for use in constructors.
+         */
+        fun toDoubleArg(value: Any?, paramName: String, location: SourceLocation?): Double {
+            return when (value) {
+                is Double -> value
+                is Float -> value.toDouble()
+                is Int -> value.toDouble()
+                is Long -> value.toDouble()
+                is Dec -> value.toDouble()
+                is Number -> value.toDouble()
                 else -> throw RuntimeError(
                     "'$paramName' must be a number, got ${value?.let { it::class.simpleName } ?: "nil"}",
                     location
