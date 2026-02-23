@@ -4,6 +4,10 @@ import io.kixi.Range
 import io.kixi.Version
 import io.kixi.Grid
 import io.kixi.Coordinate
+import io.kixi.Blob
+import io.kixi.NSID
+import io.kixi.Call
+import io.kixi.kd.Tag as KiTag
 import io.kixi.ks.*
 import io.kixi.ks.ext.toList as rangeToList
 import io.kixi.ks.ext.asSequence as rangeAsSequence
@@ -74,6 +78,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /** Registry of defined structs by name. */
     private val structs = mutableMapOf<String, KSStruct>()
 
+    /** Native Ki.Core type registry \u2014 lazy-loaded constructors and static methods. */
+    private val nativeTypes = NativeTypeRegistry()
+
     /** Built-in type sentinels for reflective access (e.g. String.type). */
     private val builtinTypes = mapOf(
         "String"   to KSBuiltinType("String"),
@@ -92,6 +99,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         "Version"  to KSBuiltinType("Version"),
         "Grid"     to KSBuiltinType("Grid"),
         "Coordinate" to KSBuiltinType("Coordinate"),
+        "Blob"     to KSBuiltinType("Blob"),
+        "NSID"     to KSBuiltinType("NSID"),
+        "Call"     to KSBuiltinType("Call"),
+        "Tag"      to KSBuiltinType("Tag"),
         "Nil"      to KSBuiltinType("Nil"),
         "Any"      to KSBuiltinType("Any"),
         "Type"     to KSBuiltinType("Type"),
@@ -550,6 +561,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
 
         // Try as a built-in type (String, Int, Bool, etc.)
+        // Native type constructors take precedence over plain sentinels —
+        // they provide both constructor calls and static member access.
+        nativeTypes[name]?.let { return it }
         builtinTypes[name]?.let { return it }
 
         throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
@@ -1361,10 +1375,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Range<*> -> KSType("Range")
             is Grid<*> -> KSType("Grid")
             is Coordinate -> KSType("Coordinate")
+            is Blob -> KSType("Blob")
+            is NSID -> KSType("NSID")
+            is KiTag -> KSType("Tag")
+            is Call -> KSType("Call")
+            is Currency -> KSType("Currency")
             is Regex -> KSType("Regex")
             is MatchResult -> KSType("MatchResult")
             is KDTag -> KSType("KDTag")
             is KDDocument -> KSType("KDDocument")
+            is NativeTypeConstructor -> KSType("class ${value.typeName}")
             else -> KSType(value::class.simpleName ?: "Unknown")
         }
     }
@@ -2003,6 +2023,8 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSStruct -> obj.getStatic(expr.member)
                 ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
             is KSBuiltinType -> throw MemberNotFoundError(expr.member, obj.name, expr.location)
+            is NativeTypeConstructor -> obj.getStatic(expr.member)
+                ?: throw MemberNotFoundError(expr.member, obj.typeName, expr.location)
             is KSEnum -> {
                 // Could be a constant or static member
                 obj.getConstant(expr.member)
@@ -2018,10 +2040,15 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is Version -> getVersionMember(obj, expr.member, expr.location)
             is Grid<*> -> getGridMember(obj, expr.member, expr.location)
             is Coordinate -> getCoordinateMember(obj, expr.member, expr.location)
+            is Currency -> nativeTypes.getCurrencyMember(obj, expr.member, expr.location)
             is KDTag -> getKDTagMember(obj, expr.member, expr.location)
             is KDDocument -> getKDDocumentMember(obj, expr.member, expr.location)
             is Regex -> getRegexMember(obj, expr.member, expr.location)
             is MatchResult -> getMatchResultMember(obj, expr.member, expr.location)
+            is Blob -> nativeTypes.getBlobMember(obj, expr.member, expr.location)
+            is NSID -> nativeTypes.getNSIDMember(obj, expr.member, expr.location)
+            is KiTag -> nativeTypes.getTagMember(obj, expr.member, expr.location)
+            is Call -> nativeTypes.getCallMember(obj, expr.member, expr.location)
             else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
         }
     }
@@ -2094,22 +2121,51 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 obj[i]
             }
             is Grid<*> -> {
-                // Grid single-index access with Coordinate: grid[coord]
-                if (index is Coordinate) {
-                    val x = index.x
-                    val y = index.y
-                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
-                        throw RuntimeError(
-                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
-                            expr.location
-                        )
+                // Grid single-index access with Coordinate or sheet notation string
+                when (index) {
+                    is Coordinate -> {
+                        val x = index.x
+                        val y = index.y
+                        if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
+                            throw RuntimeError(
+                                "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
+                                expr.location
+                            )
+                        }
+                        obj[x, y]
                     }
-                    obj[x, y]
-                } else {
-                    throw TypeError(
-                        "Grid single-index access requires a Coordinate, got ${index?.let { runtimeTypeName(it) ?: it.javaClass.simpleName } ?: "nil"}",
+                    is String -> {
+                        // Sheet notation: grid["A1"], grid["B3"]
+                        try {
+                            obj[index]
+                        } catch (e: Exception) {
+                            throw RuntimeError("Invalid grid reference '$index': ${e.message}", expr.location)
+                        }
+                    }
+                    else -> throw TypeError(
+                        "Grid single-index access requires a Coordinate or sheet notation String, got ${index?.let { runtimeTypeName(it) ?: it.javaClass.simpleName } ?: "nil"}",
                         expr.location
                     )
+                }
+            }
+            is Blob -> {
+                val i = toInt(index, expr.indices[0].location)
+                if (i < 0 || i >= obj.size) {
+                    throw IndexOutOfBoundsError(i, obj.size, expr.location)
+                }
+                obj[i].toInt()  // return as Int for KS convenience
+            }
+            is Call -> {
+                // Call[int] -> values[int], Call[string] -> attributes[string]
+                when (index) {
+                    is Int -> {
+                        if (!obj.hasValue(index)) {
+                            throw IndexOutOfBoundsError(index, obj.valueCount, expr.location)
+                        }
+                        obj[index]
+                    }
+                    is String -> obj[index]
+                    else -> throw TypeError("Call index must be Int or String", expr.location)
                 }
             }
             is KSObject -> {
@@ -2700,6 +2756,11 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "Range" -> value is Range<*>
             "Grid" -> value is Grid<*>
             "Coordinate" -> value is Coordinate
+            "Blob" -> value is Blob
+            "NSID" -> value is NSID
+            "Call" -> value is Call  // includes Tag (Tag extends Call)
+            "Tag" -> value is KiTag
+            "Currency" -> value is Currency
             "Version" -> value is Version
             "Regex" -> value is Regex
             "MatchResult" -> value is MatchResult
@@ -2978,8 +3039,16 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         is Range<*> -> "Range"
         is Grid<*> -> "Grid"
         is Coordinate -> "Coordinate"
+        is Blob -> "Blob"
+        is NSID -> "NSID"
+        is KiTag -> "Tag"
+        is Call -> "Call"
+        is Currency -> "Currency"
+        is Regex -> "Regex"
+        is MatchResult -> "MatchResult"
         is KSFunction -> "Function"
         is NativeCallable -> "Function"
+        is NativeTypeConstructor -> "Type"
         else -> null
     }
 
@@ -3736,14 +3805,40 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      */
     private fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
+            // Properties
             "value" -> quantity.value
             "unit" -> quantity.unit.symbol
+            "unitObject" -> quantity.unit  // raw Unit object for advanced use
+            "unitUnicode" -> quantity.unit.unicode
+
+            // Methods
+            "convertTo" -> NativeCallable("convertTo") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("convertTo() requires 1 argument (unit symbol)", loc)
+                val targetSymbol = args[0] as? String
+                    ?: throw TypeError("convertTo() expects a unit symbol String", loc)
+                val targetUnit = try {
+                    KiUnit.parse(targetSymbol)
+                } catch (e: Exception) {
+                    throw RuntimeError("Unknown unit: '$targetSymbol'", loc)
+                }
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    (quantity as Quantity<KiUnit>).convertTo(targetUnit)
+                } catch (e: Exception) {
+                    throw RuntimeError("Conversion failed: ${e.message}", loc)
+                }
+            }
+            "toSuffixString" -> NativeCallable("toSuffixString") { _, _ ->
+                quantity.toSuffixString()
+            }
+
             else -> throw MemberNotFoundError(member, "Quantity", location)
         }
     }
 
     private fun getVersionMember(version: Version, member: String, location: SourceLocation?): Any? {
         return when (member) {
+            // Properties
             "major" -> version.major
             "minor" -> version.minor
             "micro" -> version.micro
@@ -3752,10 +3847,37 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             "hasQualifier" -> version.hasQualifier
             "isStable" -> version.isStable
             "isPreRelease" -> version.isPreRelease
+
+            // Methods
             "toStable" -> NativeCallable("toStable") { _, _ -> version.toStable() }
+            "toShortString" -> NativeCallable("toShortString") { _, _ -> version.toShortString() }
             "incrementMajor" -> NativeCallable("incrementMajor") { _, _ -> version.incrementMajor() }
             "incrementMinor" -> NativeCallable("incrementMinor") { _, _ -> version.incrementMinor() }
             "incrementMicro" -> NativeCallable("incrementMicro") { _, _ -> version.incrementMicro() }
+            "incrementQualifierNumber" -> NativeCallable("incrementQualifierNumber") { _, loc ->
+                try {
+                    version.incrementQualifierNumber()
+                } catch (e: Exception) {
+                    throw RuntimeError(e.message ?: "Cannot increment qualifier number", loc)
+                }
+            }
+            "isCompatibleWith" -> NativeCallable("isCompatibleWith") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("isCompatibleWith() requires 1 argument", loc)
+                val other = args[0] as? Version
+                    ?: throw TypeError("isCompatibleWith() expects a Version argument", loc)
+                version.isCompatibleWith(other)
+            }
+            "withQualifier" -> NativeCallable("withQualifier") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("withQualifier() requires 1-2 arguments", loc)
+                val qual = args[0] as? String
+                    ?: throw TypeError("withQualifier() first argument must be a String", loc)
+                val qualNum = if (args.size > 1) {
+                    (args[1] as? Number)?.toInt()
+                        ?: throw TypeError("withQualifier() second argument must be an Int", loc)
+                } else 0
+                version.withQualifier(qual, qualNum)
+            }
+
             else -> throw MemberNotFoundError(member, "Version", location)
         }
     }
@@ -3793,18 +3915,90 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     private fun getGridMember(grid: Grid<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
+            // Properties
             "width" -> grid.width
             "height" -> grid.height
             "size" -> grid.width * grid.height
-            "isEmpty" -> grid.width == 0 || grid.height == 0
+            "isEmpty" -> grid.isEmpty
+            "isNotEmpty" -> grid.isNotEmpty
             "data" -> grid.data.toList()
+            "elementNullable" -> grid.elementNullable
+
+            // Methods
             "transpose" -> NativeCallable("transpose") { _, _ -> grid.transpose() }
+            "copy" -> NativeCallable("copy") { _, _ -> grid.copy() }
             "fill" -> NativeCallable("fill") { args, _ ->
                 @Suppress("UNCHECKED_CAST")
                 (grid as Grid<Any?>).fill(args.firstOrNull())
                 null
             }
-            "toList" -> NativeCallable("toList") { _, _ -> grid.data.toList() }
+            "clear" -> NativeCallable("clear") { _, _ ->
+                @Suppress("UNCHECKED_CAST")
+                (grid as Grid<Any?>).clear()
+                null
+            }
+            "toList" -> NativeCallable("toList") { _, _ -> grid.toList() }
+            "toRowList" -> NativeCallable("toRowList") { _, _ -> grid.toRowList() }
+            "getRowCopy" -> NativeCallable("getRowCopy") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("getRowCopy() requires 1 argument", loc)
+                val y = toInt(args[0]!!, loc)
+                grid.getRowCopy(y)
+            }
+            "getColumnCopy" -> NativeCallable("getColumnCopy") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("getColumnCopy() requires 1 argument", loc)
+                when (val arg = args[0]) {
+                    is Int -> grid.getColumnCopy(arg)
+                    is String -> grid.getColumnCopy(arg)
+                    else -> throw TypeError("getColumnCopy() expects Int or String", loc)
+                }
+            }
+            "setRow" -> NativeCallable("setRow") { args, loc ->
+                if (args.size < 2) throw RuntimeError("setRow() requires 2 arguments (y, values)", loc)
+                val y = toInt(args[0]!!, loc)
+                val values = args[1] as? List<*>
+                    ?: throw TypeError("setRow() second argument must be a List", loc)
+                @Suppress("UNCHECKED_CAST")
+                (grid as Grid<Any?>).setRow(y, values)
+                null
+            }
+            "setColumn" -> NativeCallable("setColumn") { args, loc ->
+                if (args.size < 2) throw RuntimeError("setColumn() requires 2 arguments (x, values)", loc)
+                val values = args[1] as? List<*>
+                    ?: throw TypeError("setColumn() second argument must be a List", loc)
+                @Suppress("UNCHECKED_CAST")
+                when (val col = args[0]) {
+                    is Int -> (grid as Grid<Any?>).setColumn(col, values)
+                    is String -> (grid as Grid<Any?>).setColumn(col, values)
+                    else -> throw TypeError("setColumn() first argument must be Int or String", loc)
+                }
+                null
+            }
+            "fillRow" -> NativeCallable("fillRow") { args, loc ->
+                if (args.size < 2) throw RuntimeError("fillRow() requires 2 arguments (y, value)", loc)
+                val y = toInt(args[0]!!, loc)
+                @Suppress("UNCHECKED_CAST")
+                (grid as Grid<Any?>).fillRow(y, args[1])
+                null
+            }
+            "fillColumn" -> NativeCallable("fillColumn") { args, loc ->
+                if (args.size < 2) throw RuntimeError("fillColumn() requires 2 arguments (x, value)", loc)
+                @Suppress("UNCHECKED_CAST")
+                when (val col = args[0]) {
+                    is Int -> (grid as Grid<Any?>).fillColumn(col, args[1])
+                    is String -> (grid as Grid<Any?>).fillColumn(col, args[1])
+                    else -> throw TypeError("fillColumn() first argument must be Int or String", loc)
+                }
+                null
+            }
+            "subgrid" -> NativeCallable("subgrid") { args, loc ->
+                if (args.size != 4) throw RuntimeError("subgrid() requires 4 arguments (startX, startY, width, height)", loc)
+                val sx = toInt(args[0]!!, loc)
+                val sy = toInt(args[1]!!, loc)
+                val w = toInt(args[2]!!, loc)
+                val h = toInt(args[3]!!, loc)
+                grid.subgrid(sx, sy, w, h)
+            }
+
             else -> throw MemberNotFoundError(member, "Grid", location)
         }
     }
