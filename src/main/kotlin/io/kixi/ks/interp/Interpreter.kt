@@ -2009,6 +2009,23 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         if (expr.member == "type") return getKSType(obj)
         if (expr.member == "typeName") return getKSType(obj).name
 
+        // Universal reflection: .members — available on type definitions only
+        // (class, struct, trait, enum). Returns a String describing the type's
+        // API surface: constructors, properties, methods, extensions, enums, static.
+        if (expr.member == "members") {
+            return when (obj) {
+                is KSClass -> MembersFormatter.formatClass(obj)
+                is KSStruct -> MembersFormatter.formatStruct(obj)
+                is KSTrait -> MembersFormatter.formatTrait(obj)
+                is KSEnum -> MembersFormatter.formatEnum(obj)
+                null -> throw NullPointerError("Cannot access .members on nil", expr.location)
+                else -> throw RuntimeError(
+                    ".members is only available on class, struct, trait, and enum definitions",
+                    expr.location
+                )
+            }
+        }
+
         if (obj == null) {
             throw NullPointerError("Cannot access member '${expr.member}' on nil", expr.location)
         }
@@ -2993,7 +3010,7 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Reserved member names that are universal reflection properties.
      * User-defined properties/methods with these names will be shadowed.
      */
-    private val RESERVED_MEMBER_NAMES = setOf("type", "typeName")
+    private val RESERVED_MEMBER_NAMES = setOf("type", "typeName", "members")
 
     /**
      * Emit warnings if a class or struct declares members with reserved names.

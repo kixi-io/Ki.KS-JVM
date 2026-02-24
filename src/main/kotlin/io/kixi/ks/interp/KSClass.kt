@@ -48,6 +48,9 @@ class KSClass(
     /** Instance methods defined in this class. */
     private val methods = mutableMapOf<String, KSFunction>()
 
+    /** Extension methods added via `extend` blocks (tracked separately). */
+    private val extensionMethods = mutableMapOf<String, KSFunction>()
+
     /** Static members (variables and functions). */
     private val staticMembers = Environment(closure, "static:$name")
 
@@ -110,7 +113,18 @@ class KSClass(
      */
     fun addMethod(name: String, fn: KSFunction) {
         methods[name] = fn
+        extensionMethods[name] = fn
     }
+
+    /**
+     * Get the set of extension method names.
+     */
+    fun extensionMethodNames(): Set<String> = extensionMethods.keys.toSet()
+
+    /**
+     * Get an extension method by name.
+     */
+    fun getExtensionMethod(name: String): KSFunction? = extensionMethods[name]
 
     /**
      * Get a static member (variable or function).
@@ -199,6 +213,9 @@ class KSTrait(
     /** Methods (abstract and default implementations). */
     private val methods = mutableMapOf<String, KSFunction>()
 
+    /** Extension methods added via `extend` blocks. */
+    private val extensionMethods = mutableMapOf<String, KSFunction>()
+
     /** Abstract method names (no body). */
     private val abstractMethods = mutableSetOf<String>()
 
@@ -236,7 +253,18 @@ class KSTrait(
      */
     fun addMethod(name: String, fn: KSFunction) {
         methods[name] = fn
+        extensionMethods[name] = fn
     }
+
+    /**
+     * Get the set of extension method names.
+     */
+    fun extensionMethodNames(): Set<String> = extensionMethods.keys.toSet()
+
+    /**
+     * Get an extension method by name.
+     */
+    fun getExtensionMethod(name: String): KSFunction? = extensionMethods[name]
 
     /**
      * Check if a method is abstract (no default implementation).

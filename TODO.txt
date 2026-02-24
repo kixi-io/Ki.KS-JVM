@@ -1,4 +1,4 @@
-3. Grid: Add useful functions and properies. Add sheet style access (i.e. ["A", 3])
+3. Grid: Add sheet style access (i.e. ["A", 3])
 4. Add reflection and extensions for use when hostLanguage is set to true.
 5. Work on the core library. Keep it light for now.
 7. Check on the "use" statement for imports.

@@ -19,6 +19,7 @@ class KSStruct(
     val location: SourceLocation get() = declaration.location
 
     private val methods = mutableMapOf<String, KSFunction>()
+    private val extensionMethods = mutableMapOf<String, KSFunction>()
     private val staticMembers = Environment(closure, "static:$name")
 
     init {
@@ -43,7 +44,18 @@ class KSStruct(
      */
     fun addMethod(name: String, fn: KSFunction) {
         methods[name] = fn
+        extensionMethods[name] = fn
     }
+
+    /**
+     * Get the set of extension method names.
+     */
+    fun extensionMethodNames(): Set<String> = extensionMethods.keys.toSet()
+
+    /**
+     * Get an extension method by name.
+     */
+    fun getExtensionMethod(name: String): KSFunction? = extensionMethods[name]
 
     fun getStatic(name: String): Any? = when {
         staticMembers.isDefined(name) -> staticMembers.get(name)
@@ -102,7 +114,7 @@ class KSStructInstance(val struct: KSStruct) {
     fun isMutable(name: String): Boolean = properties[name]?.mutable == true
     fun propertyNames(): Set<String> = properties.keys.toSet()
 
-    /** Shallow copy \u2014 core of copy-on-assign semantics. */
+    /** Shallow copy — core of copy-on-assign semantics. */
     fun copy(): KSStructInstance {
         val clone = KSStructInstance(struct)
         for ((name, prop) in properties) {
