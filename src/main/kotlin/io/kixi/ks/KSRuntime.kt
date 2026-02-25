@@ -15,35 +15,57 @@ package io.kixi.ks
  *
  * The [hostLang] flag is the primary configuration for portability:
  *
- * - **hostLang = false (default)**: Portable mode. KS code is limited to the KS
- *   standard library (KD types, basic I/O, etc.). Code written this way will run
- *   on any KS implementation (Kotlin, Swift, Rust, .NET, etc.).
+ * - **hostLang = true (default)**: Interop mode. KS code can access the host
+ *   language's types, functions, and libraries directly. This is the most
+ *   productive mode for development on a specific platform.
  *
- * - **hostLang = true**: Interop mode. KS code can access the host language's
- *   types, functions, and libraries directly. More powerful, but not portable
- *   across different KS implementations.
+ * - **hostLang = false**: Portable mode. KS code is limited to the KS standard
+ *   library (KD types, basic I/O, etc.). Code written this way will run on any
+ *   KS implementation (Kotlin, Swift, Rust, .NET, etc.).
+ *
+ * ## Configuration File
+ *
+ * Runtime options can be overridden via a `ks-config.kd` file. The loader
+ * checks the following locations in order:
+ *
+ * 1. `./ks-config.kd` — project-local config
+ * 2. `~/.ks/ks-config.kd` — user-level config
+ * 3. Falls back to [DEFAULT] if no config file is found
+ *
+ * ```kd
+ * runtime {
+ *     hostLang true
+ *     strictNullSafety true
+ *     checkConstraints true
+ *     maxRecursionDepth 1000
+ *     maxLoopIterations 10_000_000
+ *     colorOutput true
+ *     debugMode false
+ * }
+ * ```
  *
  * ## Usage
  *
  * ```kotlin
- * val runtime = KSRuntime(hostLang = false)  // Portable mode
+ * // Default: interop mode
+ * val interpreter = Interpreter()  // Uses KSRuntime.DEFAULT
+ *
+ * // Explicit portable mode
+ * val runtime = KSRuntime(hostLang = false)
  * val interpreter = Interpreter(runtime)
  * interpreter.execute(source)
- * ```
- *
- * Or use the default:
- * ```kotlin
- * val interpreter = Interpreter()  // Uses KSRuntime.DEFAULT
  * ```
  */
 data class KSRuntime(
     /**
      * Whether host language interop is enabled.
      *
-     * When `false` (default), KS code is limited to the portable standard library.
-     * When `true`, KS code can access Kotlin/Swift/etc. types and functions directly.
+     * When `true` (default), KS code can access Kotlin/Swift/etc. types and
+     * functions directly. When `false`, KS code is limited to the portable
+     * standard library — code written this way runs on any KS implementation
+     * (Kotlin, Swift, Rust, .NET).
      */
-    val hostLang: Boolean = false,
+    val hostLang: Boolean = true,
 
     /**
      * Whether to enforce strict null safety.
@@ -113,21 +135,24 @@ data class KSRuntime(
         /**
          * Default runtime configuration.
          *
-         * Portable mode (hostLang = false), all safety checks enabled.
+         * Interop mode (hostLang = true), all safety checks enabled.
+         * Override via `ks-config.kd` or explicit construction.
          */
         val DEFAULT = KSRuntime()
 
         /**
-         * Configuration for host language interop.
+         * Configuration for portable mode.
          *
-         * Enables access to Kotlin/Swift/etc. types and functions.
+         * Limits KS code to the portable standard library. Code written this
+         * way runs on any KS implementation (Kotlin, Swift, Rust, .NET, etc.).
          */
-        val INTEROP = KSRuntime(hostLang = true)
+        val PORTABLE = KSRuntime(hostLang = false)
 
         /**
          * Configuration for testing.
          *
          * Disables colors, redirects output to provided writers.
+         * Uses portable mode by default for deterministic test behavior.
          */
         fun forTesting(
             output: java.io.StringWriter = java.io.StringWriter(),
@@ -139,6 +164,99 @@ data class KSRuntime(
             errorWriter = java.io.PrintWriter(error, true),
             debugMode = true
         )
+
+        /**
+         * Configuration for testing with host language interop enabled.
+         *
+         * Same as [forTesting] but with `hostLang = true`, for tests that
+         * exercise JVM class imports or reflection features.
+         */
+        fun forInteropTesting(
+            output: java.io.StringWriter = java.io.StringWriter(),
+            error: java.io.StringWriter = java.io.StringWriter()
+        ) = KSRuntime(
+            hostLang = true,
+            colorOutput = false,
+            outputWriter = java.io.PrintWriter(output, true),
+            errorWriter = java.io.PrintWriter(error, true),
+            debugMode = true
+        )
+
+        // ================================================================
+        // KD Configuration File Loading
+        // ================================================================
+
+        /**
+         * Standard config file name.
+         */
+        private const val CONFIG_FILE_NAME = "ks-config.kd"
+
+        /**
+         * Load runtime configuration from a KD file.
+         *
+         * Looks for `ks-config.kd` in the following locations (in order):
+         * 1. Current working directory: `./ks-config.kd`
+         * 2. User home KS directory: `~/.ks/ks-config.kd`
+         * 3. Falls back to [DEFAULT] if no config file is found
+         *
+         * ## KD Config Format
+         *
+         * ```kd
+         * runtime {
+         *     hostLang true
+         *     strictNullSafety true
+         *     checkConstraints true
+         *     maxRecursionDepth 1000
+         *     maxLoopIterations 10_000_000
+         *     colorOutput true
+         *     debugMode false
+         * }
+         * ```
+         *
+         * All fields are optional — unspecified fields use defaults.
+         *
+         * @return KSRuntime configured from the KD file, or [DEFAULT]
+         */
+        fun fromConfig(): KSRuntime {
+            val configLocations = listOf(
+                java.io.File(CONFIG_FILE_NAME),
+                java.io.File(System.getProperty("user.home"), ".ks/$CONFIG_FILE_NAME")
+            )
+
+            for (file in configLocations) {
+                if (file.exists() && file.canRead()) {
+                    return parseConfigFile(file)
+                }
+            }
+
+            return DEFAULT
+        }
+
+        /**
+         * Parse a KD configuration file into a KSRuntime.
+         *
+         * Currently a placeholder — full implementation requires Ki.KD library
+         * integration. Returns [DEFAULT] until KD parsing is wired in.
+         *
+         * TODO: Wire in Ki.KD library for config parsing:
+         * ```kotlin
+         * val doc = io.kixi.kd.KD.read(file)
+         * val runtime = doc["runtime"]
+         * return KSRuntime(
+         *     hostLang = runtime?.getBool("hostLang") ?: true,
+         *     strictNullSafety = runtime?.getBool("strictNullSafety") ?: true,
+         *     checkConstraints = runtime?.getBool("checkConstraints") ?: true,
+         *     maxRecursionDepth = runtime?.getInt("maxRecursionDepth") ?: 1000,
+         *     maxLoopIterations = runtime?.getLong("maxLoopIterations") ?: 10_000_000L,
+         *     colorOutput = runtime?.getBool("colorOutput") ?: true,
+         *     debugMode = runtime?.getBool("debugMode") ?: false
+         * )
+         * ```
+         */
+        private fun parseConfigFile(file: java.io.File): KSRuntime {
+            // TODO: Implement KD config parsing when Ki.KD integration is ready
+            return DEFAULT
+        }
     }
 
     /**

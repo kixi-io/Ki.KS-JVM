@@ -1,13 +1,10 @@
 3. Grid: Add sheet style access (i.e. ["A", 3])
 4. Add reflection and extensions for use when hostLanguage is set to true.
 5. Work on the core library. Keep it light for now.
-7. Check on the "use" statement for imports.
 8. Infix methods
 9. Add higher-order functions like map, filter, fold, let, apply
-10. Extension methods (but I think we already have that) Just verify.
-11. Add Version literals. Make sure to handle things like 5.2.beta-2 and 5.0.0.._
 12. Fix KDTag and KDDocument - They should both be io.kixi.kd.Tag. KD blocks should return a Tag.
-13. Add namespace (or space) similar to C#.
 14. Take the first step with compiling "hello world" in JVM byte code.
 15. Write a ClearWell style mini IDE for KS.
 16. Address the single root issues for KD blocks. See KD docs for review.
+17. Make sure all date, datetime and duration types are handled properly.

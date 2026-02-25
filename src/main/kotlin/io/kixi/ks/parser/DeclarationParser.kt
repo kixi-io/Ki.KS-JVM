@@ -7,18 +7,21 @@ import io.kixi.ks.lexer.TokenType.*
  * Declaration parser for the KS language.
  *
  * Handles all top-level and member declarations:
- *   - `var` / `let`   â€” mutable and immutable variable bindings
- *   - `fun`           â€” function declarations (block body, single-expr, abstract)
- *   - `class`         â€” class declarations with optional primary constructor
- *   - `trait`         â€” trait declarations with optional super-traits
- *   - `enum`          â€” enum declarations (simple, valued, constructor-style)
- *   - `use`           â€” import declarations with optional wildcard and alias
- *   - `extend`        â€” type extension declarations
- *   - `static`        â€” static blocks inside class/enum
+ *   - `var` / `let`   — mutable and immutable variable bindings
+ *   - `fun`           — function declarations (block body, single-expr, abstract)
+ *   - `class`         — class declarations with optional primary constructor
+ *   - `trait`         — trait declarations with optional super-traits
+ *   - `struct`        — struct declarations (value types)
+ *   - `enum`          — enum declarations (simple, valued, constructor-style)
+ *   - `use`           — import declarations (single, multi, wildcard, aliased)
+ *   - `extend`        — type extension declarations
+ *   - `static`        — static blocks inside class/enum
  *
  * @param p Reference to the parent [Parser] for token stream access.
  */
 class DeclarationParser(internal val p: Parser) {
+
+
 
     // ====================================================================
     // Var / Let Declaration
@@ -74,7 +77,7 @@ class DeclarationParser(internal val p: Parser) {
      *     fun factorial(n: Int): Int = if n <= 1 1 else n * factorial(n - 1)
      *
      * A function with `= expr` is marked as [FunDecl.isSingleExpr] = true.
-     * A function with no body at all (no `{` and no `=`) is abstract â€” valid
+     * A function with no body at all (no `{` and no `=`) is abstract — valid
      * only inside a trait.
      */
     fun parseFunDecl(): FunDecl {
@@ -362,39 +365,118 @@ class DeclarationParser(internal val p: Parser) {
     // ====================================================================
 
     /**
+     * Consume a path segment in a `use` declaration.
+     *
+     * Accepts identifiers AND keywords, because JVM package names can
+     * collide with KS keywords (e.g. `java.lang`, `kotlin.reflect.full`).
+     * Only called for dotted path segments — the first segment after `use`
+     * still uses [Parser.expectIdentifier] which is fine since no package
+     * starts with a keyword.
+     */
+    private fun expectPathSegment(errorMsg: String): String {
+        val token = p.peek()
+        if (token.type == IDENTIFIER || token.type in KEYWORD_TYPES) {
+            p.advance()
+            return token.value
+        }
+        p.errorAt(token, "$errorMsg (got ${token.type}: '${token.value}')")
+    }
+
+    companion object {
+        /** All keyword TokenTypes — used to allow keywords as path segments in `use`. */
+        private val KEYWORD_TYPES: Set<TokenType> = TokenType.KEYWORDS.values.toSet()
+    }
+
+    /**
      * Parse a use (import) declaration.
      *
-     *     use io.kixi.kd.Tag                import specific type
-     *     use io.kixi.kd.*                  wildcard import
-     *     use collections.OrderedMap as OMap import with alias
+     * Supports all import forms:
      *
-     * The path is a dot-separated list of identifiers. A trailing `.*`
-     * indicates a wildcard import. An `as` clause provides an alias.
+     *     use io.kixi.kd.Tag                     single type
+     *     use io.kixi.kd.Tag, Annotation, Snip   multi-import from same package
+     *     use io.kixi.kd.*                        flat wildcard
+     *     use io.kixi.**                          tree wildcard
+     *     use SomeClass.staticFun                 static member import
+     *     use io.kixi.kd.Tag as T                aliased import
+     *     use io.kixi.kd.Tag as T, Annotation as Ann   multi with aliases
+     *
+     * ## Parsing Strategy
+     *
+     * 1. Collect dot-separated identifiers into a path
+     * 2. Check for wildcard endings:
+     *    - `DOT STAR` → flat wildcard, path = package
+     *    - `DOT STAR_STAR` → tree wildcard, path = package
+     * 3. For non-wildcards, pop the last path segment as the first import name
+     * 4. Check for `AS alias` on the first import
+     * 5. Check for `COMMA` to parse additional imports (each with optional alias)
      */
     fun parseUseDecl(): UseDecl {
         val loc = p.advance().location // consume USE
 
+        // Collect the full dot-separated path
         val path = mutableListOf<String>()
         path.add(p.expectIdentifier("Expected module path after 'use'"))
 
-        var wildcard = false
+        var wildcard = UseWildcard.NONE
 
         while (p.match(DOT)) {
-            if (p.match(STAR)) {
-                wildcard = true
-                break
+            when {
+                // Tree wildcard: .**  (must check STAR_STAR before STAR)
+                p.check(STAR_STAR) -> {
+                    p.advance() // consume **
+                    wildcard = UseWildcard.TREE
+                    break
+                }
+                // Flat wildcard: .*
+                p.check(STAR) -> {
+                    p.advance() // consume *
+                    wildcard = UseWildcard.FLAT
+                    break
+                }
+                // Normal path segment — accept identifiers AND keywords
+                // because JVM package names can collide with KS keywords
+                // (e.g. java.lang, kotlin.reflect.full)
+                else -> {
+                    path.add(expectPathSegment("Expected identifier in module path"))
+                }
             }
-            path.add(p.expectIdentifier("Expected identifier in module path"))
         }
 
-        // Optional alias: as Name
-        val alias = if (p.match(AS)) {
+        // Wildcard imports — path is the package, no specific imports
+        if (wildcard != UseWildcard.NONE) {
+            return UseDecl(path, wildcard, emptyList(), loc)
+        }
+
+        // Non-wildcard: last path segment is the first import name
+        if (path.isEmpty()) {
+            p.error("Expected import path")
+        }
+
+        val firstName = path.removeAt(path.lastIndex)
+
+        // Check for alias on first import: `as Name`
+        val firstAlias = if (p.match(AS)) {
             p.expectIdentifier("Expected alias name after 'as'")
         } else {
             null
         }
 
-        return UseDecl(path, wildcard, alias, loc)
+        val imports = mutableListOf(UseImport(firstName, firstAlias))
+
+        // Check for multi-import: `, Name, Name as Alias, ...`
+        while (p.match(COMMA)) {
+            // Skip newlines after comma for multi-line use statements
+            p.skipNewlines()
+            val name = p.expectIdentifier("Expected import name after ','")
+            val alias = if (p.match(AS)) {
+                p.expectIdentifier("Expected alias name after 'as'")
+            } else {
+                null
+            }
+            imports.add(UseImport(name, alias))
+        }
+
+        return UseDecl(path, UseWildcard.NONE, imports, loc)
     }
 
     // ====================================================================

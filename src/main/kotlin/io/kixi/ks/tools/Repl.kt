@@ -493,10 +493,8 @@ class Repl(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * those are private. A full reset creates a new interpreter.
      */
     private fun resetInterpreter() {
-        // The cleanest reset is to create a new Environment.
-        // Since we can't easily reset the Interpreter's private registries,
-        // we reassign the public environment to a fresh global scope.
         interpreter.environment = io.kixi.ks.interp.Environment.global()
+        interpreter.resetImports()
     }
 
     /**

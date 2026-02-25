@@ -83,6 +83,9 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /** Native Ki.Core type registry \u2014 lazy-loaded constructors and static methods. */
     private val nativeTypes = NativeTypeRegistry()
 
+    /** Import registry for `use` statement resolution. */
+    private val importRegistry = ImportRegistry(runtime)
+
     /** Built-in type sentinels for reflective access (e.g. String.type). */
     private val builtinTypes = mapOf(
         "String"   to KSBuiltinType("String"),
@@ -481,6 +484,20 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     callee.receiver.copyWith(namedArgs, location)
                 }
             }
+
+            //////////////////////////////
+
+            // JVM class — construct via reflection
+            // is JvmClassProxy -> callee.construct(args, location)
+            is JvmClassProxy -> callee.construct(args, location)
+
+            // JVM method proxy — already implements Callable, but explicit for clarity
+            // is JvmMethodProxy -> callee.call(this, args, location)
+            is JvmMethodProxy -> callee.call(this, args, location)
+
+            ///////////////////////////////
+
+            // (existing) Generic Callable dispatch
             is Callable -> callee.call(this, args, location)
             else -> {
                 // Check if it's a function name
@@ -568,8 +585,40 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         nativeTypes[name]?.let { return it }
         builtinTypes[name]?.let { return it }
 
+        // Try imports (from `use` declarations)
+        if (importRegistry.hasImports()) {
+            val resolved = importRegistry.resolve(name)
+            if (resolved != null) {
+                return resolvedImportToValue(resolved, expr.location)
+            }
+        }
+
         throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
     }
+
+    /**
+     * Convert a [ResolvedImport] to a runtime value for use in expressions.
+     *
+     * Maps import types to their runtime representations:
+     * - JVM classes → [JvmClassProxy] (used for construction and member access)
+     * - JVM members → the raw value
+     * - JVM callables → [JvmMethodProxy] (implements [Callable])
+     * - KS types → the existing KS type object (KSClass, KSStruct, etc.)
+     * - KS static members → the raw value
+     */
+    private fun resolvedImportToValue(resolved: ResolvedImport, location: SourceLocation?): Any? {
+        return when (resolved) {
+            is ResolvedImport.JvmClass -> resolved.proxy
+            is ResolvedImport.JvmMember -> resolved.value
+            is ResolvedImport.JvmCallable -> resolved.callable
+            is ResolvedImport.KsClass -> resolved.ksClass
+            is ResolvedImport.KsStruct -> resolved.ksStruct
+            is ResolvedImport.KsTrait -> resolved.ksTrait
+            is ResolvedImport.KsEnum -> resolved.ksEnum
+            is ResolvedImport.KsStaticMember -> resolved.value
+        }
+    }
+
     // ========================================================================
     // Class Declarations & Instantiation
     // ========================================================================
@@ -1167,22 +1216,27 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
         throw UndefinedNameError(constantName, NameKind.ENUM_CONSTANT, expr.location)
     }
 
-    // ========================================================================
-    // Use (Import) Declarations
-    // ========================================================================
-
+    /**
+     * Evaluate a `use` (import) declaration.
+     *
+     * Delegates to [ImportRegistry] which handles:
+     * - Direct imports (eager resolution)
+     * - Flat wildcards (lazy, `.*`)
+     * - Tree wildcards (lazy with subpackage scanning, `.**`)
+     * - Static member imports (e.g. `use Version.parse`)
+     * - KS type imports (class, struct, trait, enum)
+     * - JVM class imports (when hostLang=true)
+     *
+     * @throws ImportError if a direct import cannot be resolved
+     */
     private fun evaluateUseDecl(decl: UseDecl): Any? {
-        // For now, use declarations are informational only.
-        // Full module system would require a module loader.
-        // In portable mode (hostLang = false), we only have KS standard library.
-
-        if (runtime.debugMode) {
-            val path = decl.path.joinToString(".")
-            val suffix = if (decl.wildcard) ".*" else ""
-            val alias = decl.alias?.let { " as $it" } ?: ""
-            runtime.outputWriter.println("[DEBUG] use $path$suffix$alias")
-        }
-
+        importRegistry.processUseDecl(
+            decl,
+            ksClasses = classes,
+            ksStructs = structs,
+            ksTraits = traits,
+            ksEnums = enums
+        )
         return null
     }
 
@@ -1371,6 +1425,10 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is KSBuiltinType -> KSType("${value.kind} ${value.name}")
             is KSFunction -> KSType("fun ${value.name}")
             is NativeCallable -> KSType("fun ${value.name}")
+
+            is JvmClassProxy -> KSType("class ${value.simpleName}")
+            is JvmMethodProxy -> KSType("Function")
+
             is BoundMethod -> KSType("fun ${value.method.name}")
             is StructBoundMethod -> KSType("fun ${value.method.name}")
             is KSFunctionCallable -> KSType("fun ${value.function.name}")
@@ -2053,6 +2111,18 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     ?: throw MemberNotFoundError(expr.member, obj.name, expr.location)
             }
             is KSEnumConstant -> getEnumConstantMember(obj, expr.member, expr.location)
+            // JVM class proxy — access static/companion members
+            is JvmClassProxy -> {
+                obj.getMember(expr.member, expr.location)
+                    ?: throw MemberNotFoundError(expr.member, obj.simpleName, expr.location)
+            }
+
+            // JVM method proxy — shouldn't normally be member-accessed, but handle gracefully
+            is JvmMethodProxy -> throw MemberNotFoundError(
+                expr.member, "JVM method ${obj.name}", expr.location
+            )
+
+            // (existing)
             is String -> getStringMember(obj, expr.member, expr.location)
             is List<*> -> getListMember(obj, expr.member, expr.location)
             is Map<*, *> -> getMapMember(obj, expr.member, expr.location)
@@ -3394,6 +3464,14 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
             is LocalDateTime -> stringifyLocalDateTime(value)
             is OffsetDateTime -> stringifyOffsetDateTime(value)
+
+            // ============================================================================
+            // 8. UPDATE stringify() for new types
+            // ============================================================================
+
+            is JvmClassProxy -> value.toString()    // "class Version"
+            is JvmMethodProxy -> value.toString()   // "<jvm method Version.parse>"
+
             is URL -> value.toString()
             is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
             is Map<*, *> -> value.entries.joinToString(", ", "[", "]") { "${stringify(it.key)}=${stringify(it.value)}" }
@@ -4028,6 +4106,13 @@ class Interpreter(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
             else -> throw MemberNotFoundError(member, "Grid", location)
         }
+    }
+
+    /**
+     * Reset the import registry. Called by the REPL on :reset.
+     */
+    fun resetImports() {
+        importRegistry.clear()
     }
 
     // ========================================================================

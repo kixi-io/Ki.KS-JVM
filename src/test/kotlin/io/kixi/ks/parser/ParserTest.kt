@@ -1,6 +1,7 @@
 package io.kixi.ks.parser
 
 import io.kixi.ks.lexer.Lexer
+import io.kixi.ks.parser.UseWildcard
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
@@ -1287,19 +1288,21 @@ class ParserTest : FunSpec({
     context("Use declarations") {
         test("simple use") {
             val decl = parseFirst("use io.kixi.kd.Tag") as UseDecl
-            decl.path shouldBe listOf("io", "kixi", "kd", "Tag")
-            decl.wildcard shouldBe false
-            decl.alias.shouldBeNull()
+            decl.packagePath shouldBe listOf("io", "kixi", "kd")
+            decl.wildcard shouldBe UseWildcard.NONE
+            decl.imports.size shouldBe 1
+            decl.imports[0].name shouldBe "Tag"
+            decl.imports[0].alias.shouldBeNull()
         }
 
         test("wildcard use") {
             val decl = parseFirst("use io.kixi.kd.*") as UseDecl
-            decl.wildcard shouldBe true
+            decl.wildcard shouldBe UseWildcard.FLAT
         }
 
         test("use with alias") {
             val decl = parseFirst("use collections.OrderedMap as OMap") as UseDecl
-            decl.alias shouldBe "OMap"
+            decl.imports[0].alias shouldBe "OMap"
         }
     }
 

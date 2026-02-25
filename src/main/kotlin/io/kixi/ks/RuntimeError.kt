@@ -451,6 +451,26 @@ class InternalError(
     suggestion: String? = null
 ) : RuntimeError("Internal error: $message", location, suggestion = suggestion)
 
+/**
+ * Thrown when an import (use declaration) fails to resolve.
+ *
+ * Examples:
+ *     - `use io.kixi.nonexistent.Type` → class not found
+ *     - `use io.kixi.Version.nonexistent` → member not found on class
+ *     - JVM class access when hostLang=false → not permitted
+ *
+ * @property importPath The fully qualified import path that failed to resolve
+ */
+class ImportError(
+    val importPath: String,
+    location: SourceLocation? = null,
+    suggestion: String? = "Verify the import path and ensure the class is on the classpath"
+) : RuntimeError(
+    "Cannot resolve import: '$importPath'",
+    location,
+    suggestion = suggestion
+)
+
 // ============================================================================
 // Utility
 // ============================================================================

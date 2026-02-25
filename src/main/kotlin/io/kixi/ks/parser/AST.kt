@@ -160,19 +160,76 @@ data class EnumDecl(
     override val location: SourceLocation
 ) : Decl
 
+// --- Use (Import) Declaration -----------------------------------------------
+
 /**
- * Import declaration.
+ * Wildcard mode for use (import) declarations.
  *
- *     use io.kixi.kd.Tag
- *     use io.kixi.kd.*
- *     use collections.OrderedMap as OMap
+ *     NONE — specific import:  `use io.kixi.kd.Tag`
+ *     FLAT — flat wildcard:    `use io.kixi.kd.*`     (direct members only)
+ *     TREE — tree wildcard:    `use io.kixi.**`        (recursive subpackages)
+ */
+enum class UseWildcard { NONE, FLAT, TREE }
+
+/**
+ * A single import item within a use declaration.
+ *
+ * Supports optional aliasing:
+ *     `Tag`         → UseImport("Tag", null)
+ *     `Tag as T`    → UseImport("Tag", "T")
+ *
+ * @property name The imported name (class, function, property, etc.)
+ * @property alias Optional local alias (after `as`)
+ */
+data class UseImport(
+    val name: String,
+    val alias: String?
+)
+
+/**
+ * Import declaration (enhanced).
+ *
+ * Supports all import forms:
+ *
+ *     use io.kixi.kd.Tag                     single type
+ *     use io.kixi.kd.Tag, Annotation, Snip   multi-import from same package
+ *     use io.kixi.kd.*                        flat wildcard
+ *     use io.kixi.**                          tree wildcard (recursive)
+ *     use SomeClass.staticFun                 static member import
+ *     use io.kixi.kd.Tag as T                aliased import
+ *     use io.kixi.kd.Tag as T, Annotation as Ann   multi with aliases
+ *
+ * ## Structure
+ *
+ * The path is split into two parts:
+ * - [packagePath]: The package/container segments (everything before the imported names)
+ * - [imports]: The specific items being imported (empty for wildcards)
+ *
+ * For `use io.kixi.kd.Tag, Annotation`:
+ * - packagePath = ["io", "kixi", "kd"]
+ * - imports = [UseImport("Tag", null), UseImport("Annotation", null)]
+ *
+ * For `use io.kixi.kd.*`:
+ * - packagePath = ["io", "kixi", "kd"]
+ * - wildcard = FLAT
+ * - imports = [] (empty)
+ *
+ * For `use SomeClass.staticFun`:
+ * - packagePath = ["SomeClass"]
+ * - imports = [UseImport("staticFun", null)]
+ *
+ * @property packagePath The package/container path segments
+ * @property wildcard The wildcard mode (NONE, FLAT, TREE)
+ * @property imports The specific items to import (empty for wildcards)
  */
 data class UseDecl(
-    val path: List<String>,
-    val wildcard: Boolean,          // true for .*
-    val alias: String?,             // after `as`
+    val packagePath: List<String>,
+    val wildcard: UseWildcard,
+    val imports: List<UseImport>,
     override val location: SourceLocation
 ) : Decl
+
+// --- End Use Declaration ----------------------------------------------------
 
 /**
  * Static block inside a class or enum.

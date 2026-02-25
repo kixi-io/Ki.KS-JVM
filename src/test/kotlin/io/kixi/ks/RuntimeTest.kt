@@ -287,7 +287,7 @@ class RuntimeTest : FunSpec({
         test("default configuration") {
             val runtime = KSRuntime.DEFAULT
 
-            runtime.hostLang shouldBe false
+            runtime.hostLang shouldBe true
             runtime.strictNullSafety shouldBe true
             runtime.checkConstraints shouldBe true
             runtime.maxRecursionDepth shouldBe 1000
@@ -296,8 +296,7 @@ class RuntimeTest : FunSpec({
         }
 
         test("interop configuration") {
-            val runtime = KSRuntime.INTEROP
-
+            val runtime = KSRuntime.DEFAULT
             runtime.hostLang shouldBe true
         }
 
