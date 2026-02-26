@@ -3,8 +3,6 @@
 5. Work on the core library. Keep it light for now.
 8. Infix methods
 9. Add higher-order functions like map, filter, fold, let, apply
-12. Fix KDTag and KDDocument - They should both be io.kixi.kd.Tag. KD blocks should return a Tag.
 14. Take the first step with compiling "hello world" in JVM byte code.
 15. Write a ClearWell style mini IDE for KS.
-16. Address the single root issues for KD blocks. See KD docs for review.
 17. Make sure all date, datetime and duration types are handled properly.

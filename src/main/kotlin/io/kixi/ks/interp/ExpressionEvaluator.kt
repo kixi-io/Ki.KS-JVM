@@ -356,6 +356,48 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
     }
 
     // ========================================================================
+    // Grid Index Resolution
+
+    /**
+     * Resolves grid indices for both access styles:
+     * - (Int, Int): standard zero-based (column, row)
+     * - (String, Int): plate notation (row letter, one-based column)
+     *
+     * @return Pair of (x, y) as zero-based indices
+     */
+    private fun resolveGridIndices(
+        first: Any?, second: Any?, grid: Grid<*>, location: SourceLocation?
+    ): Pair<Int, Int> {
+        val x: Int
+        val y: Int
+
+        if (first is String) {
+            // Plate notation: grid["B", 3] → row letter, one-based column
+            y = Coordinate.columnToIndex(first)
+            val col = ops.toInt(second!!, location)
+            if (col < 1) {
+                throw RuntimeError(
+                    "Grid plate notation column must be >= 1, got $col",
+                    location
+                )
+            }
+            x = col - 1
+        } else {
+            // Standard: grid[2, 1] → zero-based column, row
+            x = ops.toInt(first!!, location)
+            y = ops.toInt(second!!, location)
+        }
+
+        if (x < 0 || x >= grid.width || y < 0 || y >= grid.height) {
+            throw RuntimeError(
+                "Grid index [$x, $y] out of bounds for ${grid.width}\u00d7${grid.height} grid",
+                location
+            )
+        }
+
+        return Pair(x, y)
+    }
+
     // Member & Index Access
     // ========================================================================
 
@@ -460,18 +502,11 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 is Grid<*> -> {
                     if (indices.size != 2) {
                         throw RuntimeError(
-                            "Grid access requires exactly 2 indices (x, y), got ${indices.size}",
+                            "Grid access requires exactly 2 indices, got ${indices.size}",
                             expr.location
                         )
                     }
-                    val x = ops.toInt(indices[0]!!, expr.location)
-                    val y = ops.toInt(indices[1]!!, expr.location)
-                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
-                        throw RuntimeError(
-                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
-                            expr.location
-                        )
-                    }
+                    val (x, y) = resolveGridIndices(indices[0], indices[1], obj, expr.location)
                     obj[x, y]
                 }
                 is KSObject -> {
@@ -706,18 +741,11 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 if (obj is Grid<*>) {
                     if (indices.size != 2) {
                         throw RuntimeError(
-                            "Grid assignment requires exactly 2 indices (x, y), got ${indices.size}",
+                            "Grid assignment requires exactly 2 indices, got ${indices.size}",
                             target.location
                         )
                     }
-                    val x = ops.toInt(indices[0]!!, target.location)
-                    val y = ops.toInt(indices[1]!!, target.location)
-                    if (x < 0 || x >= obj.width || y < 0 || y >= obj.height) {
-                        throw RuntimeError(
-                            "Grid index [$x, $y] out of bounds for ${obj.width}\u00d7${obj.height} grid",
-                            target.location
-                        )
-                    }
+                    val (x, y) = resolveGridIndices(indices[0], indices[1], obj, target.location)
                     @Suppress("UNCHECKED_CAST")
                     val grid = obj as Grid<Any?>
                     val newValue = ops.computeAssignment(expr.operator, { grid[x, y] }, value)

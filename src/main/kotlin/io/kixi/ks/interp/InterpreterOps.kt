@@ -1600,7 +1600,10 @@ class InterpreterOps(internal val interp: Interpreter) {
             "row" -> coord.row
             "hasZ" -> coord.hasZ
             "z" -> coord.z
+            "rowLetter" -> coord.rowLetter
+            "columnNumber" -> coord.columnNumber
             "toSheetNotation" -> NativeCallable("toSheetNotation") { _, _ -> coord.toSheetNotation() }
+            "toPlateNotation" -> NativeCallable("toPlateNotation") { _, _ -> coord.toPlateNotation() }
             "toStandardNotation" -> NativeCallable("toStandardNotation") { _, _ -> coord.toStandardNotation() }
             "right" -> NativeCallable("right") { args, loc ->
                 val n = if (args.isNotEmpty()) toInt(args[0]!!, loc) else 1
