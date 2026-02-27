@@ -23,13 +23,13 @@ import java.lang.reflect.Modifier
  */
 sealed class ResolvedImport {
     /** A JVM class, accessible for construction and static member access. */
-    data class JvmClass(val proxy: JvmClassProxy) : ResolvedImport()
+    data class JVMClass(val proxy: JVMClassProxy) : ResolvedImport()
 
     /** A JVM member value (static field, companion member, object member). */
-    data class JvmMember(val value: Any?) : ResolvedImport()
+    data class JVMMember(val value: Any?) : ResolvedImport()
 
     /** A JVM callable member (static method, companion method, object method). */
-    data class JvmCallable(val callable: JvmMethodProxy) : ResolvedImport()
+    data class JVMCallable(val callable: JVMMethodProxy) : ResolvedImport()
 
     /** A KS-defined class. */
     data class KsClass(val ksClass: KSClass) : ResolvedImport()
@@ -74,7 +74,7 @@ sealed class ResolvedImport {
  *
  * @property clazz The underlying JVM class
  */
-class JvmClassProxy(val clazz: Class<*>) {
+class JVMClassProxy(val clazz: Class<*>) {
 
     /** Simple class name (e.g. "Version", "Tag"). */
     val simpleName: String get() = clazz.simpleName
@@ -210,7 +210,7 @@ class JvmClassProxy(val clazz: Class<*>) {
         if (companionInstance != null) {
             val companionMethod = findMethodOn(companionClass!!, name)
             if (companionMethod != null) {
-                return JvmMethodProxy(companionInstance!!, companionMethod, simpleName)
+                return JVMMethodProxy(companionInstance!!, companionMethod, simpleName)
             }
 
             // Companion properties (via getter)
@@ -231,7 +231,7 @@ class JvmClassProxy(val clazz: Class<*>) {
         // 3. Java static methods
         val staticMethod = findStaticMethod(name)
         if (staticMethod != null) {
-            return JvmMethodProxy(null, staticMethod, simpleName)
+            return JVMMethodProxy(null, staticMethod, simpleName)
         }
 
         // 4. Java static fields
@@ -271,7 +271,7 @@ class JvmClassProxy(val clazz: Class<*>) {
 
         // Method
         val method = findMethodOn(instanceClass, name)
-        if (method != null) return JvmMethodProxy(instance, method, simpleName)
+        if (method != null) return JVMMethodProxy(instance, method, simpleName)
 
         // Property getter
         val getter = findGetterOn(instanceClass, name)
@@ -337,7 +337,7 @@ class JvmClassProxy(val clazz: Class<*>) {
  * @property method The JVM method
  * @property ownerName Display name of the owning class (for error messages)
  */
-class JvmMethodProxy(
+class JVMMethodProxy(
     private val receiver: Any?,
     private val method: Method,
     private val ownerName: String
@@ -385,7 +385,7 @@ class JvmMethodProxy(
      * JVM methods can have overloads with different parameter counts.
      * This attempts to find the best match from the declaring class.
      */
-    fun findOverload(argCount: Int): JvmMethodProxy? {
+    fun findOverload(argCount: Int): JVMMethodProxy? {
         val declaring = method.declaringClass
         val overload = declaring.declaredMethods.firstOrNull {
             it.name == method.name && it.parameterCount == argCount
@@ -393,7 +393,7 @@ class JvmMethodProxy(
             it.name == method.name && it.parameterCount == argCount
         }
 
-        return if (overload != null) JvmMethodProxy(receiver, overload, ownerName) else null
+        return if (overload != null) JVMMethodProxy(receiver, overload, ownerName) else null
     }
 
     override fun toString(): String = "<jvm method $ownerName.${method.name}>"
@@ -716,7 +716,7 @@ class ImportRegistry(private val runtime: KSRuntime) {
             if (packagePath.isNotEmpty()) {
                 val ownerClass = tryLoadClass(packagePath)
                 if (ownerClass != null) {
-                    val proxy = JvmClassProxy(ownerClass)
+                    val proxy = JVMClassProxy(ownerClass)
                     return resolveMemberImport(proxy, name, location)
                 }
             }
@@ -755,7 +755,7 @@ class ImportRegistry(private val runtime: KSRuntime) {
     private fun tryResolveClass(fqn: String): ResolvedImport? {
         if (!runtime.hostLang) return null
         val clazz = tryLoadClass(fqn) ?: return null
-        return ResolvedImport.JvmClass(JvmClassProxy(clazz))
+        return ResolvedImport.JVMClass(JVMClassProxy(clazz))
     }
 
     /**
@@ -778,15 +778,15 @@ class ImportRegistry(private val runtime: KSRuntime) {
      * (returning the value).
      */
     private fun resolveMemberImport(
-        proxy: JvmClassProxy,
+        proxy: JVMClassProxy,
         memberName: String,
         location: SourceLocation?
     ): ResolvedImport? {
         val member = proxy.getMember(memberName, location)
         return when (member) {
-            is JvmMethodProxy -> ResolvedImport.JvmCallable(member)
+            is JVMMethodProxy -> ResolvedImport.JVMCallable(member)
             null -> null
-            else -> ResolvedImport.JvmMember(member)
+            else -> ResolvedImport.JVMMember(member)
         }
     }
 

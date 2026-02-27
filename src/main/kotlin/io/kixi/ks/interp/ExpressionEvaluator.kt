@@ -14,7 +14,6 @@ import io.kixi.ks.*
 import io.kixi.ks.parser.*
 import io.kixi.uom.Currency
 import io.kixi.uom.Quantity
-import io.kixi.uom.Unit as KiUnit
 
 import java.net.URL
 
@@ -415,16 +414,35 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         if (expr.member == "type") return ops.getKSType(obj)
         if (expr.member == "typeName") return ops.getKSType(obj).name
 
-        // Universal reflection: .members -- available on type definitions only
-        // (class, struct, trait, enum). Returns a String describing the type's
-        // API surface: constructors, properties, methods, extensions, enums, static.
+        // Universal reflection: .members -- available on type definitions
+        // (class, struct, trait, enum, JVM classes, native types, built-in types).
+        // Returns a String describing the type's API surface: constructors,
+        // properties, methods, extensions, enums, static members.
         if (expr.member == "members") {
             return when (obj) {
+                // KS-defined types
                 is KSClass -> MembersFormatter.formatClass(obj)
                 is KSStruct -> MembersFormatter.formatStruct(obj)
                 is KSTrait -> MembersFormatter.formatTrait(obj)
                 is KSEnum -> MembersFormatter.formatEnum(obj)
+
+                // JVM class proxy (from `use` imports)
+                is JVMClassProxy -> JVMMembersFormatter.formatClass(obj)
+
+                // Native Ki types (Email, GeoPoint, Version, etc.)
+                is NativeTypeConstructor -> JVMMembersFormatter.formatNativeType(obj)
+
+                // Built-in types (String, Int, List, Map, etc.)
+                is KSBuiltinType -> {
+                    JVMMembersFormatter.formatBuiltinType(obj.name)
+                        ?: throw RuntimeError(
+                            ".members not available for built-in type '${obj.name}'",
+                            expr.location
+                        )
+                }
+
                 null -> throw NullPointerError("Cannot access .members on nil", expr.location)
+
                 else -> throw RuntimeError(
                     ".members is only available on class, struct, trait, and enum definitions",
                     expr.location
@@ -460,13 +478,13 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
             }
             is KSEnumConstant -> ops.getEnumConstantMember(obj, expr.member, expr.location)
             // JVM class proxy -- access static/companion members
-            is JvmClassProxy -> {
+            is JVMClassProxy -> {
                 obj.getMember(expr.member, expr.location)
                     ?: throw MemberNotFoundError(expr.member, obj.simpleName, expr.location)
             }
 
             // JVM method proxy -- shouldn't normally be member-accessed, but handle gracefully
-            is JvmMethodProxy -> throw MemberNotFoundError(
+            is JVMMethodProxy -> throw MemberNotFoundError(
                 expr.member, "JVM method ${obj.name}", expr.location
             )
 

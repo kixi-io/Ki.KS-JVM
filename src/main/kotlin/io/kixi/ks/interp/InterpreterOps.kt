@@ -482,8 +482,8 @@ class InterpreterOps(internal val interp: Interpreter) {
             // 8. UPDATE stringify() for new types
             // ============================================================================
 
-            is JvmClassProxy -> value.toString()    // "class Version"
-            is JvmMethodProxy -> value.toString()   // "<jvm method Version.parse>"
+            is JVMClassProxy -> value.toString()    // "class Version"
+            is JVMMethodProxy -> value.toString()   // "<jvm method Version.parse>"
 
             is URL -> value.toString()
             is List<*> -> value.joinToString(", ", "[", "]") { stringify(it) }
@@ -742,8 +742,8 @@ class InterpreterOps(internal val interp: Interpreter) {
             is KSFunction -> KSType("fun ${value.name}")
             is NativeCallable -> KSType("fun ${value.name}")
 
-            is JvmClassProxy -> KSType("class ${value.simpleName}")
-            is JvmMethodProxy -> KSType("Function")
+            is JVMClassProxy -> KSType("class ${value.simpleName}")
+            is JVMMethodProxy -> KSType("Function")
 
             is BoundMethod -> KSType("fun ${value.method.name}")
             is StructBoundMethod -> KSType("fun ${value.method.name}")

@@ -139,8 +139,8 @@ class ImportRegistryTest : FunSpec({
 
         val resolved = registry.resolve("ArrayList")
         resolved.shouldNotBeNull()
-        resolved.shouldBeInstanceOf<ResolvedImport.JvmClass>()
-        (resolved as ResolvedImport.JvmClass).proxy.simpleName shouldBe "ArrayList"
+        resolved.shouldBeInstanceOf<ResolvedImport.JVMClass>()
+        (resolved as ResolvedImport.JVMClass).proxy.simpleName shouldBe "ArrayList"
     }
 
     test("resolve JVM class with alias") {
@@ -158,7 +158,7 @@ class ImportRegistryTest : FunSpec({
         // Alias should resolve
         val resolved = registry.resolve("List")
         resolved.shouldNotBeNull()
-        resolved.shouldBeInstanceOf<ResolvedImport.JvmClass>()
+        resolved.shouldBeInstanceOf<ResolvedImport.JVMClass>()
     }
 
     test("resolve multiple imports from same package") {
@@ -249,7 +249,7 @@ class ImportRegistryTest : FunSpec({
         // Should lazily resolve java.util.ArrayList
         val resolved = registry.resolve("ArrayList")
         resolved.shouldNotBeNull()
-        resolved.shouldBeInstanceOf<ResolvedImport.JvmClass>()
+        resolved.shouldBeInstanceOf<ResolvedImport.JVMClass>()
     }
 
     test("flat wildcard caches misses") {
@@ -309,25 +309,25 @@ class ImportRegistryTest : FunSpec({
 })
 
 // ============================================================================
-// JvmClassProxy Tests
+// JVMClassProxy Tests
 // ============================================================================
 
-class JvmClassProxyTest : FunSpec({
+class JVMClassProxyTest : FunSpec({
 
     test("wrap java.util.ArrayList") {
-        val proxy = JvmClassProxy(java.util.ArrayList::class.java)
+        val proxy = JVMClassProxy(java.util.ArrayList::class.java)
         proxy.simpleName shouldBe "ArrayList"
         proxy.isKotlinObject shouldBe false
     }
 
     test("construct ArrayList") {
-        val proxy = JvmClassProxy(java.util.ArrayList::class.java)
+        val proxy = JVMClassProxy(java.util.ArrayList::class.java)
         val instance = proxy.construct(emptyList(), null)
         instance.shouldBeInstanceOf<java.util.ArrayList<*>>()
     }
 
     test("construct with arguments") {
-        val proxy = JvmClassProxy(java.lang.StringBuilder::class.java)
+        val proxy = JVMClassProxy(java.lang.StringBuilder::class.java)
         val instance = proxy.construct(listOf("hello"), null)
         instance.shouldBeInstanceOf<java.lang.StringBuilder>()
         instance.toString() shouldBe "hello"
@@ -338,45 +338,45 @@ class JvmClassProxyTest : FunSpec({
         // but it's internal. Use a known JDK singleton pattern instead.
         // For a real test, we'd need a Kotlin object on the classpath.
         // This tests the detection mechanism.
-        val proxy = JvmClassProxy(java.util.Collections::class.java)
+        val proxy = JVMClassProxy(java.util.Collections::class.java)
         // Collections is NOT a Kotlin object
         proxy.isKotlinObject shouldBe false
     }
 
     test("access static method") {
-        val proxy = JvmClassProxy(java.util.Collections::class.java)
+        val proxy = JVMClassProxy(java.util.Collections::class.java)
         val member = proxy.getMember("emptyList", null)
         member.shouldNotBeNull()
-        member.shouldBeInstanceOf<JvmMethodProxy>()
+        member.shouldBeInstanceOf<JVMMethodProxy>()
     }
 
     test("access static field") {
-        val proxy = JvmClassProxy(java.lang.Integer::class.java)
+        val proxy = JVMClassProxy(java.lang.Integer::class.java)
         val maxVal = proxy.getMember("MAX_VALUE", null)
         maxVal shouldBe Int.MAX_VALUE
     }
 
     test("hasMember returns true for existing members") {
-        val proxy = JvmClassProxy(java.util.Collections::class.java)
+        val proxy = JVMClassProxy(java.util.Collections::class.java)
         proxy.hasMember("emptyList") shouldBe true
         proxy.hasMember("nonExistentMethod") shouldBe false
     }
 
     test("toString returns class description") {
-        val proxy = JvmClassProxy(java.util.ArrayList::class.java)
+        val proxy = JVMClassProxy(java.util.ArrayList::class.java)
         proxy.toString() shouldBe "class ArrayList"
     }
 })
 
 // ============================================================================
-// JvmMethodProxy Tests
+// JVMMethodProxy Tests
 // ============================================================================
 
-class JvmMethodProxyTest : FunSpec({
+class JVMMethodProxyTest : FunSpec({
 
     test("invoke static method") {
         val method = java.util.Collections::class.java.getMethod("emptyList")
-        val proxy = JvmMethodProxy(null, method, "Collections")
+        val proxy = JVMMethodProxy(null, method, "Collections")
         val result = proxy.call(mockInterpreter(), emptyList(), null)
         result shouldBe emptyList<Any>()
     }
@@ -384,7 +384,7 @@ class JvmMethodProxyTest : FunSpec({
     test("invoke instance method") {
         val list = java.util.ArrayList<Any>()
         val method = java.util.ArrayList::class.java.getMethod("size")
-        val proxy = JvmMethodProxy(list, method, "ArrayList")
+        val proxy = JVMMethodProxy(list, method, "ArrayList")
         val result = proxy.call(mockInterpreter(), emptyList(), null)
         result shouldBe 0
     }
@@ -392,14 +392,14 @@ class JvmMethodProxyTest : FunSpec({
     test("type coercion for numeric arguments") {
         // Integer.valueOf(int) — pass a KS Int (Kotlin Int)
         val method = java.lang.Integer::class.java.getMethod("valueOf", Int::class.java)
-        val proxy = JvmMethodProxy(null, method, "Integer")
+        val proxy = JVMMethodProxy(null, method, "Integer")
         val result = proxy.call(mockInterpreter(), listOf(42), null)
         result shouldBe 42
     }
 
     test("toString describes the method") {
         val method = java.util.Collections::class.java.getMethod("emptyList")
-        val proxy = JvmMethodProxy(null, method, "Collections")
+        val proxy = JVMMethodProxy(null, method, "Collections")
         proxy.toString() shouldBe "<jvm method Collections.emptyList>"
     }
 })
@@ -542,7 +542,7 @@ private fun mockKSClass(name: String): KSClass {
     )
 }
 
-/** Create a minimal interpreter for JvmMethodProxy.call() testing. */
+/** Create a minimal interpreter for JVMMethodProxy.call() testing. */
 private fun mockInterpreter(): Interpreter {
     return Interpreter(KSRuntime(hostLang = true, colorOutput = false))
 }

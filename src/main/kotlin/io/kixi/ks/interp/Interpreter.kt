@@ -527,10 +527,10 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             }
 
             // JVM class — construct via reflection
-            is JvmClassProxy -> callee.construct(args, location)
+            is JVMClassProxy -> callee.construct(args, location)
 
             // JVM method proxy — already implements Callable, but explicit for clarity
-            is JvmMethodProxy -> callee.call(this, args, location)
+            is JVMMethodProxy -> callee.call(this, args, location)
 
             // Generic Callable dispatch
             is Callable -> callee.call(this, args, location)
@@ -635,17 +635,17 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * Convert a [ResolvedImport] to a runtime value for use in expressions.
      *
      * Maps import types to their runtime representations:
-     * - JVM classes -> [JvmClassProxy] (used for construction and member access)
+     * - JVM classes -> [JVMClassProxy] (used for construction and member access)
      * - JVM members -> the raw value
-     * - JVM callables -> [JvmMethodProxy] (implements [Callable])
+     * - JVM callables -> [JVMMethodProxy] (implements [Callable])
      * - KS types -> the existing KS type object (KSClass, KSStruct, etc.)
      * - KS static members -> the raw value
      */
     private fun resolvedImportToValue(resolved: ResolvedImport, location: SourceLocation?): Any? {
         return when (resolved) {
-            is ResolvedImport.JvmClass -> resolved.proxy
-            is ResolvedImport.JvmMember -> resolved.value
-            is ResolvedImport.JvmCallable -> resolved.callable
+            is ResolvedImport.JVMClass -> resolved.proxy
+            is ResolvedImport.JVMMember -> resolved.value
+            is ResolvedImport.JVMCallable -> resolved.callable
             is ResolvedImport.KsClass -> resolved.ksClass
             is ResolvedImport.KsStruct -> resolved.ksStruct
             is ResolvedImport.KsTrait -> resolved.ksTrait
