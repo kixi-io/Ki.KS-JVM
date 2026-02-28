@@ -1,5 +1,5 @@
 4. Add reflection and extensions for use when hostLanguage is set to true.
-5. Work on the core library. Keep it light for now.
+5. Work on the core library. Keep it light for now. Create an attribute for core library types.
 8. Infix methods
 9. Add higher-order functions like map, filter, fold, let, apply
 14. Take the first step with compiling "hello world" in JVM byte code.
