@@ -142,8 +142,10 @@ class JVMMembersTest : FunSpec({
         test("String.members shows Properties section") {
             val result = eval("String.members") as String
             result shouldContain "Properties:"
+            result shouldContain "val size: Int"
             result shouldContain "val length: Int"
-            result shouldContain "val isEmpty: Bool"
+            result shouldContain "val indices: Range<Int>"
+            result shouldContain "val rex: Regex"
         }
 
         test("String.members shows Methods section") {
@@ -151,11 +153,13 @@ class JVMMembersTest : FunSpec({
             result shouldContain "Methods:"
             result shouldContain "fun contains("
             result shouldContain "fun split("
-            result shouldContain "fun trim()"
+            result shouldContain "fun trim(): String"
             result shouldContain "fun substring("
             result shouldContain "fun replace("
             result shouldContain "fun uppercase(): String"
             result shouldContain "fun lowercase(): String"
+            result shouldContain "fun isEmpty(): Bool"
+            result shouldContain "fun toString(): String"
         }
 
         test("String.members shows indexOf") {

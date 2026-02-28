@@ -555,6 +555,15 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                         return typeDecls.instantiateStruct(struct, args, expr.arguments, location)
                     }
                 }
+
+                // Zero-arg property-style members: when a built-in member like
+                // `str.isEmpty` is auto-invoked during member access (returning
+                // the value directly), calling it with parens `str.isEmpty()`
+                // should also work. The callee IS the result — return it.
+                if (expr.callee is MemberAccessExpr && args.isEmpty()) {
+                    return callee
+                }
+
                 throw NotCallableError(callee, location)
             }
         }

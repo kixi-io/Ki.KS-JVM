@@ -1,6 +1,7 @@
 package io.kixi.ks.interp
 
 import io.kixi.*
+import io.kixi.kd.KD
 import io.kixi.kd.Tag
 import io.kixi.ks.Callable
 import io.kixi.ks.MemberNotFoundError
@@ -9,7 +10,11 @@ import io.kixi.uom.Currency
 import io.kixi.ks.RuntimeError
 import io.kixi.uom.Quantity
 import io.kixi.uom.Unit as KiUnit
+import java.io.*
 import java.math.BigDecimal as Dec
+import java.nio.charset.Charset
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Registry for native Ki.Core and Ki.KD types exposed to the KS language.
@@ -93,6 +98,7 @@ class NativeTypeRegistry {
         "Coordinate" -> coordinateType()
         "Email" -> emailType()
         "GeoPoint" -> geoPointType()
+        "IO" -> ioType()
         else -> null
     }
 
@@ -971,6 +977,264 @@ class NativeTypeRegistry {
             }
 
             else -> throw MemberNotFoundError(member, "GeoPoint", location)
+        }
+    }
+
+    // ========================================================================
+    // IO
+    // ========================================================================
+
+    /**
+     * KS IO utility — a static-only type providing convenient methods for
+     * reading and writing text, binary data, and KD documents.
+     *
+     * IO is automatically available in KS code (no `use` import required).
+     * It is not constructible — all methods are accessed as statics:
+     *
+     * ```ks
+     * let text = IO.read(File("notes.txt"))
+     * IO.write("hello, world", "output.txt")
+     *
+     * let config = IO.readKD(File("config.kd"))
+     * IO.writeKD(config, "backup.kd")
+     * ```
+     *
+     * ## Text Encoding
+     *
+     * All text methods (`read`, `write`) accept an optional encoding parameter
+     * that defaults to UTF-8. Binary methods (`readBytes`, `writeBytes`) have
+     * no encoding parameter. KD methods (`readKD`, `writeKD`) always use UTF-8
+     * per the KD specification.
+     *
+     * ## Source/Target Dispatch
+     *
+     * Methods dispatch on the runtime type of the first argument:
+     *
+     * | Type         | Behavior                              |
+     * |--------------|---------------------------------------|
+     * | File         | Read from / write to the file         |
+     * | Path         | Converted to File, then File behavior |
+     * | String       | Treated as a file path (location)     |
+     * | InputStream  | Read from the stream                  |
+     * | OutputStream | Write to the stream                   |
+     * | Reader       | Read from the reader                  |
+     * | Writer       | Write to the writer                   |
+     */
+    private fun ioType() = NativeTypeConstructor("IO",
+        construct = { _, loc ->
+            throw RuntimeError(
+                "IO is a static utility and cannot be instantiated. " +
+                        "Use IO.read(), IO.write(), etc.",
+                loc
+            )
+        },
+        statics = mapOf(
+            // ==============================================================
+            // IO.read — Read text from a file, path, stream, or reader
+            // ==============================================================
+            "read" to NativeCallable("read") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError(
+                    "IO.read() requires a source argument (File, Path, String path, " +
+                            "InputStream, or Reader)",
+                    loc
+                )
+
+                val source = args[0]
+                val encoding = resolveEncoding(args, 1, loc)
+
+                when (source) {
+                    is File -> source.readText(encoding)
+                    is Path -> source.toFile().readText(encoding)
+                    is String -> File(source).readText(encoding)
+                    is InputStream -> source.bufferedReader(encoding).use { it.readText() }
+                    is Reader -> source.readText()
+                    else -> throw RuntimeError(
+                        "IO.read() source must be a File, Path, String path, " +
+                                "InputStream, or Reader — got ${source?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                }
+            },
+
+            // ==============================================================
+            // IO.readBytes — Read raw bytes from a file, path, or stream
+            // ==============================================================
+            "readBytes" to NativeCallable("readBytes") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError(
+                    "IO.readBytes() requires a source argument (File, Path, String path, " +
+                            "or InputStream)",
+                    loc
+                )
+
+                when (val source = args[0]) {
+                    is File -> source.readBytes()
+                    is Path -> source.toFile().readBytes()
+                    is String -> File(source).readBytes()
+                    is InputStream -> source.readBytes()
+                    else -> throw RuntimeError(
+                        "IO.readBytes() source must be a File, Path, String path, " +
+                                "or InputStream — got ${source?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                }
+            },
+
+            // ==============================================================
+            // IO.readKD — Read a KD document from a file or path
+            //
+            // Always uses UTF-8 per the KD specification. Returns a Tag
+            // representing the parsed document tree.
+            // ==============================================================
+            "readKD" to NativeCallable("readKD") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError(
+                    "IO.readKD() requires a source argument (File, Path, or String path)",
+                    loc
+                )
+
+                val file = when (val source = args[0]) {
+                    is File -> source
+                    is Path -> source.toFile()
+                    is String -> File(source)
+                    else -> throw RuntimeError(
+                        "IO.readKD() source must be a File, Path, or String path — " +
+                                "got ${source?.javaClass?.simpleName ?: "nil"}. " +
+                                "To parse a KD string directly, use KD.read(text).",
+                        loc
+                    )
+                }
+
+                try {
+                    KD.read(file)
+                } catch (e: Exception) {
+                    throw RuntimeError(
+                        "IO.readKD() failed for '${file.path}': ${e.message}",
+                        loc
+                    )
+                }
+            },
+
+            // ==============================================================
+            // IO.write — Write text to a file, path, stream, or writer
+            //
+            // First argument is always the text content. Second argument is
+            // the target. Optional third argument is encoding (default UTF-8).
+            // ==============================================================
+            "write" to NativeCallable("write") { args, loc ->
+                if (args.size < 2) throw RuntimeError(
+                    "IO.write() requires (text, target). Target can be a File, Path, " +
+                            "String path, OutputStream, or Writer.",
+                    loc
+                )
+
+                val text = args[0]?.toString()
+                    ?: throw RuntimeError("IO.write() text argument cannot be nil", loc)
+                val target = args[1]
+                val encoding = resolveEncoding(args, 2, loc)
+
+                when (target) {
+                    is File -> target.writeText(text, encoding)
+                    is Path -> target.toFile().writeText(text, encoding)
+                    is String -> File(target).writeText(text, encoding)
+                    is OutputStream -> target.bufferedWriter(encoding).use { it.write(text) }
+                    is Writer -> target.write(text)
+                    else -> throw RuntimeError(
+                        "IO.write() target must be a File, Path, String path, " +
+                                "OutputStream, or Writer — got ${target?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                }
+            },
+
+            // ==============================================================
+            // IO.writeBytes — Write raw bytes to a file, path, or stream
+            //
+            // First argument is the byte data. Second argument is the target.
+            // ==============================================================
+            "writeBytes" to NativeCallable("writeBytes") { args, loc ->
+                if (args.size < 2) throw RuntimeError(
+                    "IO.writeBytes() requires (data, target). Target can be a File, " +
+                            "Path, String path, or OutputStream.",
+                    loc
+                )
+
+                val data = args[0] as? ByteArray
+                    ?: throw RuntimeError(
+                        "IO.writeBytes() first argument must be a ByteArray — " +
+                                "got ${args[0]?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                val target = args[1]
+
+                when (target) {
+                    is File -> target.writeBytes(data)
+                    is Path -> target.toFile().writeBytes(data)
+                    is String -> File(target).writeBytes(data)
+                    is OutputStream -> target.write(data)
+                    else -> throw RuntimeError(
+                        "IO.writeBytes() target must be a File, Path, String path, " +
+                                "or OutputStream — got ${target?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                }
+            },
+
+            // ==============================================================
+            // IO.writeKD — Write a Tag to a file or path as KD text
+            //
+            // Always uses UTF-8 per the KD specification. The tag is
+            // serialized via Tag.toString().
+            // ==============================================================
+            "writeKD" to NativeCallable("writeKD") { args, loc ->
+                if (args.size < 2) throw RuntimeError(
+                    "IO.writeKD() requires (tag, target). Target can be a File, " +
+                            "Path, or String path.",
+                    loc
+                )
+
+                val tag = args[0] as? Tag
+                    ?: throw RuntimeError(
+                        "IO.writeKD() first argument must be a Tag — " +
+                                "got ${args[0]?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                val file = when (val target = args[1]) {
+                    is File -> target
+                    is Path -> target.toFile()
+                    is String -> File(target)
+                    else -> throw RuntimeError(
+                        "IO.writeKD() target must be a File, Path, or String path — " +
+                                "got ${target?.javaClass?.simpleName ?: "nil"}",
+                        loc
+                    )
+                }
+
+                // KD is always UTF-8
+                file.writeText(tag.toString(), Charsets.UTF_8)
+            }
+        )
+    )
+
+    /**
+     * Extract the encoding charset from an argument list.
+     *
+     * If an encoding argument exists at [index], parses it as a charset name.
+     * Otherwise returns UTF-8 as the default.
+     *
+     * @param args The full argument list
+     * @param index The position where the encoding argument is expected
+     * @param loc Source location for error reporting
+     * @return The resolved [Charset]
+     */
+    private fun resolveEncoding(args: List<Any?>, index: Int, loc: SourceLocation?): Charset {
+        if (args.size <= index) return Charsets.UTF_8
+
+        val name = args[index]?.toString()
+            ?: throw RuntimeError("Encoding argument cannot be nil", loc)
+
+        return try {
+            Charset.forName(name)
+        } catch (e: Exception) {
+            throw RuntimeError("Unknown encoding: '$name'", loc)
         }
     }
 

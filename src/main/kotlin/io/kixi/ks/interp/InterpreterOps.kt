@@ -20,6 +20,8 @@ import io.kixi.uom.Quantity
 import io.kixi.uom.Unit as KiUnit
 import io.kixi.uom.combineUnits
 
+import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.math.BigDecimal as Dec
 import java.math.RoundingMode
 import java.net.URL
@@ -1199,17 +1201,366 @@ class InterpreterOps(internal val interp: Interpreter) {
      */
     internal fun getStringMember(str: String, member: String, location: SourceLocation?): Any {
         return when (member) {
-            "length", "size" -> str.length
+
+            // ================================================================
+            // Tier 1: KS Properties
+            //
+            // KS-only additions that don't shadow Kotlin/Java names.
+            //   • `size`  — universal countable (delegates to length)
+            //   • `rex`   — compile String to Regex (no Kotlin/Java equivalent)
+            // ================================================================
+
+            "size" -> str.length
+            "rex" -> Regex(str)
+
+            // ================================================================
+            // Tier 2: Kotlin Members
+            //
+            // Properties and functions from kotlin.String, resolved with
+            // correct property-vs-method semantics:
+            //   • Kotlin properties → return value directly (no parens)
+            //   • Zero-arg functions (no property name clash) → return value
+            //     directly (property-style access accepted)
+            //   • Functions with parameters → return NativeCallable (parens)
+            // ================================================================
+
+            // --- Kotlin property ---
+            "length" -> str.length
+
+            // --- Zero-arg Kotlin functions (property-style) ---
             "isEmpty" -> str.isEmpty()
             "isNotEmpty" -> str.isNotEmpty()
+            "isBlank" -> str.isBlank()
+            "isNotBlank" -> str.isNotBlank()
+            "first" -> if (str.isNotEmpty()) str.first()
+            else throw IndexOutOfBoundsError(0, 0, location)
+            "last" -> if (str.isNotEmpty()) str.last()
+            else throw IndexOutOfBoundsError(0, 0, location)
+            "indices" -> if (str.isEmpty()) {
+                Range(0, 0, Range.Bound.ExclusiveEnd)  // 0..<0 = empty
+            } else {
+                Range(0, str.length - 1, Range.Bound.Inclusive)
+            }
             "uppercase" -> str.uppercase()
             "lowercase" -> str.lowercase()
             "trim" -> str.trim()
+            "trimStart" -> str.trimStart()
+            "trimEnd" -> str.trimEnd()
             "reversed" -> str.reversed()
-            "first" -> if (str.isNotEmpty()) str.first() else throw IndexOutOfBoundsError(0, 0, location)
-            "last" -> if (str.isNotEmpty()) str.last() else throw IndexOutOfBoundsError(0, 0, location)
-            "rex" -> Regex(str)
-            else -> throw MemberNotFoundError(member, "String", location)
+            "lines" -> str.lines().toMutableList()
+
+            // --- Kotlin/Java functions with parameters (NativeCallable) ---
+
+            "charAt" -> NativeCallable("charAt") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("charAt() requires 1 argument", loc)
+                val index = (args[0] as? Number)?.toInt()
+                    ?: throw TypeError("charAt() requires an Int argument", loc)
+                if (index < 0 || index >= str.length)
+                    throw IndexOutOfBoundsError(index, str.length, loc)
+                str[index]
+            }
+
+            "compareTo" -> NativeCallable("compareTo") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("compareTo() requires 1 argument", loc)
+                val other = args[0]?.toString()
+                    ?: throw TypeError("compareTo() requires a String argument", loc)
+                str.compareTo(other)
+            }
+
+            "compareToIgnoreCase" -> NativeCallable("compareToIgnoreCase") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("compareToIgnoreCase() requires 1 argument", loc)
+                val other = args[0]?.toString()
+                    ?: throw TypeError("compareToIgnoreCase() requires a String argument", loc)
+                str.compareTo(other, ignoreCase = true)
+            }
+
+            "contains" -> NativeCallable("contains") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("contains() requires 1 argument", loc)
+                when (val arg = args[0]) {
+                    is Regex -> arg.containsMatchIn(str)
+                    else -> str.contains(arg?.toString()
+                        ?: throw TypeError("contains() requires a String or Regex argument", loc))
+                }
+            }
+
+            "endsWith" -> NativeCallable("endsWith") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("endsWith() requires 1 argument", loc)
+                val suffix = args[0]?.toString()
+                    ?: throw TypeError("endsWith() requires a String argument", loc)
+                str.endsWith(suffix)
+            }
+
+            "equals" -> NativeCallable("equals") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("equals() requires 1 argument", loc)
+                str == args[0]
+            }
+
+            "equalsIgnoreCase" -> NativeCallable("equalsIgnoreCase") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("equalsIgnoreCase() requires 1 argument", loc)
+                val other = args[0]?.toString()
+                    ?: throw TypeError("equalsIgnoreCase() requires a String argument", loc)
+                str.equals(other, ignoreCase = true)
+            }
+
+            "hashCode" -> NativeCallable("hashCode") { _, _ ->
+                str.hashCode()
+            }
+
+            "indexOf" -> NativeCallable("indexOf") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("indexOf() requires at least 1 argument", loc)
+                val substr = args[0]?.toString()
+                    ?: throw TypeError("indexOf() requires a String argument", loc)
+                if (args.size >= 2) {
+                    val fromIndex = (args[1] as? Number)?.toInt()
+                        ?: throw TypeError("indexOf() second argument must be an Int", loc)
+                    str.indexOf(substr, fromIndex)
+                } else {
+                    str.indexOf(substr)
+                }
+            }
+
+            "lastIndexOf" -> NativeCallable("lastIndexOf") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("lastIndexOf() requires 1 argument", loc)
+                val substr = args[0]?.toString()
+                    ?: throw TypeError("lastIndexOf() requires a String argument", loc)
+                str.lastIndexOf(substr)
+            }
+
+            "matches" -> NativeCallable("matches") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("matches() requires 1 argument", loc)
+                when (val arg = args[0]) {
+                    is Regex -> arg.matches(str)
+                    is String -> Regex(arg).matches(str)
+                    else -> throw TypeError("matches() requires a Regex or String argument", loc)
+                }
+            }
+
+            "padEnd" -> NativeCallable("padEnd") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("padEnd() requires at least 1 argument", loc)
+                val length = (args[0] as? Number)?.toInt()
+                    ?: throw TypeError("padEnd() first argument must be an Int", loc)
+                val padChar = if (args.size >= 2) {
+                    when (val c = args[1]) {
+                        is Char -> c
+                        is String -> if (c.length == 1) c[0]
+                        else throw TypeError("padEnd() padChar must be a single Char", loc)
+                        else -> throw TypeError("padEnd() padChar must be a Char", loc)
+                    }
+                } else ' '
+                str.padEnd(length, padChar)
+            }
+
+            "padStart" -> NativeCallable("padStart") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("padStart() requires at least 1 argument", loc)
+                val length = (args[0] as? Number)?.toInt()
+                    ?: throw TypeError("padStart() first argument must be an Int", loc)
+                val padChar = if (args.size >= 2) {
+                    when (val c = args[1]) {
+                        is Char -> c
+                        is String -> if (c.length == 1) c[0]
+                        else throw TypeError("padStart() padChar must be a single Char", loc)
+                        else -> throw TypeError("padStart() padChar must be a Char", loc)
+                    }
+                } else ' '
+                str.padStart(length, padChar)
+            }
+
+            "repeat" -> NativeCallable("repeat") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("repeat() requires 1 argument", loc)
+                val n = (args[0] as? Number)?.toInt()
+                    ?: throw TypeError("repeat() requires an Int argument", loc)
+                if (n < 0) throw RuntimeError("repeat() count must be non-negative, got $n", loc)
+                str.repeat(n)
+            }
+
+            "replace" -> NativeCallable("replace") { args, loc ->
+                if (args.size < 2) throw RuntimeError("replace() requires 2 arguments", loc)
+                val replacement = args[1]?.toString()
+                    ?: throw TypeError("replace() second argument must be a String", loc)
+                when (val first = args[0]) {
+                    is Regex -> first.replace(str, replacement)
+                    else -> str.replace(
+                        first?.toString()
+                            ?: throw TypeError("replace() first argument must be a String or Regex", loc),
+                        replacement
+                    )
+                }
+            }
+
+            "replaceFirst" -> NativeCallable("replaceFirst") { args, loc ->
+                if (args.size < 2) throw RuntimeError("replaceFirst() requires 2 arguments", loc)
+                val replacement = args[1]?.toString()
+                    ?: throw TypeError("replaceFirst() second argument must be a String", loc)
+                when (val first = args[0]) {
+                    is Regex -> first.replaceFirst(str, replacement)
+                    else -> str.replaceFirst(
+                        first?.toString()
+                            ?: throw TypeError("replaceFirst() first argument must be a String or Regex", loc),
+                        replacement
+                    )
+                }
+            }
+
+            "split" -> NativeCallable("split") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("split() requires at least 1 argument", loc)
+                when (val delim = args[0]) {
+                    is Regex -> {
+                        if (args.size >= 2) {
+                            val limit = (args[1] as? Number)?.toInt()
+                                ?: throw TypeError("split() limit must be an Int", loc)
+                            delim.split(str, limit).toMutableList()
+                        } else {
+                            delim.split(str).toMutableList()
+                        }
+                    }
+                    else -> {
+                        val delimStr = delim?.toString()
+                            ?: throw TypeError("split() requires a String or Regex argument", loc)
+                        if (args.size >= 2) {
+                            val limit = (args[1] as? Number)?.toInt()
+                                ?: throw TypeError("split() limit must be an Int", loc)
+                            str.split(delimStr, limit = limit).toMutableList()
+                        } else {
+                            str.split(delimStr).toMutableList()
+                        }
+                    }
+                }
+            }
+
+            "startsWith" -> NativeCallable("startsWith") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("startsWith() requires 1 argument", loc)
+                val prefix = args[0]?.toString()
+                    ?: throw TypeError("startsWith() requires a String argument", loc)
+                str.startsWith(prefix)
+            }
+
+            "substring" -> NativeCallable("substring") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("substring() requires at least 1 argument", loc)
+                val beginIndex = (args[0] as? Number)?.toInt()
+                    ?: throw TypeError("substring() first argument must be an Int", loc)
+                if (args.size >= 2) {
+                    val endIndex = (args[1] as? Number)?.toInt()
+                        ?: throw TypeError("substring() second argument must be an Int", loc)
+                    str.substring(beginIndex, endIndex)
+                } else {
+                    str.substring(beginIndex)
+                }
+            }
+
+            "toDouble" -> NativeCallable("toDouble") { _, loc ->
+                str.toDoubleOrNull()
+                    ?: throw RuntimeError("Cannot convert '${str}' to Double", loc)
+            }
+
+            "toInt" -> NativeCallable("toInt") { _, loc ->
+                str.toIntOrNull()
+                    ?: throw RuntimeError("Cannot convert '${str}' to Int", loc)
+            }
+
+            "toLong" -> NativeCallable("toLong") { _, loc ->
+                str.toLongOrNull()
+                    ?: throw RuntimeError("Cannot convert '${str}' to Long", loc)
+            }
+
+            "toString" -> NativeCallable("toString") { _, _ ->
+                str
+            }
+
+            // ================================================================
+            // Tier 3: Lazy-load JVM Reflection Fallback
+            //
+            // Any method not in the curated tiers above is resolved via
+            // reflection on java.lang.String. This ensures ALL String methods
+            // are accessible without explicit registration.
+            //
+            // Zero-arg methods (no property name clash): auto-invoke,
+            //   returning the value directly (property-style).
+            // Methods with params: return NativeCallable (parens required).
+            //
+            // Only available when hostLang=true.
+            // ================================================================
+
+            else -> {
+                if (!interp.runtime.hostLang) {
+                    throw MemberNotFoundError(member, "String", location)
+                }
+                resolveJvmStringMethod(str, member, location)
+                    ?: throw MemberNotFoundError(member, "String", location)
+            }
+        }
+    }
+
+    /**
+     * Lazy-load a String method via JVM reflection.
+     *
+     * Searches [java.lang.String] for public instance methods matching [member].
+     *
+     * Resolution rules:
+     * - If ALL overloads are zero-arg → auto-invoke and return the value
+     *   directly (property-style access, consistent with zero-arg Kotlin
+     *   functions in the curated set).
+     * - If ANY overload has parameters → return a [NativeCallable] with
+     *   overload resolution and type coercion at call time.
+     * - Returns null if no method is found.
+     *
+     * Examples of methods resolved here: `codePointAt`, `getBytes`,
+     * `toCharArray`, `intern`, `regionMatches`, etc.
+     */
+    private fun resolveJvmStringMethod(str: String, member: String, location: SourceLocation?): Any? {
+        val methods = String::class.java.methods.filter {
+            it.name == member &&
+                    Modifier.isPublic(it.modifiers) &&
+                    !Modifier.isStatic(it.modifiers) &&
+                    !it.isSynthetic && !it.isBridge
+        }
+        if (methods.isEmpty()) return null
+
+        // Zero-arg only: auto-invoke (property-style)
+        if (methods.all { it.parameterCount == 0 }) {
+            return try {
+                methods[0].invoke(str)
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw RuntimeError(
+                    "Error calling String.$member: ${e.targetException.message}",
+                    location, e.targetException
+                )
+            }
+        }
+
+        // Has overloads with params: return NativeCallable
+        return NativeCallable(member) { args, loc ->
+            val method = methods.find { it.parameterCount == args.size }
+                ?: throw RuntimeError(
+                    "No overload of String.$member matches ${args.size} argument(s). " +
+                            "Available: ${methods.map { "${member}(${it.parameterCount} args)" }.distinct().joinToString(", ")}",
+                    loc
+                )
+
+            try {
+                method.invoke(str, *args.toTypedArray())
+            } catch (e: IllegalArgumentException) {
+                val coerced = tryCoerceArgs(args, method.parameterTypes)
+                if (coerced != null) {
+                    try {
+                        method.invoke(str, *coerced.toTypedArray())
+                    } catch (e2: java.lang.reflect.InvocationTargetException) {
+                        throw RuntimeError(
+                            "Error calling String.$member: ${e2.targetException.message}",
+                            loc, e2.targetException
+                        )
+                    }
+                } else {
+                    throw TypeError(
+                        "Argument type mismatch calling String.$member: ${e.message}",
+                        loc
+                    )
+                }
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw RuntimeError(
+                    "Error calling String.$member: ${e.targetException.message}",
+                    loc, e.targetException
+                )
+            }
         }
     }
 

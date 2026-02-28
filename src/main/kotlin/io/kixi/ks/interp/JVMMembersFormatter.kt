@@ -580,12 +580,10 @@ object JVMMembersFormatter {
 class String
 
 Properties:
+  val size: Int
   val length: Int
-  val isEmpty: Bool
-  val isNotEmpty: Bool
-  val isBlank: Bool
-  val isNotBlank: Bool
-  val indices: IntRange
+  val indices: Range<Int>
+  val rex: Regex
 
 Methods:
   fun charAt(index: Int): Char
@@ -596,18 +594,26 @@ Methods:
   fun endsWith(suffix: String): Bool
   fun equals(other: Any?): Bool
   fun equalsIgnoreCase(other: String): Bool
+  fun first(): Char
   fun hashCode(): Int
   fun indexOf(str: String): Int
   fun indexOf(str: String, fromIndex: Int): Int
+  fun isBlank(): Bool
+  fun isEmpty(): Bool
+  fun isNotBlank(): Bool
+  fun isNotEmpty(): Bool
+  fun last(): Char
   fun lastIndexOf(str: String): Int
   fun lines(): List<String>
   fun lowercase(): String
   fun matches(regex: Regex): Bool
+  fun matches(pattern: String): Bool
   fun padEnd(length: Int, padChar: Char = ' '): String
   fun padStart(length: Int, padChar: Char = ' '): String
   fun repeat(n: Int): String
   fun replace(old: String, new: String): String
   fun replace(regex: Regex, replacement: String): String
+  fun replaceFirst(old: String, new: String): String
   fun replaceFirst(regex: Regex, replacement: String): String
   fun reversed(): String
   fun split(delimiter: String): List<String>
@@ -619,13 +625,15 @@ Methods:
   fun toDouble(): Double
   fun toInt(): Int
   fun toLong(): Long
-  fun toLowercase(): String
   fun toString(): String
-  fun toUppercase(): String
   fun trim(): String
   fun trimEnd(): String
   fun trimStart(): String
   fun uppercase(): String
+
+Note: Additional java.lang.String methods (e.g. codePointAt,
+  getBytes, toCharArray) are available via JVM reflection
+  when hostLang=true.
         """.trimIndent(),
 
         // === StringBuilder ===
@@ -1518,6 +1526,37 @@ Methods:
   fun split(input: String, limit: Int): List<String>
   fun toString(): String
   fun toPattern(): Pattern
+        """.trimIndent(),
+
+        // === IO ===
+        "IO" to """
+object IO
+
+Static:
+  fun read(file: File, encoding: String = "UTF-8"): String
+  fun read(path: Path, encoding: String = "UTF-8"): String
+  fun read(location: String, encoding: String = "UTF-8"): String
+  fun read(input: InputStream, encoding: String = "UTF-8"): String
+  fun read(reader: Reader, encoding: String = "UTF-8"): String
+  fun readBytes(file: File): ByteArray
+  fun readBytes(path: Path): ByteArray
+  fun readBytes(location: String): ByteArray
+  fun readBytes(input: InputStream): ByteArray
+  fun readKD(file: File): Tag
+  fun readKD(path: Path): Tag
+  fun readKD(location: String): Tag
+  fun write(text: String, file: File, encoding: String = "UTF-8")
+  fun write(text: String, path: Path, encoding: String = "UTF-8")
+  fun write(text: String, location: String, encoding: String = "UTF-8")
+  fun write(text: String, output: OutputStream, encoding: String = "UTF-8")
+  fun write(text: String, writer: Writer, encoding: String = "UTF-8")
+  fun writeBytes(data: ByteArray, file: File)
+  fun writeBytes(data: ByteArray, path: Path)
+  fun writeBytes(data: ByteArray, location: String)
+  fun writeBytes(data: ByteArray, output: OutputStream)
+  fun writeKD(tag: Tag, file: File)
+  fun writeKD(tag: Tag, path: Path)
+  fun writeKD(tag: Tag, location: String)
         """.trimIndent()
     )
 
