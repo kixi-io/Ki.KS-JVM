@@ -146,7 +146,7 @@ object ReplFormatter {
         val lines = listOf(
             "$tl$bar$tr",
             "$v  ${bold("$ki $version", colorEnabled)}${" ".repeat(44 - ki.length - version.length - 3)}$v",
-            "$v  Kotlin/JVM ${System.getProperty("java.version") ?: "??"}${" ".repeat(maxOf(0, 44 - 13 - (System.getProperty("java.version")?.length ?: 2)))}$v",
+            // "$v  Kotlin/JVM ${System.getProperty("java.version") ?: "??"}${" ".repeat(maxOf(0, 44 - 13 - (System.getProperty("java.version")?.length ?: 2)))}$v",
             "$v${" ".repeat(44)}$v",
             "$v  ${cmdStyle(":help", colorEnabled)} for commands, ${cmdStyle(":quit", colorEnabled)} to exit${" ".repeat(maxOf(0, 44 - 42))}       $v",
             "$bl$bar$br"

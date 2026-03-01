@@ -15,7 +15,11 @@ import io.kixi.ks.parser.*
 import io.kixi.uom.Currency
 import io.kixi.uom.Quantity
 
+import java.lang.reflect.Modifier
 import java.net.URL
+import kotlin.reflect.full.IllegalCallableAccessException
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.jvm.isAccessible
 
 /**
  * Expression evaluator for the KS interpreter.
@@ -455,6 +459,7 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         }
 
         return when (obj) {
+            // KS-defined types — resolved via KS runtime, no reflection backstop
             is KSObject -> obj.get(expr.member, expr.location)
             is KSStructInstance -> {
                 // Check for auto-generated copy() method
@@ -488,26 +493,330 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 expr.member, "JVM method ${obj.name}", expr.location
             )
 
-            // (existing)
-            is String -> ops.getStringMember(obj, expr.member, expr.location)
-            is List<*> -> ops.getListMember(obj, expr.member, expr.location)
-            is Map<*, *> -> ops.getMapMember(obj, expr.member, expr.location)
-            is Range<*> -> ops.getRangeMember(obj, expr.member, expr.location)
-            is Quantity<*> -> ops.getQuantityMember(obj, expr.member, expr.location)
-            is Version -> ops.getVersionMember(obj, expr.member, expr.location)
-            is Grid<*> -> ops.getGridMember(obj, expr.member, expr.location)
-            is Coordinate -> ops.getCoordinateMember(obj, expr.member, expr.location)
-            is Currency -> interp.nativeTypes.getCurrencyMember(obj, expr.member, expr.location)
-            is Email -> interp.nativeTypes.getEmailMember(obj, expr.member, expr.location)
-            is GeoPoint -> interp.nativeTypes.getGeoPointMember(obj, expr.member, expr.location)
-            is Regex -> ops.getRegexMember(obj, expr.member, expr.location)
-            is MatchResult -> ops.getMatchResultMember(obj, expr.member, expr.location)
-            is Blob -> interp.nativeTypes.getBlobMember(obj, expr.member, expr.location)
-            is NSID -> interp.nativeTypes.getNSIDMember(obj, expr.member, expr.location)
-            is KiTag -> interp.nativeTypes.getTagMember(obj, expr.member, expr.location)
-            is Call -> interp.nativeTypes.getCallMember(obj, expr.member, expr.location)
-            else -> throw MemberNotFoundError(expr.member, obj::class.simpleName ?: "Unknown", expr.location)
+            // Built-in, native, and any JVM types — curated dispatch with
+            // universal JVM reflection backstop (hostLang=true only)
+            else -> resolveWithFallback(obj, expr.member, expr.location)
         }
+    }
+
+    // ========================================================================
+    // Universal JVM Reflection Backstop
+    // ========================================================================
+
+    /**
+     * Sentinel value used to distinguish "curated method not found" from
+     * "curated method returned null" (a legitimate property value).
+     */
+    private object CuratedNotFound
+
+    /**
+     * Try curated type-specific dispatch first, then fall back to universal
+     * JVM reflection if the curated method throws [MemberNotFoundError].
+     *
+     * This is the bridge between the hand-crafted `getXxxMember` methods
+     * (which provide KS overrides, performance, and custom error messages)
+     * and the universal reflective resolver (which ensures every public
+     * JVM member is accessible without manual registration).
+     *
+     * The curated methods remain the **fast path** — `grid.width` still
+     * hits the `when` match in `getGridMember` and returns immediately.
+     * Reflection only fires for members the curated method doesn't know
+     * about, or for types that have no curated method at all.
+     */
+    private fun resolveWithFallback(
+        obj: Any, member: String, location: SourceLocation?
+    ): Any? {
+        // Phase 1: Curated type-specific dispatch
+        val result: Any? = try {
+            when (obj) {
+                is String -> ops.getStringMember(obj, member, location)
+                is List<*> -> ops.getListMember(obj, member, location)
+                is Map<*, *> -> ops.getMapMember(obj, member, location)
+                is Range<*> -> ops.getRangeMember(obj, member, location)
+                is Quantity<*> -> ops.getQuantityMember(obj, member, location)
+                is Version -> ops.getVersionMember(obj, member, location)
+                is Grid<*> -> ops.getGridMember(obj, member, location)
+                is Coordinate -> ops.getCoordinateMember(obj, member, location)
+                is Currency -> interp.nativeTypes.getCurrencyMember(obj, member, location)
+                is Email -> interp.nativeTypes.getEmailMember(obj, member, location)
+                is GeoPoint -> interp.nativeTypes.getGeoPointMember(obj, member, location)
+                is Regex -> ops.getRegexMember(obj, member, location)
+                is MatchResult -> ops.getMatchResultMember(obj, member, location)
+                is Blob -> interp.nativeTypes.getBlobMember(obj, member, location)
+                is NSID -> interp.nativeTypes.getNSIDMember(obj, member, location)
+                is KiTag -> interp.nativeTypes.getTagMember(obj, member, location)
+                is Call -> interp.nativeTypes.getCallMember(obj, member, location)
+                else -> CuratedNotFound // No curated method for this type
+            }
+        } catch (e: MemberNotFoundError) {
+            CuratedNotFound // Curated method couldn't resolve this member
+        }
+
+        if (result !== CuratedNotFound) return result
+
+        // Phase 2: Universal JVM reflection backstop
+        if (!interp.runtime.hostLang) {
+            val typeName = ops.runtimeTypeName(obj) ?: obj::class.simpleName ?: "Unknown"
+            throw MemberNotFoundError(member, typeName, location)
+        }
+        return resolveObjectMember(obj, member, location)
+    }
+
+    /**
+     * Universal JVM reflection member resolver.
+     *
+     * Resolves properties and methods on **any** JVM object using a two-tier
+     * approach:
+     *
+     * 1. **Kotlin reflection** (`memberProperties`) — identifies Kotlin
+     *    properties correctly (distinguishes `val width` from `fun width()`).
+     *    Returns the property value directly for property-style access.
+     *
+     * 2. **Java reflection** — resolves methods with proper overload
+     *    selection and numeric type coercion via [tryCoerceArgs].
+     *    Zero-arg methods auto-invoke for property-style access.
+     *    Methods with parameters return a [NativeCallable].
+     *
+     * 3. **Java getter convention** — `getFoo()` is accessible as `.foo`.
+     *    Catches properties exposed through JavaBean-style getters on
+     *    classes where Kotlin reflection might not apply.
+     *
+     * This is the method that makes `version.major`, `email.domain`,
+     * `grid.rows`, etc. "just work" without manual registration in the
+     * curated `getXxxMember` methods.
+     *
+     * @throws MemberNotFoundError if no member is found via either tier
+     */
+    private fun resolveObjectMember(
+        obj: Any, member: String, location: SourceLocation?
+    ): Any? {
+        val kClass = obj::class
+        val typeName = ops.runtimeTypeName(obj) ?: kClass.simpleName ?: "Unknown"
+
+        // ---- Tier 1: Kotlin reflection — property detection ----
+        // Kotlin reflection correctly classifies `val width: Int` as a
+        // property vs `fun width(): Int` as a function. This matters for
+        // KS semantics: properties are accessed without parens, functions
+        // return NativeCallable (parens required — unless zero-arg).
+        val kProp = try {
+            kClass.memberProperties.firstOrNull { it.name == member }
+        } catch (_: Exception) {
+            // Kotlin reflection can fail on some JVM classes (e.g.,
+            // synthetic classes, certain Java generics). Fall through.
+            null
+        }
+
+        if (kProp != null) {
+            // Try Kotlin reflection first — handles public vals/vars correctly.
+            // On JPMS-sealed modules (java.lang, java.time), isAccessible
+            // throws InaccessibleObjectException. In that case we skip to
+            // the Java reflection tiers which use Class.getMethod (public API).
+            var jpmsBlocked = false
+            try {
+                return try {
+                    kProp.getter.call(obj)
+                } catch (_: IllegalAccessException) {
+                    // Kotlin-generated classes sometimes need this
+                    kProp.getter.isAccessible = true
+                    kProp.getter.call(obj)
+                } catch (_: IllegalCallableAccessException) {
+                    kProp.getter.isAccessible = true
+                    kProp.getter.call(obj)
+                }
+            } catch (_: java.lang.reflect.InaccessibleObjectException) {
+                // JPMS sealed module — fall through to Java reflection tiers
+                jpmsBlocked = true
+            } catch (e: Exception) {
+                throw RuntimeError(
+                    "Error accessing $typeName.$member: ${e.message}",
+                    location, e
+                )
+            }
+            // If we reach here, Kotlin reflection was blocked by JPMS.
+            // Fall through to Tier 2/3 below.
+        }
+
+        // ---- Tier 2: Java reflection — methods ----
+        val jMethods = obj.javaClass.methods.filter {
+            it.name == member &&
+                    Modifier.isPublic(it.modifiers) &&
+                    !Modifier.isStatic(it.modifiers) &&
+                    !it.isSynthetic && !it.isBridge
+        }
+
+        if (jMethods.isNotEmpty()) {
+            // All overloads are zero-arg: auto-invoke (property-style access)
+            if (jMethods.all { it.parameterCount == 0 }) {
+                return try {
+                    jMethods[0].invoke(obj)
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw RuntimeError(
+                        "Error calling $typeName.$member(): ${e.targetException.message}",
+                        location, e.targetException
+                    )
+                }
+            }
+            // Has parameters: return NativeCallable with overload resolution
+            return buildJavaCallable(obj, jMethods, member, typeName)
+        }
+
+        // ---- Tier 2b: Direct method lookup ----
+        // Class.getMethod() uses the JDK's own virtual method resolution, which
+        // reliably finds public methods even when they are declared in a
+        // package-private superclass (e.g., AbstractStringBuilder.length()).
+        // The getMethods().filter approach above can miss these on some JVM
+        // versions due to JPMS visibility rules.
+        val directMethod = try {
+            obj.javaClass.getMethod(member)
+        } catch (_: NoSuchMethodException) { null }
+
+        if (directMethod != null && !Modifier.isStatic(directMethod.modifiers)) {
+            return try {
+                directMethod.invoke(obj)
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw RuntimeError(
+                    "Error calling $typeName.$member(): ${e.targetException.message}",
+                    location, e.targetException
+                )
+            }
+        }
+
+        // ---- Tier 3: Java getter convention — getFoo() for ".foo" ----
+        val getterName = "get${member.replaceFirstChar { it.uppercaseChar() }}"
+        val getter = obj.javaClass.methods.firstOrNull {
+            it.name == getterName &&
+                    it.parameterCount == 0 &&
+                    Modifier.isPublic(it.modifiers) &&
+                    !Modifier.isStatic(it.modifiers)
+        }
+        if (getter != null) {
+            return try {
+                getter.invoke(obj)
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw RuntimeError(
+                    "Error accessing $typeName.$member: ${e.targetException.message}",
+                    location, e.targetException
+                )
+            }
+        }
+
+        throw MemberNotFoundError(member, typeName, location)
+    }
+
+    /**
+     * Build a [NativeCallable] that dispatches to a set of Java method
+     * overloads with type-compatible selection and numeric type coercion.
+     *
+     * ## Overload Resolution
+     *
+     * When multiple methods match the arity (e.g. `StringBuilder.append`
+     * has 13+ one-arg overloads), resolution proceeds as:
+     *
+     * 1. **Exact type match** — all args are assignable to param types
+     * 2. **Numeric coercion** — tries [tryCoerceArgs] on each candidate
+     * 3. **Object fallback** — picks overload accepting `Object` param
+     * 4. **Error** — no compatible overload found
+     */
+    private fun buildJavaCallable(
+        obj: Any,
+        methods: List<java.lang.reflect.Method>,
+        member: String,
+        typeName: String
+    ): NativeCallable {
+        return NativeCallable(member) { args, loc ->
+            // All overloads matching the argument count
+            val candidates = methods.filter { it.parameterCount == args.size }
+            if (candidates.isEmpty()) {
+                throw RuntimeError(
+                    "No overload of $typeName.$member matches ${args.size} argument(s). " +
+                            "Available: ${methods.map { "$member(${it.parameterCount} args)" }
+                                .distinct().joinToString(", ")}",
+                    loc
+                )
+            }
+
+            // 1. Exact type-compatible match (with autoboxing)
+            val exact = candidates.find { m ->
+                args.indices.all { i ->
+                    val arg = args[i]
+                    if (arg == null) !m.parameterTypes[i].isPrimitive
+                    else isAssignableWithBoxing(m.parameterTypes[i], arg.javaClass)
+                }
+            }
+            if (exact != null) {
+                return@NativeCallable try {
+                    exact.invoke(obj, *args.toTypedArray())
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw RuntimeError(
+                        "Error calling $typeName.$member: ${e.targetException.message}",
+                        loc, e.targetException
+                    )
+                }
+            }
+
+            // 2. Try each candidate with numeric coercion
+            for (candidate in candidates) {
+                val coerced = tryCoerceArgs(args, candidate.parameterTypes)
+                if (coerced != null) {
+                    return@NativeCallable try {
+                        candidate.invoke(obj, *coerced.toTypedArray())
+                    } catch (e: java.lang.reflect.InvocationTargetException) {
+                        throw RuntimeError(
+                            "Error calling $typeName.$member: ${e.targetException.message}",
+                            loc, e.targetException
+                        )
+                    }
+                }
+            }
+
+            // 3. Fallback: overload accepting Object
+            val objectOverload = candidates.find { m ->
+                m.parameterTypes.all { it == Any::class.java || it == Object::class.java }
+            }
+            if (objectOverload != null) {
+                return@NativeCallable try {
+                    objectOverload.invoke(obj, *args.toTypedArray())
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw RuntimeError(
+                        "Error calling $typeName.$member: ${e.targetException.message}",
+                        loc, e.targetException
+                    )
+                }
+            }
+
+            // 4. No compatible overload
+            throw TypeError(
+                "No overload of $typeName.$member is compatible with the given arguments: " +
+                        args.joinToString(", ") { it?.let { v -> v::class.simpleName ?: "?" } ?: "nil" },
+                loc
+            )
+        }
+    }
+
+    /**
+     * Check if [argType] is assignable to [paramType], handling Java's
+     * primitive↔boxed type mismatch.
+     *
+     * Java reflection treats `int.class` and `Integer.class` as unrelated —
+     * `int.class.isAssignableFrom(Integer.class)` returns `false`. This helper
+     * normalizes primitives to their boxed counterparts before checking, so
+     * `append(42)` correctly matches `append(int)`.
+     */
+    private fun isAssignableWithBoxing(paramType: Class<*>, argType: Class<*>): Boolean {
+        if (paramType.isAssignableFrom(argType)) return true
+        // Normalize primitive → boxed for comparison
+        val boxed = when (paramType) {
+            java.lang.Boolean.TYPE -> java.lang.Boolean::class.java
+            java.lang.Byte.TYPE -> java.lang.Byte::class.java
+            java.lang.Short.TYPE -> java.lang.Short::class.java
+            java.lang.Integer.TYPE -> java.lang.Integer::class.java
+            java.lang.Long.TYPE -> java.lang.Long::class.java
+            java.lang.Float.TYPE -> java.lang.Float::class.java
+            java.lang.Double.TYPE -> java.lang.Double::class.java
+            java.lang.Character.TYPE -> java.lang.Character::class.java
+            else -> paramType
+        }
+        return boxed.isAssignableFrom(argType)
     }
 
     internal fun evaluateIndex(expr: IndexExpr): Any? {

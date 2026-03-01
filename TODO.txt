@@ -1,7 +1,19 @@
-4. Add reflection and extensions for use when hostLanguage is set to true.
+4. Extensions for use when hostLanguage is set to true. Must work for KS to KS extensions and KS to Kotlin extensions.
 5. Work on the core library. Keep it light for now. Create an attribute for core library types.
 8. Infix methods
 9. Add higher-order functions like map, filter, fold, let, apply
 14. Take the first step with compiling "hello world" in JVM byte code.
 15. Write a ClearWell style mini IDE for KS.
 17. Make sure all date, datetime and duration types are handled properly.
+
+Fix this parser error:
+
+Grid(2, 3)
+→ .grid {
+    nil  nil
+    nil  nil
+    nil  nil
+}  : Grid
+ks❯ Grid<Int>(2, 3)
+✘ Syntax Error: Expected ')' after expression (got COMMA: ',')
+
