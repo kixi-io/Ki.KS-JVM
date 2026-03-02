@@ -487,10 +487,12 @@ data class TernaryExpr(
  *     obj.method(x, name = "Ada")
  *     Person("Alex", 42)
  */
+// AFTER
 data class CallExpr(
     val callee: Expr,
     val arguments: List<Argument>,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    val typeArgs: List<TypeRef> = emptyList()
 ) : Expr
 
 /**

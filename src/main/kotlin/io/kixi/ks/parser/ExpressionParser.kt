@@ -376,6 +376,43 @@ class ExpressionParser(internal val p: Parser) {
         }
     }
 
+    /**
+     * Lookahead to determine whether `<` starts generic type arguments for a
+     * call (e.g. `Grid<Int>(`) rather than a less-than comparison.
+     *
+     * Scans forward from `<`, tracking nesting depth. Content between `<` and
+     * `>` must consist of valid type-argument tokens: identifiers, commas, `?`,
+     * nested `<>`, collection shorthand `[]`, and `:` for map shorthand. Returns
+     * true only if `(` immediately follows the closing `>`.
+     *
+     * This is the same disambiguation rule used by Kotlin, Java, C#, TypeScript,
+     * and Swift. In the rare case where `a<b>(c)` was intended as two comparisons,
+     * the programmer writes `(a < b) > c`.
+     */
+    private fun isGenericCallStart(): Boolean {
+        var depth = 1
+        var offset = 1 // start after '<'
+
+        while (depth > 0) {
+            val token = p.peekAt(offset)
+            when (token.type) {
+                LESS -> depth++
+                GREATER -> {
+                    depth--
+                    if (depth == 0) {
+                        return p.peekAt(offset + 1).type == LPAREN
+                    }
+                }
+                // Tokens valid inside type argument lists
+                IDENTIFIER, COMMA, QUESTION, LBRACKET, RBRACKET, COLON -> {}
+                // Anything else (operators, literals, EOF) → not type arguments
+                else -> return false
+            }
+            offset++
+        }
+        return false
+    }
+
     // ====================================================================
     // 14. Postfix: . ?. () [] !! ++ -- ::class
     // ====================================================================
@@ -406,6 +443,25 @@ class ExpressionParser(internal val p: Parser) {
                 p.match(QUESTION_DOT) -> {
                     val member = p.expectMemberName("Expected member name after '?.'")
                     MemberAccessExpr(expr, member, safe = true, loc)
+                }
+
+                // Generic call: Grid<Int>(2, 3), Map<String, Int>(), etc.
+                // Lookahead confirms <TypeArgs>( pattern to avoid conflict
+                // with less-than comparison. Same disambiguation rule as
+                // Kotlin, Java, C#, TypeScript, and Swift.
+                p.check(LESS) && expr is IdentifierExpr
+                        && isGenericCallStart() -> {
+                    p.advance() // consume
+                    val typeArgs = mutableListOf<TypeRef>()
+                    typeArgs.add(p.types.parseTypeRef())
+                    while (p.match(COMMA)) {
+                        typeArgs.add(p.types.parseTypeRef())
+                    }
+                    p.expect(GREATER, "Expected '>' after type arguments")
+                    p.advance() // consume (
+                    val args = parseArgumentList()
+                    p.expect(RPAREN, "Expected ')' after arguments")
+                    CallExpr(expr, args, loc, typeArgs)
                 }
 
                 p.check(LPAREN) -> {

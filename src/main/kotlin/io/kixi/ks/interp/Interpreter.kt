@@ -3,6 +3,7 @@ package io.kixi.ks.interp
 import io.kixi.ks.*
 import io.kixi.ks.lexer.*
 import io.kixi.ks.parser.*
+import io.kixi.Grid
 
 /**
  * KS Interpreter
@@ -531,6 +532,35 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
             // JVM method proxy — already implements Callable, but explicit for clarity
             is JVMMethodProxy -> callee.call(this, args, location)
+
+            // Built-in type constructor — e.g. Grid(2, 3), Grid<Int>(2, 3)
+            is KSBuiltinType -> {
+                when (callee.name) {
+                    "Grid" -> {
+                        if (args.size != 2) {
+                            throw RuntimeError(
+                                "Grid() requires 2 arguments (width, height), got ${args.size}",
+                                location
+                            )
+                        }
+                        val width = args[0] as? Int
+                            ?: throw RuntimeError("Grid width must be Int, got ${args[0]?.let { ops.runtimeTypeName(it) } ?: "null"}", location)
+                        val height = args[1] as? Int
+                            ?: throw RuntimeError("Grid height must be Int, got ${args[1]?.let { ops.runtimeTypeName(it) } ?: "null"}", location)
+
+                        if (expr.typeArgs.isNotEmpty()) {
+                            val typeRef = expr.typeArgs.first()
+                            val elementType = ops.resolveGridElementType(typeRef, location)
+                            val storedType = if (elementType == Any::class.java) null else elementType
+                            val nullable = typeRef.nullable || storedType == null
+                            Grid<Any?>(width, height, Array(width * height) { null }, storedType, nullable)
+                        } else {
+                            Grid.ofNulls<Any?>(width, height)
+                        }
+                    }
+                    else -> throw NotCallableError(callee, location)
+                }
+            }
 
             // Generic Callable dispatch
             is Callable -> callee.call(this, args, location)
