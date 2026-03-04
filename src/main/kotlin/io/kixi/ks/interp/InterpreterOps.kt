@@ -1571,7 +1571,76 @@ class InterpreterOps(internal val interp: Interpreter) {
             "isNotEmpty" -> list.isNotEmpty()
             "first" -> list.firstOrNull() ?: throw IndexOutOfBoundsError(0, 0, location)
             "last" -> list.lastOrNull() ?: throw IndexOutOfBoundsError(0, 0, location)
-            "reversed" -> list.reversed()
+            // --- Mutator / copy pairs (both require parens) ---
+
+            "reverse" -> NativeCallable("reverse") { _, loc ->
+                if (list is MutableList<*>) {
+                    @Suppress("UNCHECKED_CAST")
+                    (list as MutableList<Any?>).reverse()
+                    null // in-place mutation — returns nil
+                } else {
+                    throw RuntimeError(
+                        "reverse() requires a mutable list. Use reversed() for an immutable copy.",
+                        loc ?: location
+                    )
+                }
+            }
+
+            "reversed" -> NativeCallable("reversed") { _, _ ->
+                list.reversed()
+            }
+
+            "shuffle" -> NativeCallable("shuffle") { _, loc ->
+                if (list is MutableList<*>) {
+                    @Suppress("UNCHECKED_CAST")
+                    (list as MutableList<Any?>).shuffle()
+                    null // in-place mutation — returns nil
+                } else {
+                    throw RuntimeError(
+                        "shuffle() requires a mutable list. Use shuffled() for an immutable copy.",
+                        loc ?: location
+                    )
+                }
+            }
+
+            "shuffled" -> NativeCallable("shuffled") { _, _ ->
+                list.shuffled()
+            }
+
+            "sort" -> NativeCallable("sort") { _, loc ->
+                if (list is MutableList<*>) {
+                    @Suppress("UNCHECKED_CAST")
+                    val mutable = list as MutableList<Any?>
+                    try {
+                        @Suppress("UNCHECKED_CAST")
+                        (mutable as MutableList<Comparable<Any>>).sort()
+                    } catch (e: ClassCastException) {
+                        throw RuntimeError(
+                            "sort() requires all elements to be comparable",
+                            loc ?: location
+                        )
+                    }
+                    null // in-place mutation — returns nil
+                } else {
+                    throw RuntimeError(
+                        "sort() requires a mutable list. Use sorted() for an immutable copy.",
+                        loc ?: location
+                    )
+                }
+            }
+
+            "sorted" -> NativeCallable("sorted") { _, loc ->
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    (list as List<Comparable<Any>>).sorted()
+                } catch (e: ClassCastException) {
+                    throw RuntimeError(
+                        "sorted() requires all elements to be comparable",
+                        loc ?: location
+                    )
+                }
+            }
+
             else -> throw MemberNotFoundError(member, "List", location)
         }
     }

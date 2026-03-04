@@ -1023,7 +1023,7 @@ class InterpreterTest : FunSpec({
 
         test("list reversed") {
             run("""
-                say [1, 2, 3].reversed
+                say [1, 2, 3].reversed()
             """.trimIndent()) shouldBe "[3, 2, 1]"
         }
 
