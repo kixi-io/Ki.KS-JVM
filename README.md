@@ -1,4 +1,4 @@
-KS is a new language inspired by Swift, Kotlin and Python. KS can be interpreted or compiled. It's STEM and finance oriented, and has some interesting features:
+KS is a new language inspired by Swift, Kotlin, Go and Python. KS can be interpreted or compiled. It's STEM and finance oriented, and has some interesting features:
 
 1. It supported embedded DSLs.
 2. It understands units of measure, and will throw an exception if you attempt to use an expression with nonsensical combinations. F# and Kotlin have units, but these are better integrated and provide more functionality.
