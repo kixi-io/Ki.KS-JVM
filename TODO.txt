@@ -1,3 +1,4 @@
+1. Fix addition of quantities with different units
 4. Extensions for use when hostLanguage is set to true. Must work for KS to KS extensions and KS to Kotlin extensions.
 5. Work on the core library. Keep it light for now. Create an attribute for core library types.
 8. Infix methods

@@ -59,6 +59,14 @@ java {
 // Testing (Kotest runs on JUnit Platform)
 // ============================================================================
 
+tasks.register("javaPath") {
+    doLast {
+        println(javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        }.get().executablePath.asFile.absolutePath)
+    }
+}
+
 tasks.test {
     useJUnitPlatform()
     testLogging {
