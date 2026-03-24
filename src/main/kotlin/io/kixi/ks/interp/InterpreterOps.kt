@@ -996,6 +996,18 @@ class InterpreterOps(internal val interp: Interpreter) {
             throw CastError(value, type.name, location)
         }
 
+        // Unit conversion: `quantity as unitSymbol` → convertTo
+        // e.g. (10cm + 4mm) as cm → 10.4cm
+        // IncompatibleUnitsException propagates naturally for mismatched
+        // dimensions (e.g. 5cm as kg)
+        if (value is Quantity<*>) {
+            val targetUnit = KiUnit.getUnit(type.name)
+            if (targetUnit != null) {
+                @Suppress("UNCHECKED_CAST")
+                return (value as Quantity<KiUnit>).convertTo(targetUnit)
+            }
+        }
+
         return when (type.name) {
             "Int" -> toInt(value, location)
             "Long" -> toLong(value, location)

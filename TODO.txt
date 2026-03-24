@@ -18,3 +18,9 @@ Grid(2, 3)
 ks❯ Grid<Int>(2, 3)
 ✘ Syntax Error: Expected ')' after expression (got COMMA: ',')
 
+Fix this Dec format error:
+
+ks❯ 2.1bd / 2.0bd
+→ 1.0500000000  : Dec
+ks❯ 2.1 / 2.0
+→ 1.05  : Double
