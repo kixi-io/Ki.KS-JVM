@@ -609,10 +609,10 @@ class InterpreterOps(internal val interp: Interpreter) {
     /**
      * Format a Grid as a readable string in Ki literal format.
      *
-     *     .grid(
+     *     .grid {
      *         1    2    3
      *         4    5    6
-     *     )
+     *     }
      */
     internal fun stringifyGrid(grid: Grid<*>): String {
         // Build type annotation string
@@ -625,9 +625,9 @@ class InterpreterOps(internal val interp: Interpreter) {
             ""
         }
 
-        // Empty grid: .grid() or .grid<Int>()
+        // Empty grid: .grid {} or .grid<Int> {}
         if (grid.width == 0 || grid.height == 0) {
-            return ".grid$typeStr()"
+            return ".grid$typeStr {}"
         }
 
         // Non-empty grid: .grid { ... } or .grid<Int> { ... }

@@ -1202,18 +1202,23 @@ class ExpressionParser(internal val p: Parser) {
     /**
      * Parse a grid literal after `.grid` has been consumed.
      *
-     * Syntax:
-     *     .grid(                           // untyped
+     * **Data form** — braces contain inline row data:
+     *     .grid {                               // untyped
      *         1    2    3
      *         4    5    6
-     *     )
+     *     }
      *
-     *     .grid<Int>(                      // typed
+     *     .grid<Int> {                          // typed
      *         10   20   30
      *         40   50   60
-     *     )
+     *     }
      *
-     *     .grid(1 2 3; 4 5 6; 7 8 9)      // semicolons separate rows
+     *     .grid { 1 2 3; 4 5 6; 7 8 9 }        // semicolons separate rows
+     *
+     * **Dimension form** — parens contain width, height, optional default:
+     *     .grid(2, 3)                           // untyped, nil-filled
+     *     .grid<Int>(2, 3)                      // typed, zero-filled
+     *     .grid<Int>(2, 3, default = 1)         // typed, explicit default
      *
      * Rows are separated by newlines or semicolons. Values within a row
      * are space-separated (commas optional, KD-style). All rows must
@@ -1230,26 +1235,44 @@ class ExpressionParser(internal val p: Parser) {
             null
         }
 
-        p.expect(LPAREN, "Expected '(' after .grid${if (typeParam != null) "<${typeParam.name}>" else ""}")
+        val typeLabel = if (typeParam != null) "<${typeParam.name}${if (typeParam.nullable) "?" else ""}>" else ""
 
-        val rows = mutableListOf<List<Expr>>()
+        // --- Data form: .grid { ... } or .grid<Int> { ... } ---
+        if (p.check(LBRACE)) {
+            p.advance() // consume {
 
-        // Skip leading separators (newlines/semicolons) inside the parens
-        p.skipSeparators()
+            val rows = mutableListOf<List<Expr>>()
 
-        // Parse rows until closing paren
-        while (!p.check(RPAREN) && !p.isAtEnd()) {
-            val row = parseGridRow()
-            if (row.isNotEmpty()) {
-                rows.add(row)
-            }
-            // Rows separated by newlines or semicolons
+            // Skip leading separators (newlines/semicolons) inside the braces
             p.skipSeparators()
+
+            // Parse rows until closing brace
+            while (!p.check(RBRACE) && !p.isAtEnd()) {
+                val row = parseGridRow()
+                if (row.isNotEmpty()) {
+                    rows.add(row)
+                }
+                // Rows separated by newlines or semicolons
+                p.skipSeparators()
+            }
+
+            p.expect(RBRACE, "Expected '}' to close grid data block")
+
+            return GridLiteralExpr(typeParam, rows, loc)
         }
 
-        p.expect(RPAREN, "Expected ')' to close grid literal")
+        // --- Dimension form: .grid(w, h) or .grid<Int>(w, h, default = val) ---
+        if (p.check(LPAREN)) {
+            p.advance() // consume (
 
-        return GridLiteralExpr(typeParam, rows, loc)
+            val args = parseArgumentList()
+
+            p.expect(RPAREN, "Expected ')' after .grid$typeLabel dimensions")
+
+            return GridLiteralExpr(typeParam, emptyList(), loc, args)
+        }
+
+        p.errorAt(p.peek(), "Expected '{' (data) or '(' (dimensions) after .grid$typeLabel")
     }
 
     /**
@@ -1273,11 +1296,11 @@ class ExpressionParser(internal val p: Parser) {
     /**
      * Check if the current token marks the end of a grid row.
      *
-     * Rows end at: newline, semicolon, closing paren, or EOF.
+     * Rows end at: newline, semicolon, closing brace, or EOF.
      */
     private fun isGridRowBoundary(): Boolean {
         val type = p.peek().type
-        return type == NEWLINE || type == SEMICOLON || type == RPAREN || type == EOF
+        return type == NEWLINE || type == SEMICOLON || type == RBRACE || type == EOF
     }
 
     /**

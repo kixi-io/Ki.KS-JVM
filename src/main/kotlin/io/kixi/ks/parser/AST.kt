@@ -687,34 +687,44 @@ data class ReflectionExpr(
 ) : Expr
 
 /**
- * Grid literal: `.grid(...)` or `.grid<Type>(...)`
+ * Grid literal: `.grid { ... }` or `.grid<Type> { ... }` (data form),
+ * or `.grid(w, h)` / `.grid<Type>(w, h)` (dimension form).
  *
- * Grids are two-dimensional arrays of values using Ki's dot-prefixed
- * literal syntax. Values within a row are space-separated (commas optional).
- * Rows are separated by newlines or semicolons.
+ * **Data form** — braces contain inline row data:
  *
- *     .grid(
+ *     .grid {
  *         1    2    3
  *         4    5    6
  *         7    8    9
- *     )
+ *     }
  *
- *     .grid<Int>(
+ *     .grid<Int> {
  *         10   20   30
  *         40   50   60
- *     )
+ *     }
  *
- *     .grid(1 2 3; 4 5 6; 7 8 9)    // semicolons separate rows
+ *     .grid { 1 2 3; 4 5 6; 7 8 9 }    // semicolons separate rows
+ *
+ * **Dimension form** — parens contain width, height, and optional default:
+ *
+ *     .grid(2, 3)                        // untyped, nil-filled
+ *     .grid<Int>(2, 3)                   // typed, zero-filled
+ *     .grid<Int>(2, 3, default = 1)      // typed, explicit default
  *
  * The [typeParam] is null for untyped grids. When present, the interpreter
  * verifies that all values conform to the specified type.
+ *
+ * Exactly one of [rows] or [arguments] will be non-empty:
+ * - Data form: [rows] contains the grid data, [arguments] is empty
+ * - Dimension form: [arguments] contains width/height/default, [rows] is empty
  *
  * @see io.kixi.Grid
  */
 data class GridLiteralExpr(
     val typeParam: TypeRef?,        // null for untyped grids
-    val rows: List<List<Expr>>,     // each inner list is one row of values
-    override val location: SourceLocation
+    val rows: List<List<Expr>>,     // data form: each inner list is one row of values
+    override val location: SourceLocation,
+    val arguments: List<Argument> = emptyList()  // dimension form: width, height, optional default
 ) : Expr
 
 /**

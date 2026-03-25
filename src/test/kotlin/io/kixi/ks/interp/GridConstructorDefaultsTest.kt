@@ -373,10 +373,10 @@ class GridConstructorDefaultsTest : FunSpec({
         test("Grid literal rejects nil in non-nullable typed grid") {
             val msg = evalError(
                 """
-                .grid<Int>(
+                .grid<Int> {
                     nil 1
                     2   nil
-                )
+                }
                 """.trimIndent()
             )
             msg shouldContain "cannot contain nil"
@@ -386,10 +386,10 @@ class GridConstructorDefaultsTest : FunSpec({
         test("Grid literal allows nil in nullable typed grid") {
             val grid = eval(
                 """
-                .grid<Int?>(
+                .grid<Int?> {
                     nil 1
                     2   nil
-                )
+                }
                 """.trimIndent()
             ) as Grid<*>
             grid[0, 0].shouldBeNull()
@@ -422,6 +422,144 @@ class GridConstructorDefaultsTest : FunSpec({
                 say g.height
                 """.trimIndent()
             ) shouldBe "5\n2"
+        }
+    }
+
+    // ====================================================================
+    // .grid dimension form: .grid(w, h), .grid<T>(w, h, default = val)
+    // ====================================================================
+
+    context(".grid dimension form") {
+
+        test(".grid(2, 2) creates untyped nil-filled grid") {
+            val grid = eval(".grid(2, 2)") as Grid<*>
+            grid.width shouldBe 2
+            grid.height shouldBe 2
+            grid[0, 0].shouldBeNull()
+            grid[1, 1].shouldBeNull()
+        }
+
+        test(".grid<Int>(2, 2) fills with zero-value") {
+            val grid = eval(".grid<Int>(2, 2)") as Grid<*>
+            grid[0, 0] shouldBe 0
+            grid[1, 1] shouldBe 0
+            grid.elementNullable shouldBe false
+        }
+
+        test(".grid<String>(3, 1) fills with empty string") {
+            val grid = eval(".grid<String>(3, 1)") as Grid<*>
+            grid[0, 0] shouldBe ""
+            grid[1, 0] shouldBe ""
+            grid[2, 0] shouldBe ""
+        }
+
+        test(".grid<Int?>(2, 2) fills with nil") {
+            val grid = eval(".grid<Int?>(2, 2)") as Grid<*>
+            grid[0, 0].shouldBeNull()
+            grid.elementNullable shouldBe true
+        }
+
+        test(".grid<Int>(2, 2, default = 42) fills with explicit default") {
+            val grid = eval(".grid<Int>(2, 2, default = 42)") as Grid<*>
+            grid[0, 0] shouldBe 42
+            grid[1, 1] shouldBe 42
+        }
+
+        test(".grid<Bool>(1, 1, default = true) fills with true") {
+            val grid = eval(".grid<Bool>(1, 1, default = true)") as Grid<*>
+            grid[0, 0] shouldBe true
+        }
+
+        test(".grid(2, 2, default = 99) untyped with explicit default") {
+            val grid = eval(".grid(2, 2, default = 99)") as Grid<*>
+            grid[0, 0] shouldBe 99
+            grid[1, 1] shouldBe 99
+        }
+    }
+
+    // ====================================================================
+    // .grid data form with braces: .grid { ... }, .grid<T> { ... }
+    // ====================================================================
+
+    context(".grid data form with braces") {
+
+        test(".grid { ... } creates untyped grid") {
+            val grid = eval(
+                """
+                .grid {
+                    1 2 3
+                    4 5 6
+                }
+                """.trimIndent()
+            ) as Grid<*>
+            grid.width shouldBe 3
+            grid.height shouldBe 2
+            grid[0, 0] shouldBe 1
+            grid[2, 1] shouldBe 6
+        }
+
+        test(".grid<Int> { ... } creates typed grid") {
+            val grid = eval(
+                """
+                .grid<Int> {
+                    10 20
+                    30 40
+                }
+                """.trimIndent()
+            ) as Grid<*>
+            grid.width shouldBe 2
+            grid.height shouldBe 2
+            grid[0, 0] shouldBe 10
+            grid[1, 1] shouldBe 40
+        }
+
+        test(".grid { ... } with semicolons") {
+            val grid = eval(".grid { 1 2; 3 4 }") as Grid<*>
+            grid.width shouldBe 2
+            grid.height shouldBe 2
+            grid[0, 0] shouldBe 1
+            grid[1, 1] shouldBe 4
+        }
+
+        test(".grid { ... } with commas") {
+            val grid = eval(
+                """
+                .grid {
+                    1, 2, 3
+                    4, 5, 6
+                }
+                """.trimIndent()
+            ) as Grid<*>
+            grid.width shouldBe 3
+            grid.height shouldBe 2
+            grid[2, 0] shouldBe 3
+        }
+
+        test(".grid<Int> { ... } rejects nil in non-nullable grid") {
+            val msg = evalError(
+                """
+                .grid<Int> {
+                    1   nil
+                    nil 4
+                }
+                """.trimIndent()
+            )
+            msg shouldContain "cannot contain nil"
+        }
+
+        test(".grid<Int?> { ... } allows nil in nullable grid") {
+            val grid = eval(
+                """
+                .grid<Int?> {
+                    nil 1
+                    2   nil
+                }
+                """.trimIndent()
+            ) as Grid<*>
+            grid[0, 0].shouldBeNull()
+            grid[1, 0] shouldBe 1
+            grid[0, 1] shouldBe 2
+            grid[1, 1].shouldBeNull()
         }
     }
 })

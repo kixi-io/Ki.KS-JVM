@@ -231,7 +231,12 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         val elementType: Class<*>? = expr.typeParam?.let { ops.resolveGridElementType(it, expr.location) }
         val typeParamNullable = expr.typeParam?.nullable ?: false
 
-        // --- Empty grid ---
+        // --- Dimension form: .grid(w, h) or .grid<Int>(w, h, default = val) ---
+        if (expr.arguments.isNotEmpty()) {
+            return evaluateGridDimensionForm(expr, elementType, typeParamNullable)
+        }
+
+        // --- Empty data form: .grid {} or .grid<Int> {} ---
         if (expr.rows.isEmpty()) {
             // For Any / Any? typed grids, store elementType as null so the type isn't displayed
             val storedType = if (elementType == Any::class.java) null else elementType
@@ -239,7 +244,7 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
             return Grid<Any?>(0, 0, emptyArray(), storedType, nullable)
         }
 
-        // --- Non-empty grid ---
+        // --- Data form: .grid { 1 2; 3 4 } or .grid<Int> { 1 2; 3 4 } ---
 
         // Evaluate all values
         val evaluatedRows = expr.rows.map { row ->
@@ -301,6 +306,106 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         val nullable = hasNull || typeParamNullable
 
         return Grid<Any?>(width, height, data, storedType, nullable)
+    }
+
+    /**
+     * Evaluate the dimension form of a .grid literal:
+     *
+     *     .grid(2, 3)                       // untyped, nil-filled
+     *     .grid<Int>(2, 3)                  // typed, zero-filled
+     *     .grid<Int>(2, 3, default = 1)     // typed, explicit default
+     *
+     * Mirrors the logic in [Interpreter.evaluateGridConstruction] so that
+     * `.grid<Int>(2, 3)` and `Grid<Int>(2, 3)` produce identical results.
+     */
+    private fun evaluateGridDimensionForm(
+        expr: GridLiteralExpr,
+        elementType: Class<*>?,
+        typeParamNullable: Boolean
+    ): Grid<Any?> {
+        val location = expr.location
+
+        // Evaluate and classify arguments
+        val positionalArgs = mutableListOf<Any?>()
+        var explicitDefault: Any? = null
+        var hasExplicitDefault = false
+
+        for (argNode in expr.arguments) {
+            val value = interp.evaluate(argNode.value)
+            if (argNode.name == "default") {
+                explicitDefault = value
+                hasExplicitDefault = true
+            } else if (argNode.name != null) {
+                throw RuntimeError(
+                    ".grid() unknown named argument '${argNode.name}' (only 'default' is supported)",
+                    location
+                )
+            } else {
+                positionalArgs.add(value)
+            }
+        }
+
+        // Third positional arg is treated as the default value
+        if (positionalArgs.size == 3 && !hasExplicitDefault) {
+            explicitDefault = positionalArgs.removeAt(2)
+            hasExplicitDefault = true
+        }
+
+        if (positionalArgs.size != 2) {
+            throw RuntimeError(
+                ".grid() expects 2 positional arguments (width, height), got ${positionalArgs.size}",
+                location
+            )
+        }
+        val width = positionalArgs[0] as? Int
+            ?: throw RuntimeError(".grid width must be Int, got ${positionalArgs[0]?.let { ops.runtimeTypeName(it) } ?: "nil"}", location)
+        val height = positionalArgs[1] as? Int
+            ?: throw RuntimeError(".grid height must be Int, got ${positionalArgs[1]?.let { ops.runtimeTypeName(it) } ?: "nil"}", location)
+
+        // --- Untyped: .grid(w, h) ---
+        if (elementType == null) {
+            return if (hasExplicitDefault) {
+                Grid<Any?>(width, height, Array(width * height) { explicitDefault }, explicitDefault?.javaClass, explicitDefault == null)
+            } else {
+                Grid.ofNulls<Any?>(width, height)
+            }
+        }
+
+        // --- Typed grid ---
+        val storedType = if (elementType == Any::class.java) null else elementType
+        val nullable = typeParamNullable || storedType == null
+
+        if (nullable) {
+            return Grid<Any?>(width, height, Array(width * height) { null }, storedType, true)
+        }
+
+        // Non-nullable: determine default
+        val defaultValue = if (hasExplicitDefault) {
+            if (explicitDefault == null) {
+                val typeName = ops.gridElementTypeName(elementType)
+                throw RuntimeError(
+                    ".grid<$typeName> cannot use nil as default (use .grid<$typeName?> for nullable)",
+                    location
+                )
+            }
+            if (!ops.isGridValueCompatible(explicitDefault, elementType)) {
+                val actualType = ops.runtimeTypeName(explicitDefault) ?: explicitDefault.javaClass.simpleName
+                val expectedType = ops.gridElementTypeName(elementType)
+                throw RuntimeError(
+                    ".grid<$expectedType> default value has incompatible type $actualType",
+                    location
+                )
+            }
+            explicitDefault
+        } else {
+            ops.defaultValueForGridType(elementType)
+                ?: throw RuntimeError(
+                    ".grid<${ops.gridElementTypeName(elementType)}> has no built-in default value; " +
+                            "specify one with: .grid<${ops.gridElementTypeName(elementType)}>(width, height, default = value)",
+                    location
+                )
+        }
+        return Grid<Any?>(width, height, Array(width * height) { defaultValue }, storedType, false)
     }
 
     /**
