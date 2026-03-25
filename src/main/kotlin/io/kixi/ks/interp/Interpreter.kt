@@ -533,33 +533,17 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             // JVM method proxy — already implements Callable, but explicit for clarity
             is JVMMethodProxy -> callee.call(this, args, location)
 
-            // Built-in type constructor — e.g. Grid(2, 3), Grid<Int>(2, 3)
-            is KSBuiltinType -> {
-                when (callee.name) {
-                    "Grid" -> {
-                        if (args.size != 2) {
-                            throw RuntimeError(
-                                "Grid() requires 2 arguments (width, height), got ${args.size}",
-                                location
-                            )
-                        }
-                        val width = args[0] as? Int
-                            ?: throw RuntimeError("Grid width must be Int, got ${args[0]?.let { ops.runtimeTypeName(it) } ?: "null"}", location)
-                        val height = args[1] as? Int
-                            ?: throw RuntimeError("Grid height must be Int, got ${args[1]?.let { ops.runtimeTypeName(it) } ?: "null"}", location)
+            // Grid constructor via NativeTypeRegistry — needs special handling
+            // because NativeTypeConstructor.call() doesn't receive type arguments,
+            // but Grid<Int>(2, 2) must use type-aware default values.
+            is NativeTypeConstructor -> when (callee.typeName) {
+                "Grid" -> evaluateGridConstruction(expr, callee, args, location)
+                else -> callee.call(this, args, location)
+            }
 
-                        if (expr.typeArgs.isNotEmpty()) {
-                            val typeRef = expr.typeArgs.first()
-                            val elementType = ops.resolveGridElementType(typeRef, location)
-                            val storedType = if (elementType == Any::class.java) null else elementType
-                            val nullable = typeRef.nullable || storedType == null
-                            Grid<Any?>(width, height, Array(width * height) { null }, storedType, nullable)
-                        } else {
-                            Grid.ofNulls<Any?>(width, height)
-                        }
-                    }
-                    else -> throw NotCallableError(callee, location)
-                }
+            // Built-in type constructor sentinel (non-native types)
+            is KSBuiltinType -> {
+                throw NotCallableError(callee, location)
             }
 
             // Generic Callable dispatch
@@ -597,6 +581,121 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 throw NotCallableError(callee, location)
             }
         }
+    }
+
+    /**
+     * Type-aware Grid construction for `Grid(w, h)`, `Grid<Int>(w, h)`,
+     * and `Grid<T>(w, h, default = value)`.
+     *
+     * Called from [evaluateCall] when the callee is the Grid [NativeTypeConstructor],
+     * because [NativeTypeConstructor.call] doesn't receive type arguments.
+     *
+     * Rules:
+     *   - **Untyped** `Grid(w, h)` → fills with nil
+     *   - **Nullable** `Grid<Int?>(w, h)` → fills with nil
+     *   - **Non-nullable primitive** `Grid<Int>(w, h)` → fills with zero-value (0)
+     *   - **Non-nullable non-primitive** `Grid<Version>(w, h)` → error, requires `default = ...`
+     *   - **Explicit default** `Grid<Int>(w, h, default = 42)` → fills with 42
+     *   - Untyped with default `Grid(w, h, default = 99)` → fills with 99
+     */
+    private fun evaluateGridConstruction(
+        expr: CallExpr,
+        callee: NativeTypeConstructor,
+        args: List<Any?>,
+        location: SourceLocation?
+    ): Grid<Any?> {
+        // --- Parse arguments: 2 positional (width, height), optional default ---
+        // The default can be supplied as:
+        //   - A named argument:        Grid<Int>(2, 2, default = 42)
+        //   - A third positional arg:  Grid(2, 2, 42)
+        // Named `default` is preferred for typed grids because a bare third
+        // positional arg could be confused with a z-axis coordinate.
+
+        val positionalArgs = mutableListOf<Any?>()
+        var explicitDefault: Any? = null
+        var hasExplicitDefault = false
+
+        for ((index, argNode) in expr.arguments.withIndex()) {
+            if (argNode.name == "default") {
+                explicitDefault = args[index]
+                hasExplicitDefault = true
+            } else if (argNode.name != null) {
+                throw RuntimeError(
+                    "Grid() unknown named argument '${argNode.name}' (only 'default' is supported)",
+                    location
+                )
+            } else {
+                positionalArgs.add(args[index])
+            }
+        }
+
+        // Third positional arg is treated as the default value
+        if (positionalArgs.size == 3 && !hasExplicitDefault) {
+            explicitDefault = positionalArgs.removeAt(2)
+            hasExplicitDefault = true
+        }
+
+        if (positionalArgs.size != 2) {
+            throw RuntimeError(
+                "Grid() expects 2 positional arguments (width, height), got ${positionalArgs.size}",
+                location
+            )
+        }
+        val width = positionalArgs[0] as? Int
+            ?: throw RuntimeError("Grid width must be Int, got ${positionalArgs[0]?.let { ops.runtimeTypeName(it) } ?: "nil"}", location)
+        val height = positionalArgs[1] as? Int
+            ?: throw RuntimeError("Grid height must be Int, got ${positionalArgs[1]?.let { ops.runtimeTypeName(it) } ?: "nil"}", location)
+
+        // --- Untyped Grid: Grid(w, h) or Grid(w, h, default) ---
+        if (expr.typeArgs.isEmpty()) {
+            return if (hasExplicitDefault) {
+                Grid<Any?>(width, height, Array(width * height) { explicitDefault }, explicitDefault?.javaClass, explicitDefault == null)
+            } else {
+                Grid.ofNulls<Any?>(width, height)
+            }
+        }
+
+        // --- Typed Grid: Grid<T>(w, h) or Grid<T>(w, h, default = value) ---
+
+        val typeRef = expr.typeArgs.first()
+        val elementType = ops.resolveGridElementType(typeRef, location)
+        val storedType = if (elementType == Any::class.java) null else elementType
+        val nullable = typeRef.nullable || storedType == null
+
+        if (nullable) {
+            // Nullable type: default is nil
+            return Grid<Any?>(width, height, Array(width * height) { null }, storedType, true)
+        }
+
+        // Non-nullable type: determine default value
+        val defaultValue = if (hasExplicitDefault) {
+            // Validate explicit default against the element type
+            if (explicitDefault == null) {
+                val typeName = ops.gridElementTypeName(elementType)
+                throw RuntimeError(
+                    "Grid<$typeName> cannot use nil as default (use Grid<$typeName?> for nullable)",
+                    location
+                )
+            }
+            if (!ops.isGridValueCompatible(explicitDefault, elementType)) {
+                val actualType = ops.runtimeTypeName(explicitDefault) ?: explicitDefault.javaClass.simpleName
+                val expectedType = ops.gridElementTypeName(elementType)
+                throw RuntimeError(
+                    "Grid<$expectedType> default value has incompatible type $actualType",
+                    location
+                )
+            }
+            explicitDefault
+        } else {
+            // Try built-in default for known primitives
+            ops.defaultValueForGridType(elementType)
+                ?: throw RuntimeError(
+                    "Grid<${ops.gridElementTypeName(elementType)}> has no built-in default value; " +
+                            "specify one with: Grid<${ops.gridElementTypeName(elementType)}>(width, height, default = value)",
+                    location
+                )
+        }
+        return Grid<Any?>(width, height, Array(width * height) { defaultValue }, storedType, false)
     }
 
     /**

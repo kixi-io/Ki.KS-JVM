@@ -711,6 +711,27 @@ class InterpreterOps(internal val interp: Interpreter) {
         else -> type.simpleName
     }
 
+    /**
+     * Returns the default zero-value for known KS primitive grid element types,
+     * or null if the type has no built-in default (requiring the user to supply
+     * one via `default = ...`).
+     *
+     *     Int    -> 0          Long   -> 0L         Float  -> 0.0f
+     *     Double -> 0.0        Dec    -> BigDecimal.ZERO
+     *     String -> ""         Bool   -> false       Char   -> '\u0000'
+     */
+    internal fun defaultValueForGridType(type: Class<*>): Any? = when (type) {
+        Int::class.java, java.lang.Integer::class.java -> 0
+        Long::class.java, java.lang.Long::class.java -> 0L
+        Float::class.java, java.lang.Float::class.java -> 0.0f
+        Double::class.java, java.lang.Double::class.java -> 0.0
+        java.math.BigDecimal::class.java -> java.math.BigDecimal.ZERO
+        String::class.java -> ""
+        Boolean::class.java, java.lang.Boolean::class.java -> false
+        Char::class.java, java.lang.Character::class.java -> '\u0000'
+        else -> null
+    }
+
     // ========================================================================
     // Reflection
     // ========================================================================
