@@ -1,4 +1,3 @@
-
 4. Extensions for use when hostLanguage is set to true. Must work for KS to KS extensions and KS to Kotlin extensions.
 5. Work on the core library. Keep it light for now. Create an attribute for core library types.
 8. Infix methods
@@ -6,3 +5,9 @@
 14. Take the first step with compiling "hello world" in JVM byte code.
 15. Write a ClearWell style mini IDE for KS.
 17. Make sure all date, datetime and duration types are handled properly.
+18. Add easy to use column grid with numbers.
+19. Add (or find) an easy way to access rows and columns
+20. Re-examine val rows: RowAccessor<T> and val columns: ColumnAccessor<T>
+21. Make `for` friendly to grids.
+22. Figure out how to add units to a generic type. Note: We may need to make unit names classes.
+

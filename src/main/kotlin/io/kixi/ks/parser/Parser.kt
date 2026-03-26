@@ -119,6 +119,7 @@ class Parser(private val tokens: List<Token>) {
             USE       -> decl.parseUseDecl()
             EXTEND    -> decl.parseExtendDecl()
             STATIC    -> decl.parseStaticBlock()
+            INFIX     -> decl.parseInfixFunDecl()
 
             // --- Statements ---
             FOR       -> stmt.parseForStmt()
@@ -308,7 +309,7 @@ class Parser(private val tokens: List<Token>) {
             MATCHES, IN, IS, AS,
 
             // Declaration keywords (e.g. obj.class, obj.enum, obj.trait)
-            VAR, LET, FUN, CLASS, TRAIT, ENUM, STRUCT, STATIC, EXTEND,
+            VAR, LET, FUN, CLASS, TRAIT, ENUM, STRUCT, STATIC, EXTEND, INFIX,
 
             // Control flow keywords (e.g. obj.if, obj.for — rare but legal)
             IF, ELSE, FOR, WHILE, WHEN, RETURN, BREAK, CONTINUE,
@@ -383,7 +384,15 @@ class Parser(private val tokens: List<Token>) {
      * This is intentionally conservative: false positives are resolved by the
      * expression parser; false negatives would silently misparse.
      */
-    internal fun canStartExpression(): Boolean = when (peek().type) {
+    internal fun canStartExpression(): Boolean = canStartExpression(peek().type)
+
+    /**
+     * Whether a given [TokenType] could begin an expression.
+     *
+     * Overload used by the infix-call parser for lookahead: it checks the
+     * token *after* the candidate infix name without consuming anything.
+     */
+    internal fun canStartExpression(type: TokenType): Boolean = when (type) {
         // Literals
         INT_LITERAL, LONG_LITERAL, FLOAT_LITERAL, DOUBLE_LITERAL, DEC_LITERAL,
         STRING_LITERAL, VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE,

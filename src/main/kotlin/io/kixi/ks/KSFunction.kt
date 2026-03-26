@@ -32,6 +32,23 @@ import io.kixi.ks.parser.Parameter
  * say counter()  // 2
  * ```
  *
+ * ## Infix Functions
+ *
+ * Functions declared with the `infix` modifier can be called using infix notation:
+ *
+ * ```ks
+ * class Vec(let x: Int, let y: Int) {
+ *     infix fun dot(other: Vec): Int = this.x * other.x + this.y * other.y
+ * }
+ *
+ * let a = Vec(1, 2)
+ * let b = Vec(3, 4)
+ * say a dot b        // infix call: 11
+ * say a.dot(b)       // equivalent dot-call
+ * ```
+ *
+ * Infix functions must have exactly one parameter (enforced at parse time).
+ *
  * ## Design Notes
  *
  * This class is in the `interp` package but could be moved to `runtime` if the
@@ -67,6 +84,10 @@ class KSFunction(
     val isAbstract: Boolean
         get() = declaration.body == null
 
+    /** Whether this function is declared with the `infix` modifier. */
+    val isInfix: Boolean
+        get() = declaration.isInfix
+
     /** Source location of the function definition. */
     val location: SourceLocation
         get() = declaration.location
@@ -93,7 +114,8 @@ class KSFunction(
             "${p.name}$typeStr$defaultStr"
         }
         val returnStr = declaration.returnType?.let { ": ${it.name}" } ?: ""
-        return "fun $name($paramStr)$returnStr"
+        val infixStr = if (isInfix) "infix " else ""
+        return "${infixStr}fun $name($paramStr)$returnStr"
     }
 }
 

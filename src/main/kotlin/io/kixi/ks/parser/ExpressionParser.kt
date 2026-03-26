@@ -8,7 +8,7 @@ import io.kixi.ks.lexer.TokenType.*
  * Expression parser for the KS language.
  *
  * Implements precedence-climbing recursive descent for all KS expressions.
- * Handles 14 precedence levels (lowest to highest):
+ * Handles 15 precedence levels (lowest to highest):
  *
  *   1. Assignment:     =  +=  -=  *=  /=  %=  **=   (right-assoc)
  *   2. Ternary:        condition ? then : else
@@ -17,13 +17,14 @@ import io.kixi.ks.lexer.TokenType.*
  *   5. Equality:       ==  !=
  *   6. Comparison:     <  >  <=  >=
  *   7. Named checks:   in  !in  is  !is  matches  as
- *   8. Elvis:          ?:
- *   9. Range:          ..  ..<  <..  <..<
- *  10. Addition:       +  -
- *  11. Multiplication: *  /  %  ⚭
- *  12. Exponentiation: **                            (right-assoc)
- *  13. Unary prefix:   -  !  ++  --
- *  14. Postfix:        .  ?.  ()  []  !!  ++  --  ::class
+ *   8. Infix calls:    a add b, list zip other     (left-assoc)
+ *   9. Elvis:          ?:
+ *  10. Range:          ..  ..<  <..  <..<
+ *  11. Addition:       +  -
+ *  12. Multiplication: *  /  %  \u26ad
+ *  13. Exponentiation: **                            (right-assoc)
+ *  14. Unary prefix:   -  !  ++  --
+ *  15. Postfix:        .  ?.  ()  []  !!  ++  --  ::class
  *
  * Primary expressions (literals, identifiers, if, when, try, etc.) form
  * the base of the precedence hierarchy.
@@ -190,17 +191,17 @@ class ExpressionParser(internal val p: Parser) {
      *     x as String        TypeCastExpr
      */
     private fun parseNamedCheck(): Expr {
-        var expr = parseElvis()
+        var expr = parseInfixCall()
 
         while (true) {
             val loc = p.currentLocation()
             when {
                 p.match(IN) -> {
-                    val container = parseElvis()
+                    val container = parseInfixCall()
                     expr = InCheckExpr(expr, container, negated = false, loc)
                 }
                 p.match(NOT_IN) -> {
-                    val container = parseElvis()
+                    val container = parseInfixCall()
                     expr = InCheckExpr(expr, container, negated = true, loc)
                 }
                 p.match(IS) -> {
@@ -212,7 +213,7 @@ class ExpressionParser(internal val p: Parser) {
                     expr = TypeCheckExpr(expr, type, negated = true, loc)
                 }
                 p.match(MATCHES) -> {
-                    val pattern = parseElvis()
+                    val pattern = parseInfixCall()
                     expr = MatchesExpr(expr, pattern, loc)
                 }
                 p.match(AS) -> {
@@ -227,7 +228,95 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 8. Elvis: ?:
+    // 8. Infix Calls: a add b, list zip other
+    // ====================================================================
+
+    /**
+     * Parse infix function calls: `receiver name argument`.
+     *
+     * After parsing the left operand via [parseElvis], if the next token is
+     * an [IDENTIFIER] AND the token after that can start an infix right
+     * operand, we consume the identifier as an infix function name and parse
+     * the right operand.
+     *
+     * ## Lookahead Safety
+     *
+     * KS uses delimiter-free syntax for `while condition body`,
+     * `if condition body`, etc. A naive "IDENTIFIER followed by
+     * expression-start" check is too aggressive — it would eat into the
+     * body statement:
+     *
+     *     while i < 5 i++            // i++ is the body, not an infix call
+     *     while i < 5 doSomething()  // doSomething() is the body
+     *
+     * To prevent this, the right-operand lookahead is restricted to tokens
+     * that unambiguously begin a value: **identifiers and literals only**.
+     * Operators (`++`, `-`, `!`), delimiters (`(`, `[`, `{`), and keywords
+     * (`if`, `when`) are excluded. For complex right operands, use dot-call
+     * syntax: `a.add(b + c)` or `a.add(-b)`.
+     *
+     * Left-associative: `a foo b bar c` parses as `(a.foo(b)).bar(c)`.
+     *
+     * Runtime validation in [Interpreter.evaluateInfixCall] verifies that
+     * the resolved function is declared with the `infix` modifier.
+     */
+    private fun parseInfixCall(): Expr {
+        var expr = parseElvis()
+
+        while (p.check(IDENTIFIER)) {
+            // The token after the identifier must unambiguously begin a value.
+            // See canStartInfixRightOperand() for the rationale.
+            val afterIdent = p.peekAt(1).type
+            if (!canStartInfixRightOperand(afterIdent)) break
+
+            val loc = p.currentLocation()
+            val name = p.advance().value   // consume infix function name
+            val right = parseElvis()
+            expr = InfixCallExpr(expr, name, right, loc)
+        }
+
+        return expr
+    }
+
+    /**
+     * Whether a token type can start the right operand of an infix call.
+     *
+     * This is deliberately more conservative than [Parser.canStartExpression].
+     * Only identifiers and literal tokens qualify — operators, delimiters, and
+     * keywords are excluded to prevent the parser from greedily consuming
+     * tokens that belong to a subsequent statement or block body.
+     *
+     * Excluded categories and their ambiguity:
+     *   - `LPAREN`: `ident(args)` looks like a function call, not an infix
+     *     operand. Use dot-call: `a.add(b + c)`.
+     *   - `LBRACKET`: `ident[i]` looks like index access.
+     *   - `LBRACE`: could be a block body (while/if/for).
+     *   - `PLUS_PLUS`, `MINUS_MINUS`: ambiguous with postfix on the identifier
+     *     itself (`i++`).
+     *   - `MINUS`, `BANG`: ambiguous with the start of a new statement
+     *     (`-x` or `!flag`).
+     *   - `IF`, `WHEN`, `TRY`: could be the start of a control-flow body.
+     *   - `DOT`, `UNDERSCORE`, `DOLLAR`, `LANG`: edge cases not worth the risk.
+     *
+     * For any excluded pattern, the user can use dot-call syntax instead:
+     * `a.add(-b)`, `a.add(b + c)`, `a.add(someFunc(x))`.
+     */
+    private fun canStartInfixRightOperand(type: TokenType): Boolean = when (type) {
+        // Identifiers
+        IDENTIFIER,
+            // Numeric literals
+        INT_LITERAL, LONG_LITERAL, FLOAT_LITERAL, DOUBLE_LITERAL, DEC_LITERAL,
+            // Quantity / currency / version literals
+        QUANTITY_LITERAL, CURRENCY_QUANTITY_LITERAL, VERSION_LITERAL,
+            // String literals
+        STRING_LITERAL, VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE, BACKTICK_STRING,
+            // Other literals
+        CHAR_LITERAL, TRUE, FALSE, NIL, URL_LITERAL -> true
+        else -> false
+    }
+
+    // ====================================================================
+    // 9. Elvis: ?:
     // ====================================================================
 
     private fun parseElvis(): Expr {
@@ -241,7 +330,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 9. Range: .. ..< <.. <..<
+    // 10. Range: .. ..< <.. <..<
     // ====================================================================
 
     /**
@@ -288,7 +377,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 10. Addition: + -
+    // 11. Addition: + -
     // ====================================================================
 
     private fun parseAddition(): Expr {
@@ -307,7 +396,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 11. Multiplication: * / % ⚭
+    // 12. Multiplication: * / % ⚭
     // ====================================================================
 
     private fun parseMultiplication(): Expr {
@@ -328,7 +417,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 12. Exponentiation: ** (right-associative)
+    // 13. Exponentiation: ** (right-associative)
     // ====================================================================
 
     /** Right-associative: `2**3**4` → `2**(3**4)`. */
@@ -343,7 +432,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 13. Unary Prefix: - ! ++ --
+    // 14. Unary Prefix: - ! ++ --
     // ====================================================================
 
     private fun parseUnaryPrefix(): Expr {
@@ -414,7 +503,7 @@ class ExpressionParser(internal val p: Parser) {
     }
 
     // ====================================================================
-    // 14. Postfix: . ?. () [] !! ++ -- ::class
+    // 15. Postfix: . ?. () [] !! ++ -- ::class
     // ====================================================================
 
     /**

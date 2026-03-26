@@ -13,9 +13,10 @@ package io.kixi.ks.lexer
  * Changes from previous version:
  * - Added STAR_STAR (**) for exponentiation: 5**3
  * - Added STAR_STAR_EQUAL (**=) for compound exponentiation assignment
- * - Added QUANTITY_LITERAL for unit-of-measure quantities: 23cm, 51.4m³, 1000kg
- * - Added CURRENCY_QUANTITY_LITERAL for prefix-notation currencies: $23.53, €50.25
- * - Added COMBINE (⚭) for unit composition: 4cm ⚭ 3cm → 12cm²
+ * - Added QUANTITY_LITERAL for unit-of-measure quantities: 23cm, 51.4m\u00b3, 1000kg
+ * - Added CURRENCY_QUANTITY_LITERAL for prefix-notation currencies: $23.53, \u20ac50.25
+ * - Added COMBINE (\u26ad) for unit composition: 4cm \u26ad 3cm \u2192 12cm\u00b2
+ * - Added INFIX modifier keyword for infix function declarations
  */
 enum class TokenType {
 
@@ -30,8 +31,8 @@ enum class TokenType {
     DEC_LITERAL,            // 3.14BD
 
     // --- Quantity Literals ---
-    QUANTITY_LITERAL,           // 23cm, 51.4m³, 1000kg, 25°C, 97ℓ, 100USD, 5.5e(-7)m
-    CURRENCY_QUANTITY_LITERAL,  // $23.53, €50.25, ¥10000, £75.50, ₿0.5, Ξ2.5
+    QUANTITY_LITERAL,           // 23cm, 51.4m\u00b3, 1000kg, 25\u00b0C, 97\u2113, 100USD, 5.5e(-7)m
+    CURRENCY_QUANTITY_LITERAL,  // $23.53, \u20ac50.25, \u00a510000, \u00a375.50, \u20bf0.5, \u039e2.5
 
     // --- Version Literals ---
     VERSION_LITERAL,            // 5.0.0, 1.2.3_beta, 0.2.0_rc_1
@@ -59,7 +60,7 @@ enum class TokenType {
     PERCENT,                // %
 
     // --- Unit Composition ---
-    COMBINE,                // ⚭ (unit combine: 4cm ⚭ 3cm → 12cm²)
+    COMBINE,                // \u26ad (unit combine: 4cm \u26ad 3cm \u2192 12cm\u00b2)
 
     // --- Increment / Decrement ---
     PLUS_PLUS,              // ++
@@ -129,6 +130,9 @@ enum class TokenType {
     STATIC,                 // static
     EXTEND,                 // extend
 
+    // --- Keywords: Modifiers ---
+    INFIX,                  // infix (modifier for fun declarations)
+
     // --- Keywords: Control Flow ---
     IF,                     // if
     ELSE,                   // else
@@ -174,6 +178,7 @@ enum class TokenType {
             "struct" to STRUCT,
             "static" to STATIC,
             "extend" to EXTEND,
+            "infix" to INFIX,
             "if" to IF,
             "else" to ELSE,
             "for" to FOR,

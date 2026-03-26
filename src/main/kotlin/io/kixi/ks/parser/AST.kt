@@ -84,6 +84,7 @@ data class VarDecl(
  *     fun greet(name: String) = "Hello $name"         // single-expression
  *     fun dangerous(level) { ... }                    // untyped param
  *     fun name(): String                              // abstract (body = null)
+ *     infix fun add(other: Int): Int { ... }          // infix (exactly 1 param)
  */
 data class FunDecl(
     val name: String,
@@ -91,7 +92,8 @@ data class FunDecl(
     val returnType: TypeRef?,
     val body: Node?,                // null for abstract trait methods
     val isSingleExpr: Boolean,      // true for `= expr` form
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    val isInfix: Boolean = false    // true for `infix fun` declarations
 ) : Decl
 
 /**
@@ -493,6 +495,26 @@ data class CallExpr(
     val arguments: List<Argument>,
     override val location: SourceLocation,
     val typeArgs: List<TypeRef> = emptyList()
+) : Expr
+
+/**
+ * Infix function call: `receiver name argument`
+ *
+ *     a add b          desugars to a.add(b)
+ *     list zip other   desugars to list.zip(other)
+ *
+ * The function must be declared with the `infix` modifier and accept
+ * exactly one parameter. Left-associative at its precedence level:
+ * `a foo b bar c` parses as `(a foo b) bar c`.
+ *
+ * Parsed at precedence level 8, between named checks (in/is/as) and
+ * elvis (?:), matching Kotlin's infix call precedence.
+ */
+data class InfixCallExpr(
+    val receiver: Expr,
+    val functionName: String,
+    val argument: Expr,
+    override val location: SourceLocation
 ) : Expr
 
 /**

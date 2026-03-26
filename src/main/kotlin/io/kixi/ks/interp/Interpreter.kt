@@ -236,6 +236,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
             // --- Expressions: Calls (core) ---
             is CallExpr -> evaluateCall(node)
+            is InfixCallExpr -> evaluateInfixCall(node)
 
             // --- Expressions: Control Flow (core) ---
             is IfExpr -> evaluateIf(node)
@@ -580,6 +581,73 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
                 throw NotCallableError(callee, location)
             }
+        }
+    }
+
+    // ========================================================================
+    // Infix Function Calls
+    // ========================================================================
+
+    /**
+     * Evaluate an infix function call: `receiver name argument`.
+     *
+     * Resolves the method on the receiver's type, verifies the `infix` modifier,
+     * and dispatches through the standard method-call path.
+     *
+     *     a add b  →  a.add(b)
+     *
+     * Supported receiver types:
+     *   - KSObject (class instances): method lookup via klass.findMethod
+     *   - KSStructInstance: method lookup via struct.findMethod
+     *
+     * @throws RuntimeError if the method doesn't exist or isn't declared `infix`.
+     * @throws NullPointerError if the receiver is nil.
+     */
+    private fun evaluateInfixCall(node: InfixCallExpr): Any? {
+        val receiver = evaluate(node.receiver)
+        val argument = evaluate(node.argument)
+        val name = node.functionName
+        val location = node.location
+
+        if (receiver == null) {
+            throw NullPointerError("Cannot call infix function '$name' on nil", location)
+        }
+
+        return when (receiver) {
+            is KSObject -> {
+                val method = receiver.klass.findMethod(name)
+                    ?: throw RuntimeError(
+                        "No function '$name' found on class '${receiver.klass.name}'",
+                        location
+                    )
+                if (!method.declaration.isInfix) {
+                    throw RuntimeError(
+                        "Function '$name' on '${receiver.klass.name}' is not declared as 'infix'. " +
+                                "Add the 'infix' modifier or use dot-call syntax: receiver.${name}(arg)",
+                        location
+                    )
+                }
+                callMethod(receiver, method, listOf(argument), location)
+            }
+            is KSStructInstance -> {
+                val method = receiver.struct.findMethod(name)
+                    ?: throw RuntimeError(
+                        "No function '$name' found on struct '${receiver.struct.name}'",
+                        location
+                    )
+                if (!method.declaration.isInfix) {
+                    throw RuntimeError(
+                        "Function '$name' on '${receiver.struct.name}' is not declared as 'infix'. " +
+                                "Add the 'infix' modifier or use dot-call syntax: receiver.${name}(arg)",
+                        location
+                    )
+                }
+                callStructMethod(receiver, method, listOf(argument), location)
+            }
+            else -> throw RuntimeError(
+                "Infix function '$name' is not supported on type '${ops.runtimeTypeName(receiver) ?: "Unknown"}'",
+                location
+            )
         }
     }
 

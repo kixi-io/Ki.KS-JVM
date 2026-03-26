@@ -359,9 +359,11 @@ object MembersFormatter {
      *     fun add(a: Int, b: Int): Int
      *     fun setLevel(n: Int > 0)
      *     fun process(data: List<String>, verbose: Bool = false): Int
+     *     infix fun dot(other: Vec): Int
      */
     private fun formatFunSignature(fn: FunDecl): String {
-        val sb = StringBuilder("fun ${fn.name}(")
+        val prefix = if (fn.isInfix) "infix fun" else "fun"
+        val sb = StringBuilder("$prefix ${fn.name}(")
         sb.append(fn.params.joinToString(", ") { formatParameter(it) })
         sb.append(")")
         if (fn.returnType != null) {

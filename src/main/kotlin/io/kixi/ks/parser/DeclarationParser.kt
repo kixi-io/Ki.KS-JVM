@@ -68,6 +68,22 @@ class DeclarationParser(internal val p: Parser) {
     // ====================================================================
 
     /**
+     * Parse an infix function declaration.
+     *
+     *     infix fun add(other: Int): Int = this.value + other
+     *
+     * Consumes `infix`, then delegates to [parseFunDecl] with isInfix = true.
+     * Validates that the function has exactly one parameter (enforced by parseFunDecl).
+     */
+    fun parseInfixFunDecl(): FunDecl {
+        p.advance() // consume INFIX
+        if (!p.check(FUN)) {
+            p.error("Expected 'fun' after 'infix'")
+        }
+        return parseFunDecl(isInfix = true)
+    }
+
+    /**
      * Parse a function declaration.
      *
      *     fun add(a: Int, b: Int): Int { return a + b }   block body
@@ -75,12 +91,16 @@ class DeclarationParser(internal val p: Parser) {
      *     fun dangerous(level) { ... }                     untyped param
      *     fun name(): String                               abstract (no body)
      *     fun factorial(n: Int): Int = if n <= 1 1 else n * factorial(n - 1)
+     *     infix fun add(other: Int): Int = ...             infix (exactly 1 param)
      *
      * A function with `= expr` is marked as [FunDecl.isSingleExpr] = true.
-     * A function with no body at all (no `{` and no `=`) is abstract — valid
+     * A function with no body at all (no `{` and no `=`) is abstract \u2014 valid
      * only inside a trait.
+     *
+     * @param isInfix Whether this function was preceded by the `infix` modifier.
+     *     If true, the function must have exactly one parameter.
      */
-    fun parseFunDecl(): FunDecl {
+    fun parseFunDecl(isInfix: Boolean = false): FunDecl {
         val loc = p.advance().location // consume FUN
 
         val name = p.expectIdentifier("Expected function name")
@@ -89,6 +109,14 @@ class DeclarationParser(internal val p: Parser) {
         p.expect(LPAREN, "Expected '(' after function name")
         val params = p.types.parseParameterList()
         p.expect(RPAREN, "Expected ')' after parameters")
+
+        // Validate infix: exactly one parameter
+        if (isInfix && params.size != 1) {
+            throw ParseException(
+                "Infix function '$name' must have exactly one parameter (found ${params.size})",
+                loc
+            )
+        }
 
         // Optional return type: : Type
         val returnType = if (p.match(COLON)) p.types.parseTypeRef() else null
@@ -121,7 +149,7 @@ class DeclarationParser(internal val p: Parser) {
             }
         }
 
-        return FunDecl(name, params, returnType, body, isSingleExpr, loc)
+        return FunDecl(name, params, returnType, body, isSingleExpr, loc, isInfix)
     }
 
     // ====================================================================
