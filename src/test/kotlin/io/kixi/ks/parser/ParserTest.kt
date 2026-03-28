@@ -1041,15 +1041,17 @@ class ParserTest : FunSpec({
     // ====================================================================
 
     context("Block expressions") {
-        test("block with multiple statements") {
+        test("block in expression position is a lambda") {
             val expr = parseExpr("""
-                {
-                    let x = 1
-                    let y = 2
-                    x + y
-                }
-            """.trimIndent()) as BlockExpr
-            expr.statements shouldHaveSize 3
+            {
+                let x = 1
+                let y = 2
+                x + y
+            }
+        """.trimIndent()) as LambdaExpr
+            expr.params shouldHaveSize 0
+            expr.hasArrow shouldBe false
+            expr.body shouldHaveSize 3
         }
     }
 

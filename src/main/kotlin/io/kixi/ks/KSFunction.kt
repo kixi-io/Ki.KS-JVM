@@ -61,7 +61,15 @@ import io.kixi.ks.parser.Parameter
 class KSFunction(
     val declaration: FunDecl,
     val closure: Environment
-) {
+): Callable {
+
+    override fun call(
+        interpreter: Interpreter,
+        arguments: List<Any?>,
+        location: SourceLocation?
+    ): Any? = interpreter.callFunction(this, arguments, location)
+
+
     /** Function name (from the declaration). */
     val name: String get() = declaration.name
 
@@ -174,4 +182,73 @@ class KSFunctionCallable(val function: KSFunction) : Callable {
     }
 
     override fun toString(): String = function.toString()
+}
+
+/**
+ * Runtime representation of a KS lambda (anonymous function / closure).
+ *
+ * Unlike [KSFunction], which wraps a [FunDecl] AST node, a lambda wraps a
+ * [LambdaExpr] directly. Lambdas are always anonymous and capture the
+ * enclosing environment at definition time (lexical scoping).
+ *
+ * ## Implicit `it`
+ *
+ * When [hasArrow] is `false` and [params] is empty, the lambda has a single
+ * implicit parameter named `it`. The interpreter binds `it` automatically
+ * when the lambda is called with one argument:
+ *
+ * ```ks
+ * [1, 2, 3].map { it * 2 }   // implicit it
+ * ```
+ *
+ * When [hasArrow] is `true` and [params] is empty, it's a zero-arg lambda:
+ *
+ * ```ks
+ * val thunk = { -> say "hello" }
+ * ```
+ *
+ * @property params Explicit parameters (empty for implicit `it` or zero-arg)
+ * @property hasArrow Whether `->` was present in the source
+ * @property body The lambda body statements
+ * @property closure The environment captured at definition time
+ */
+class KSLambda(
+    val params: List<io.kixi.ks.parser.LambdaParam>,
+    val hasArrow: Boolean,
+    val body: List<io.kixi.ks.parser.Node>,
+    val closure: Environment
+) : Callable {
+
+    /**
+     * Whether this lambda uses implicit `it` (no arrow, no explicit params).
+     */
+    val isImplicitIt: Boolean get() = !hasArrow && params.isEmpty()
+
+    /**
+     * The expected number of arguments.
+     *
+     * - Implicit `it`: 1
+     * - Zero-arg (`{ -> }`): 0
+     * - Explicit params: params.size
+     */
+    val arity: Int get() = when {
+        isImplicitIt -> 1
+        else -> params.size
+    }
+
+    override fun call(interpreter: Interpreter, arguments: List<Any?>, location: SourceLocation?): Any? {
+        return interpreter.callLambda(this, arguments, location)
+    }
+
+    override fun toString(): String {
+        val paramStr = when {
+            isImplicitIt -> "it"
+            params.isEmpty() -> ""
+            else -> params.joinToString(", ") { p ->
+                val typeStr = p.type?.let { ": ${it.name}" } ?: ""
+                "${p.name}$typeStr"
+            }
+        }
+        return "{ $paramStr -> ... }"
+    }
 }

@@ -53,13 +53,13 @@ class StatementParser(internal val p: Parser) {
             // Traditional form
             val variable = p.advance().value // consume variable name
             p.advance() // consume 'in'
-            val iterable = p.expr.parseExpression()
+            val iterable = p.expr.parseExpressionNoTrailingLambda()
             val body = p.parseSingleOrBlock()
             return ForStmt(variable, iterable, body, loc)
         }
 
         // Simplified form: parse expression as iterable
-        val iterable = p.expr.parseExpression()
+        val iterable = p.expr.parseExpressionNoTrailingLambda()
         val body = p.parseSingleOrBlock()
         return ForStmt(null, iterable, body, loc)
     }
@@ -79,7 +79,7 @@ class StatementParser(internal val p: Parser) {
      */
     fun parseWhileStmt(): WhileStmt {
         val loc = p.advance().location // consume WHILE
-        val condition = p.expr.parseExpression()
+        val condition = p.expr.parseExpressionNoTrailingLambda()
         val body = p.parseSingleOrBlock()
         return WhileStmt(condition, body, loc)
     }

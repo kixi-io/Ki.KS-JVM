@@ -34,6 +34,35 @@ import io.kixi.ks.lexer.TokenType.*
 class ExpressionParser(internal val p: Parser) {
 
     // ====================================================================
+    // Trailing Lambda Control
+    // ====================================================================
+
+    /**
+     * Flag to suppress trailing lambda consumption during expression parsing.
+     *
+     * Set to `false` when parsing conditions/iterables for `if`, `while`,
+     * `for`, and `when` — these are followed by `{ body }` which must NOT
+     * be consumed as a trailing lambda.
+     */
+    internal var allowTrailingLambda = true
+
+    /**
+     * Parse an expression with trailing lambda disabled.
+     *
+     * Used by `if`, `while`, `for`, and `when` parsers when the expression
+     * is a condition/subject/iterable that is followed by `{ body }`.
+     */
+    fun parseExpressionNoTrailingLambda(): Expr {
+        val saved = allowTrailingLambda
+        allowTrailingLambda = false
+        try {
+            return parseExpression()
+        } finally {
+            allowTrailingLambda = saved
+        }
+    }
+
+    // ====================================================================
     // Entry Point
     // ====================================================================
 
@@ -598,6 +627,33 @@ class ExpressionParser(internal val p: Parser) {
                     }
                 }
 
+                // Trailing lambda: { } after a callable expression.
+                //
+                // Converts:
+                //   foo { body }         →  CallExpr(foo, [lambda])
+                //   foo.bar { body }     →  CallExpr(foo.bar, [lambda])
+                //   foo(a) { body }      →  CallExpr(foo, [a, lambda])
+                //
+                // Only fires when allowTrailingLambda is true (disabled during
+                // if/while/for/when condition parsing to avoid consuming the
+                // body block as a trailing lambda).
+                //
+                // Same-line only: NEWLINE tokens between the expression and
+                // `{` prevent matching (the `{` becomes a separate statement).
+                allowTrailingLambda && p.check(LBRACE) -> {
+                    val lambda = parseLambda()
+                    val lambdaArg = Argument(null, lambda, lambda.location)
+                    when (expr) {
+                        is CallExpr -> CallExpr(
+                            expr.callee,
+                            expr.arguments + lambdaArg,
+                            expr.location,
+                            expr.typeArgs
+                        )
+                        else -> CallExpr(expr, listOf(lambdaArg), loc)
+                    }
+                }
+
                 else -> return expr
             }
         }
@@ -700,8 +756,8 @@ class ExpressionParser(internal val p: Parser) {
             // --- List or Map literal: [...] ---
             LBRACKET -> parseListOrMap()
 
-            // --- Block expression: { ... } ---
-            LBRACE -> p.parseBlock()
+            // --- Block expression or lambda literal: { ... } ---
+            LBRACE -> parseLambdaOrBlock()
 
             // --- Expression keywords ---
             IF   -> parseIfExpr()
@@ -747,6 +803,243 @@ class ExpressionParser(internal val p: Parser) {
 
             else -> p.error("Expected expression")
         }
+    }
+
+    // ====================================================================
+    // Lambda Expressions
+    // ====================================================================
+
+    /**
+     * Disambiguate `{ ... }` as a lambda or a block expression.
+     *
+     * The opening `{` has NOT been consumed yet.
+     *
+     * ## Detection Strategy
+     *
+     * After `{`, we use lookahead to find `->` within the parameter list area:
+     *
+     * - `{ -> ... }`             explicit zero-param lambda (hasArrow=true)
+     * - `{ x -> ... }`           single param lambda
+     * - `{ x, y -> ... }`        multi-param lambda
+     * - `{ x: Int -> ... }`      typed param lambda
+     * - `{ x: Int, y -> ... }`   mixed typed/untyped
+     * - `{ ... }` (no `->`)      plain block expression
+     *
+     * The lookahead scans from `{` forward, matching the pattern:
+     *   `{ (IDENTIFIER (: TypeRef)? ,)* IDENTIFIER (: TypeRef)? ->`
+     * If `->` is found within this structure, it's a lambda. Otherwise it's a block.
+     *
+     * Edge case: `{ -> body }` is a zero-arg lambda (empty param list before `->`)
+     */
+    private fun parseLambdaOrBlock(): Expr {
+        return if (isLambdaStart()) {
+            parseLambda()
+        } else {
+            // No arrow — treat as implicit-it lambda (Kotlin semantics).
+            // In expression position, { ... } is always a lambda, not a bare block.
+            // Control-flow bodies (if/while/for) call parseBlock() directly.
+            val block = p.parseBlock()
+            LambdaExpr(
+                params = emptyList(),
+                hasArrow = false,
+                body = block.statements,
+                location = block.location
+            )
+        }
+    }
+
+    /**
+     * Lookahead to determine whether `{` starts a lambda (has `->` in param position).
+     *
+     * Scans forward from the current `{` token without consuming anything.
+     * Returns true if the pattern matches: `{ params -> }`
+     *
+     * Recognizes these patterns after `{`:
+     *   - `->` immediately (zero-param lambda)
+     *   - `IDENTIFIER ->` or `IDENTIFIER , IDENTIFIER ->`
+     *   - `IDENTIFIER : TypeRef ->` (typed parameters)
+     *   - Handles nested `<>` in type arguments (e.g. `List<Int>`)
+     */
+    private fun isLambdaStart(): Boolean {
+        // peekAt(0) is `{`
+        var offset = 1
+
+        // Skip newlines after {
+        while (p.peekAt(offset).type == NEWLINE) offset++
+
+        // Check for immediate `->` (zero-param lambda)
+        if (p.peekAt(offset).type == ARROW) return true
+
+        // Try to match parameter list: (IDENTIFIER (: Type)? ,)* IDENTIFIER (: Type)? ->
+        while (true) {
+            val tok = p.peekAt(offset)
+
+            // Must start with identifier
+            if (tok.type != IDENTIFIER) return false
+            offset++
+
+            // Skip newlines
+            while (p.peekAt(offset).type == NEWLINE) offset++
+
+            // Optional `: Type`
+            if (p.peekAt(offset).type == COLON) {
+                offset++ // skip :
+                // Skip the type reference (IDENTIFIER, optional <...>, optional ?)
+                offset = skipTypeRefLookahead(offset)
+                if (offset < 0) return false
+            }
+
+            // Skip newlines
+            while (p.peekAt(offset).type == NEWLINE) offset++
+
+            val next = p.peekAt(offset)
+            when (next.type) {
+                ARROW -> return true        // found -> : it's a lambda
+                COMMA -> {
+                    offset++                // skip comma, continue to next param
+                    // Skip newlines after comma
+                    while (p.peekAt(offset).type == NEWLINE) offset++
+                }
+                else -> return false        // not a lambda param pattern
+            }
+        }
+    }
+
+    /**
+     * Skip past a type reference during lookahead for lambda detection.
+     *
+     * Handles: `Int`, `String?`, `List<Int>`, `Map<String, Int?>`, nested generics.
+     * Returns the offset after the type reference, or -1 if the pattern doesn't
+     * look like a type reference.
+     */
+    private fun skipTypeRefLookahead(startOffset: Int): Int {
+        var offset = startOffset
+
+        // Skip newlines
+        while (p.peekAt(offset).type == NEWLINE) offset++
+
+        // Expect identifier (type name)
+        if (p.peekAt(offset).type != IDENTIFIER) return -1
+        offset++
+
+        // Optional generic arguments: <...>
+        if (p.peekAt(offset).type == LESS) {
+            var depth = 1
+            offset++ // skip <
+            while (depth > 0) {
+                when (p.peekAt(offset).type) {
+                    LESS -> depth++
+                    GREATER -> depth--
+                    EOF -> return -1
+                    else -> {}
+                }
+                offset++
+            }
+        }
+
+        // Optional ? for nullable
+        if (p.peekAt(offset).type == QUESTION) offset++
+
+        return offset
+    }
+
+    /**
+     * Parse a lambda expression. The `{` has NOT been consumed yet.
+     *
+     * Grammar:
+     *     lambda = '{' lambdaParams? '->' body '}'
+     *            | '{' body '}'   (implicit `it`, detected by caller)
+     *
+     * When called from trailing-lambda position, we know it's a lambda.
+     * When called from parseLambdaOrBlock, isLambdaStart has confirmed `->`.
+     *
+     * If no `->` is found (trailing lambda with implicit `it`), we parse
+     * the body and create a lambda with hasArrow=false.
+     */
+    internal fun parseLambda(): LambdaExpr {
+        val loc = p.expect(LBRACE, "Expected '{' for lambda").location
+        p.skipSeparators()
+
+        // Try to parse lambda params + arrow
+        val params = mutableListOf<LambdaParam>()
+        var hasArrow = false
+
+        if (p.check(ARROW)) {
+            // { -> body } — explicit zero-param lambda
+            p.advance() // consume ->
+            hasArrow = true
+        } else if (isLambdaParamStart()) {
+            // Try parsing params
+            val savedPos = p.current
+            try {
+                params.addAll(parseLambdaParams())
+                p.skipSeparators()
+                if (p.match(ARROW)) {
+                    hasArrow = true
+                } else {
+                    // No arrow found — revert and treat as implicit-it body
+                    p.current = savedPos
+                    params.clear()
+                }
+            } catch (e: Exception) {
+                // Parse failed — revert and treat as body
+                p.current = savedPos
+                params.clear()
+            }
+        }
+
+        // Parse body
+        p.skipSeparators()
+        val body = mutableListOf<Node>()
+        while (!p.check(RBRACE) && !p.isAtEnd()) {
+            body.add(p.parseItem())
+            p.skipSeparators()
+        }
+        p.expect(RBRACE, "Expected '}' to close lambda")
+
+        return LambdaExpr(params, hasArrow, body, loc)
+    }
+
+    /**
+     * Quick check: does the current token look like it could start a lambda parameter?
+     */
+    private fun isLambdaParamStart(): Boolean = p.check(IDENTIFIER)
+
+    /**
+     * Parse comma-separated lambda parameters (before `->` in a lambda).
+     *
+     *     x                    untyped
+     *     x: Int               typed
+     *     x, y                 multiple untyped
+     *     x: Int, y: String    multiple typed
+     *     acc, x               typical reduce/fold params
+     */
+    private fun parseLambdaParams(): List<LambdaParam> {
+        val params = mutableListOf<LambdaParam>()
+        params.add(parseSingleLambdaParam())
+
+        while (p.match(COMMA)) {
+            p.skipSeparators()
+            params.add(parseSingleLambdaParam())
+        }
+
+        return params
+    }
+
+    /**
+     * Parse a single lambda parameter: `name` or `name: Type`.
+     */
+    private fun parseSingleLambdaParam(): LambdaParam {
+        val loc = p.currentLocation()
+        val name = p.expectIdentifier("Expected lambda parameter name")
+
+        val type = if (p.match(COLON)) {
+            p.types.parseTypeRef()
+        } else {
+            null
+        }
+
+        return LambdaParam(name, type, loc)
     }
 
     // ====================================================================
@@ -879,7 +1172,7 @@ class ExpressionParser(internal val p: Parser) {
      */
     internal fun parseIfExpr(): IfExpr {
         val loc = p.advance().location // consume IF
-        val condition = parseExpression()
+        val condition = parseExpressionNoTrailingLambda()
         val thenBranch = p.parseSingleOrBlock()
 
         // Check for else (may be on next line)
@@ -934,7 +1227,7 @@ class ExpressionParser(internal val p: Parser) {
         val subject: Expr? = if (p.check(LBRACE)) {
             null
         } else {
-            val subj = parseExpression()
+            val subj = parseExpressionNoTrailingLambda()
             p.skipNewlines()
             subj
         }

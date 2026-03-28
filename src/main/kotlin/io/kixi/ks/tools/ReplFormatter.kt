@@ -234,6 +234,8 @@ object ReplFormatter {
                 // Try known KS runtime types by simple name
                 val name = value::class.simpleName ?: "Any"
                 when {
+                    name == "KSLambda"       -> "Lambda"
+                    name == "KSFunction"     -> "Function"
                     name.startsWith("KS")    -> name.removePrefix("KS")
                     name.startsWith("KD")    -> name
                     else                     -> name

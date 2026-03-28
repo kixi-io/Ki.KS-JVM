@@ -953,11 +953,14 @@ Methods:
   fun add(element: E): Bool
   fun add(index: Int, element: E)
   fun addAll(elements: List<E>): Bool
+  fun all(predicate: (E) -> Bool): Bool
+  fun any(predicate: (E) -> Bool): Bool
   fun clear()
   fun contains(element: E): Bool
   fun containsAll(elements: List<E>): Bool
   fun distinct(): List<E>
   fun drop(n: Int): List<E>
+  fun dropWhile(predicate: (E) -> Bool): List<E>
   fun equals(other: Any?): Bool
   fun dropLast(n: Int): List<E>
   fun filter(predicate: (E) -> Bool): List<E>
@@ -965,6 +968,7 @@ Methods:
   fun first(): E
   fun flatMap(transform: (E) -> List<R>): List<R>
   fun flatten(): List<Any?>
+  fun fold(initial: R, operation: (R, E) -> R): R
   fun forEach(action: (E) -> Unit)
   fun get(index: Int): E
   fun hashCode(): Int
@@ -973,6 +977,8 @@ Methods:
   fun last(): E
   fun lastIndexOf(element: E): Int
   fun map(transform: (E) -> R): List<R>
+  fun none(predicate: (E) -> Bool): Bool
+  fun reduce(operation: (E, E) -> E): E
   fun remove(element: E): Bool
   fun removeAt(index: Int): E
   fun reversed(): List<E>
@@ -985,6 +991,7 @@ Methods:
   fun subList(fromIndex: Int, toIndex: Int): List<E>
   fun take(n: Int): List<E>
   fun takeLast(n: Int): List<E>
+  fun takeWhile(predicate: (E) -> Bool): List<E>
   fun toList(): List<E>
   fun toMutableList(): List<E>
   fun toSet(): Set<E>

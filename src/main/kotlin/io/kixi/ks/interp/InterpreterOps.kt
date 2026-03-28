@@ -771,6 +771,7 @@ class InterpreterOps(internal val interp: Interpreter) {
             is BoundMethod -> KSType("fun ${value.method.name}")
             is StructBoundMethod -> KSType("fun ${value.method.name}")
             is KSFunctionCallable -> KSType("fun ${value.function.name}")
+            is KSLambda -> KSType("Lambda")
             is Range<*> -> KSType("Range")
             is Grid<*> -> KSType("Grid")
             is Coordinate -> KSType("Coordinate")
@@ -1122,6 +1123,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         is Regex -> "Regex"
         is MatchResult -> "MatchResult"
         is KSFunction -> "Function"
+        is KSLambda -> "Function"
         is NativeCallable -> "Function"
         is NativeTypeConstructor -> "Type"
         else -> null
@@ -1671,6 +1673,144 @@ class InterpreterOps(internal val interp: Interpreter) {
                         "sorted() requires all elements to be comparable",
                         loc ?: location
                     )
+                }
+            }
+
+            // --- Higher-order functions ---
+
+            "map" -> NativeCallable("map") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("map() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("map() argument must be a function", loc ?: location)
+                list.map { element ->
+                    fn.call(interp, listOf(element), loc ?: location)
+                }.toMutableList()
+            }
+
+            "filter" -> NativeCallable("filter") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("filter() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("filter() argument must be a function", loc ?: location)
+                list.filter { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
+                }.toMutableList()
+            }
+
+            "forEach" -> NativeCallable("forEach") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("forEach() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("forEach() argument must be a function", loc ?: location)
+                for (element in list) {
+                    fn.call(interp, listOf(element), loc ?: location)
+                }
+                null // forEach returns nil
+            }
+
+            "reduce" -> NativeCallable("reduce") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("reduce() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("reduce() argument must be a function", loc ?: location)
+                if (list.isEmpty()) throw RuntimeError("reduce() called on empty list", loc ?: location)
+                var accumulator: Any? = list[0]
+                for (i in 1 until list.size) {
+                    accumulator = fn.call(interp, listOf(accumulator, list[i]), loc ?: location)
+                }
+                accumulator
+            }
+
+            "fold" -> NativeCallable("fold") { args, loc ->
+                if (args.size < 2) throw RuntimeError(
+                    "fold() requires an initial value and a function: fold(initial) { acc, x -> ... }",
+                    loc ?: location
+                )
+                val initial = args[0]
+                val fn = args[1] as? Callable
+                    ?: throw TypeError("fold() second argument must be a function", loc ?: location)
+                var accumulator: Any? = initial
+                for (element in list) {
+                    accumulator = fn.call(interp, listOf(accumulator, element), loc ?: location)
+                }
+                accumulator
+            }
+
+            "flatMap" -> NativeCallable("flatMap") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("flatMap() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("flatMap() argument must be a function", loc ?: location)
+                val result = mutableListOf<Any?>()
+                for (element in list) {
+                    val mapped = fn.call(interp, listOf(element), loc ?: location)
+                    when (mapped) {
+                        is List<*> -> result.addAll(mapped)
+                        null -> throw TypeError(
+                            "flatMap() function must return a List, got Nil",
+                            loc ?: location
+                        )
+                        else -> throw TypeError(
+                            "flatMap() function must return a List, got ${runtimeTypeName(mapped)}",
+                            loc ?: location
+                        )
+                    }
+                }
+                result
+            }
+
+            "take" -> NativeCallable("take") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("take() requires an Int argument", loc ?: location)
+                val n = args[0] as? Int
+                    ?: throw TypeError("take() argument must be an Int", loc ?: location)
+                list.take(n).toMutableList()
+            }
+
+            "drop" -> NativeCallable("drop") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("drop() requires an Int argument", loc ?: location)
+                val n = args[0] as? Int
+                    ?: throw TypeError("drop() argument must be an Int", loc ?: location)
+                list.drop(n).toMutableList()
+            }
+
+            "takeWhile" -> NativeCallable("takeWhile") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("takeWhile() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("takeWhile() argument must be a function", loc ?: location)
+                list.takeWhile { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
+                }.toMutableList()
+            }
+
+            "dropWhile" -> NativeCallable("dropWhile") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("dropWhile() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("dropWhile() argument must be a function", loc ?: location)
+                list.dropWhile { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
+                }.toMutableList()
+            }
+
+            "any" -> NativeCallable("any") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("any() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("any() argument must be a function", loc ?: location)
+                list.any { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
+                }
+            }
+
+            "all" -> NativeCallable("all") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("all() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("all() argument must be a function", loc ?: location)
+                list.all { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
+                }
+            }
+
+            "none" -> NativeCallable("none") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("none() requires a function argument", loc ?: location)
+                val fn = args[0] as? Callable
+                    ?: throw TypeError("none() argument must be a function", loc ?: location)
+                list.none { element ->
+                    isTruthy(fn.call(interp, listOf(element), loc ?: location))
                 }
             }
 

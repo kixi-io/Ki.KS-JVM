@@ -136,6 +136,15 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * @return The result of the last evaluated expression/statement
      */
     fun execute(source: String): Any? {
+        val lexer = Lexer(source)
+        val tokens = lexer.tokenize()
+        val parser = Parser(tokens)
+        val program = parser.parse()
+        return executeProgram(program)
+    }
+
+    /*
+    fun execute(source: String): Any? {
         println("executing: $source")
 
         try {
@@ -153,6 +162,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             return null
         }
     }
+    */
 
     /**
      * Execute a parsed program.
@@ -207,7 +217,29 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
             // --- Statements (core) ---
             is SayStmt -> evaluateSay(node)
-            is ExprStmt -> evaluate(node.expression)
+            // is ExprStmt -> evaluate(node.expression)
+            is ExprStmt -> {
+                val expression = node.expression
+                // Standalone { ... } at statement level — execute as a block, not a lambda.
+                // Trailing lambdas and `val f = { ... }` go through other AST paths
+                // (CallExpr and VarDecl respectively), so this only catches bare blocks.
+                if (expression is LambdaExpr && !expression.hasArrow && expression.params.isEmpty()) {
+                    val blockEnv = environment.child("block")
+                    val previousEnv = environment
+                    environment = blockEnv
+                    try {
+                        var result: Any? = null
+                        for (stmt in expression.body) {
+                            result = evaluate(stmt)
+                        }
+                        result
+                    } finally {
+                        environment = previousEnv
+                    }
+                } else {
+                    evaluate(expression)
+                }
+            }
             is ReturnStmt -> evaluateReturn(node)
             is ForStmt -> evaluateFor(node)
             is WhileStmt -> evaluateWhile(node)
@@ -254,6 +286,9 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             // --- Expressions: Ki Literals (expr) ---
             is GridLiteralExpr -> expr.evaluateGridLiteral(node)
             is CoordinateLiteralExpr -> expr.evaluateCoordinateLiteral(node)
+
+            // --- Expressions: Lambda ---
+            is LambdaExpr -> evaluateLambda(node)
 
             // --- Expressions: Special (typeDecls) ---
             is LangBlockExpr -> typeDecls.evaluateLangBlock(node)
@@ -306,6 +341,20 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val function = KSFunction(decl, environment)
         environment.defineFunction(decl.name, function, decl.location)
         return null
+    }
+
+    /**
+     * Evaluate a lambda expression — creates a [KSLambda] closure value.
+     *
+     * The lambda captures the current environment at definition time:
+     *
+     *     var x = 10
+     *     let fn = { x + 1 }  // captures x
+     *     x = 20
+     *     say fn()             // 21 (lexical scoping)
+     */
+    private fun evaluateLambda(node: LambdaExpr): KSLambda {
+        return KSLambda(node.params, node.hasArrow, node.body, environment)
     }
 
     /**
@@ -389,6 +438,89 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     ret.value
                 }
             }
+        } finally {
+            recursionDepth--
+            environment = previousEnv
+        }
+    }
+
+    /**
+     * Call a [KSLambda] with the given arguments.
+     *
+     * Handles parameter binding for all lambda forms:
+     *
+     * - **Implicit `it`** (`{ it * 2 }`): binds the single argument as `it`
+     * - **Explicit params** (`{ x, y -> x + y }`): binds positionally
+     * - **Zero-arg** (`{ -> say "hi" }`): no binding, arity-checked
+     *
+     * The lambda body is a list of statements. The value of the lambda is
+     * the value of the last expression (like block expressions in Kotlin).
+     *
+     * @param lambda The lambda closure to invoke
+     * @param arguments Evaluated argument values
+     * @param location Call site location for error reporting
+     * @return The result of the last expression in the body
+     */
+    fun callLambda(lambda: KSLambda, arguments: List<Any?>, location: SourceLocation?): Any? {
+        // Check recursion depth
+        if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
+            throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
+        }
+
+        // Arity check
+        val expectedArity = lambda.arity
+        if (lambda.isImplicitIt) {
+            // Implicit `it`: accept 0 or 1 args (0 args → it = nil)
+            if (arguments.size > 1) {
+                throw ArityError("<lambda>", 1, arguments.size, location)
+            }
+        } else {
+            if (arguments.size != expectedArity) {
+                throw ArityError("<lambda>", expectedArity, arguments.size, location)
+            }
+        }
+
+        // Create new scope with lambda's closure as parent (lexical scoping)
+        val lambdaEnv = lambda.closure.child("lambda")
+
+        // Bind parameters
+        if (lambda.isImplicitIt) {
+            // Bind `it` to the single argument (or nil if none)
+            val value = if (arguments.isNotEmpty()) ops.copyIfStruct(arguments[0]) else null
+            lambdaEnv.define("it", value, mutable = false)
+        } else {
+            for (i in lambda.params.indices) {
+                val param = lambda.params[i]
+                val value = ops.copyIfStruct(arguments[i])
+
+                // Check null safety and type compatibility
+                ops.checkNullSafety(param.name, value, param.type, location)
+                ops.checkTypeCompatibility(param.name, value, param.type, location)
+
+                lambdaEnv.define(
+                    param.name,
+                    value,
+                    mutable = false, // Lambda parameters are immutable
+                    param.type,
+                    null, // no constraint
+                    param.location
+                )
+            }
+        }
+
+        // Execute lambda body
+        val previousEnv = environment
+        environment = lambdaEnv
+        recursionDepth++
+
+        try {
+            var result: Any? = null
+            for (stmt in lambda.body) {
+                result = evaluate(stmt)
+            }
+            return result
+        } catch (ret: ReturnValue) {
+            return ret.value
         } finally {
             recursionDepth--
             environment = previousEnv

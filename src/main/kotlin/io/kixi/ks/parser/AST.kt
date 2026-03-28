@@ -765,6 +765,69 @@ data class CoordinateLiteralExpr(
     override val location: SourceLocation
 ) : Expr
 
+/**
+ * Lambda expression (anonymous function / closure).
+ *
+ * Follows Kotlin's lambda syntax:
+ *
+ *     { x -> x * 2 }                 single param, explicit
+ *     { x: Int, y: Int -> x + y }    typed params
+ *     { -> say "hi" }                zero params, explicit
+ *     { it * 2 }                     single param, implicit `it`
+ *     { say "hello" }                implicit `it` (unused)
+ *
+ * ## Implicit `it`
+ *
+ * When no `->` is present, the lambda has a single implicit parameter
+ * named `it`. This follows Kotlin's convention and is only available
+ * for single-argument lambdas:
+ *
+ *     [1, 2, 3].map { it * 2 }       // [2, 4, 6]
+ *     [1, 2, 3].filter { it > 1 }    // [2, 3]
+ *
+ * ## Trailing Lambda
+ *
+ * When a lambda is the last argument to a function call, it can be
+ * placed outside the parentheses:
+ *
+ *     list.map { it * 2 }            // trailing lambda
+ *     list.fold(0) { acc, x -> acc + x }  // trailing after other args
+ *
+ * ## Detection
+ *
+ * The parser distinguishes lambdas from blocks by the presence of `->`:
+ * - `{ params -> body }` is always a lambda
+ * - `{ body }` is a lambda in trailing position, a block elsewhere
+ *
+ * @property params Explicit lambda parameters (empty for implicit `it`)
+ * @property hasArrow Whether `->` was present (distinguishes zero-arg from implicit-it)
+ * @property body The lambda body statements
+ */
+data class LambdaExpr(
+    val params: List<LambdaParam>,
+    val hasArrow: Boolean,
+    val body: List<Node>,
+    override val location: SourceLocation
+) : Expr
+
+/**
+ * A lambda parameter (simpler than function [Parameter]).
+ *
+ * Lambda params have no default values and no constraints.
+ * Type annotations are optional:
+ *
+ *     { x -> ... }            untyped
+ *     { x: Int -> ... }       typed
+ *
+ * @property name Parameter name
+ * @property type Optional type annotation
+ */
+data class LambdaParam(
+    val name: String,
+    val type: TypeRef?,
+    val location: SourceLocation
+)
+
 // ============================================================================
 // 6. Supporting Types
 // ============================================================================
