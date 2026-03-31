@@ -404,6 +404,62 @@ for i in 1..20 {
 }
 ```
 
+### when
+
+`when` is KS's pattern matching construct, inspired by Kotlin. Like `if`, it is an expression — it returns a value.
+
+**Subject-based** — match a value against branches:
+
+```
+let httpCode = 404
+
+let result = when httpCode {
+    200 -> "OK"
+    in 300..399 -> "Redirect"
+    404 -> "Not Found"
+    in 500..599 -> "Server Error"
+    else -> "Unknown"
+}
+
+say result                           // Not Found
+```
+
+**Condition-based** — no subject, each branch is a boolean expression:
+
+```
+var temperature = 85
+
+when {
+    temperature > 100 -> say.error "Critical overheating!"
+    temperature > 80  -> say.warn "Running hot"
+    temperature > 60  -> say "Normal"
+    else -> say.note "Cool"
+}
+```
+
+**Enum matching with DPEC**:
+
+```
+enum Status { SUCCESS PARTIAL TIMEOUT FAILURE }
+
+let response = Status.TIMEOUT
+
+let message = when response {
+    .SUCCESS, .PARTIAL -> "Received data"
+    .TIMEOUT -> "Try again"
+    .FAILURE -> "Error occurred"
+    else -> "Unhandled"
+}
+
+say message                          // Try again
+```
+
+Branch bodies can be a single expression (as shown above) or a `{ block }` for multi-line logic. Branches support comma-separated matchers that act as OR — if any matcher hits, that branch executes.
+
+Subject-based `when` also supports `is`/`!is` (type matchers), `in`/`!in` (containment matchers), and `matches` (regex matchers). See [Section 25: Pattern Matching with `when`](#25-pattern-matching-with-when) for the full matcher reference.
+
+If no branch matches and there is no `else`, a `NonExhaustiveWhenError` is thrown at runtime.
+
 ---
 
 ## 6. Functions
