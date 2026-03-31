@@ -1,6 +1,6 @@
 # Ki Script (KS) Language Manual
 
-**Version 0.1 — Draft**
+**Version 0.2 — Draft**
 
 KS is a Kotlin-inspired scripting language that runs on the JVM via a tree-walking interpreter. It features delimiter-free control flow, first-class quantities and units of measure, an embedded KD (Ki Data) DSL, and a concise, expressive syntax designed for both interactive exploration (REPL) and scripted automation.
 
@@ -27,18 +27,25 @@ KS is part of the **Ki ecosystem**, which includes Ki.Core-JVM (types, units, qu
 15. [Quantities and Units of Measure](#15-quantities-and-units-of-measure)
 16. [Grid](#16-grid)
 17. [Coordinate](#17-coordinate)
-18. [Pattern Matching with `when`](#18-pattern-matching-with-when)
-19. [Error Handling](#19-error-handling)
-20. [Constraints](#20-constraints)
-21. [Import System (`use`)](#21-import-system-use)
-22. [Type Extensions (`extend`)](#22-type-extensions-extend)
-23. [Reflection](#23-reflection)
-24. [The `say` Statement](#24-the-say-statement)
-25. [Lang Blocks (Embedded DSLs)](#25-lang-blocks-embedded-dsls)
-26. [Null Safety](#26-null-safety)
-27. [The REPL](#27-the-repl)
-28. [Appendix: Operator Precedence](#appendix-operator-precedence)
-29. [Appendix: Built-in Methods](#appendix-built-in-methods)
+18. [Version](#18-version)
+19. [Blob](#19-blob)
+20. [Email](#20-email)
+21. [GeoPoint](#21-geopoint)
+22. [NSID](#22-nsid)
+23. [Call and Tag](#23-call-and-tag)
+24. [Regex](#24-regex)
+25. [Pattern Matching with `when`](#25-pattern-matching-with-when)
+26. [Error Handling](#26-error-handling)
+27. [Constraints](#27-constraints)
+28. [Import System (`use`)](#28-import-system-use)
+29. [Type Extensions (`extend`)](#29-type-extensions-extend)
+30. [Reflection](#30-reflection)
+31. [The `say` Statement](#31-the-say-statement)
+32. [Lang Blocks (Embedded DSLs)](#32-lang-blocks-embedded-dsls)
+33. [Null Safety](#33-null-safety)
+34. [The REPL](#34-the-repl)
+35. [Appendix: Operator Precedence](#appendix-operator-precedence)
+36. [Appendix: Built-in Methods Reference](#appendix-built-in-methods-reference)
 
 ---
 
@@ -540,7 +547,43 @@ nums.none { it > 10 }                       // true
 // take, drop — subsequences
 nums.take(3)                                 // [1, 2, 3]
 nums.drop(2)                                 // [3, 4, 5]
+
+// takeWhile, dropWhile — conditional subsequences
+nums.takeWhile { it < 4 }                   // [1, 2, 3]
+nums.dropWhile { it < 3 }                   // [3, 4, 5]
 ```
+
+### Closures
+
+Lambdas capture variables from their enclosing scope:
+
+```
+var factor = 10
+let result = [1, 2, 3].map { it * factor }  // [10, 20, 30]
+
+fun multiplier(n: Int): Any {
+    return { x: Int -> x * n }
+}
+let triple = multiplier(3)
+say triple(5)                                // 15
+```
+
+### Standalone Blocks
+
+A bare `{ ... }` at statement level executes immediately as a scoped block — it is not a lambda:
+
+```
+var x = 1
+{
+    var y = 2
+    say x       // 1  (visible from outer scope)
+    say y       // 2
+}
+// y is not visible here
+say x           // 1
+```
+
+To create a zero-argument lambda (not an immediately-executed block), use the explicit arrow: `{ -> body }`.
 
 ---
 
@@ -811,14 +854,16 @@ say nums.first                   // 1
 say nums.last                    // 5
 ```
 
-### Mutable List Operations
+### Index Assignment
+
+Lists created with `var` support index assignment:
 
 ```
 var list = [1, 2, 3]
 list[0] = 10                    // [10, 2, 3]
 ```
 
-### List Methods
+### List Query Methods
 
 ```
 let items = [3, 1, 4, 1, 5, 9]
@@ -832,6 +877,47 @@ items.drop(4)                    // [5, 9]
 items.isEmpty                    // false
 items.isNotEmpty                 // true
 ```
+
+### Mutable List Operations
+
+KS lists are mutable by default. In-place mutators require a `var` binding and return `nil`; copy methods return a new list.
+
+**Adding elements:**
+
+```
+var list = [1, 2, 3]
+list += 4                        // [1, 2, 3, 4]  (append element)
+list += [5, 6]                   // [1, 2, 3, 4, 5, 6]  (append list)
+```
+
+**Removing elements:**
+
+```
+var list = [1, 2, 3, 2, 5]
+list -= 2                        // [1, 3, 2, 5]  (removes first occurrence)
+```
+
+**In-place mutators** (require `var`, return `nil`):
+
+```
+var nums = [3, 1, 4, 1, 5]
+
+nums.sort()                      // [1, 1, 3, 4, 5] in-place
+nums.reverse()                   // [5, 4, 3, 1, 1] in-place
+nums.shuffle()                   // random order in-place
+```
+
+**Copy methods** (work on any list, return new list):
+
+```
+let nums = [3, 1, 4, 1, 5]
+
+let sorted = nums.sorted()      // [1, 1, 3, 4, 5] — new list
+let reversed = nums.reversed()  // [5, 1, 4, 1, 3] — new list
+let shuffled = nums.shuffled()  // random order — new list
+```
+
+The mutator/copy convention: `sort()` mutates in-place and returns `nil`; `sorted()` returns a new sorted list. The same pattern applies to `reverse()`/`reversed()` and `shuffle()`/`shuffled()`.
 
 ### Maps
 
@@ -874,19 +960,42 @@ let upTo10 = _..10              // negative infinity to 10
 let upToNot10 = _..<10          // negative infinity to 9
 ```
 
-### Range Properties and Methods
+### Range Properties
 
 ```
 let r = 1..10
 say r.start                      // 1
 say r.end                        // 10
+say r.bound                      // ".."
 say r.min                        // 1
 say r.max                        // 10
-say r.reversed                   // 10..1
+say r.reversed                   // true if start > end, else false
+say r.isClosed                   // true (both ends bounded)
+say r.isOpen                     // false
+say r.isOpenStart                // false
+say r.isOpenEnd                  // false
+say r.startExclusive             // false
+say r.endExclusive               // false
+```
+
+### Range Methods
+
+```
+let r = 1..10
 
 r.contains(5)                    // true
 r.contains(11)                   // false
 r.toList()                       // [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+r.toList(2)                      // [1, 3, 5, 7, 9] (step by 2)
+r.count()                        // 10
+r.count(3)                       // 4 (step by 3)
+
+// Set operations
+let r2 = 5..15
+r.overlaps(r2)                   // true
+r.intersect(r2)                  // 5..10
+r.clamp(20)                      // 10 (clamp to range bounds)
+r.clamp(-5)                      // 1
 ```
 
 ### Range Iteration
@@ -996,6 +1105,8 @@ Or suffix notation with the currency code:
 
 ```
 let amount = 100USD
+let canadian = 50CAD
+let swiss = 200CHF
 ```
 
 ### Arithmetic with Quantities
@@ -1008,6 +1119,13 @@ let diff = 1kg - 200g           // result in compatible units
 let doubled = 50USD * 2         // $100.00
 ```
 
+Incompatible units produce a runtime error:
+
+```
+// 10cm + 5kg  → IncompatibleUnitsException
+// $100 + €50  → IncompatibleUnitsException
+```
+
 ### Unit Conversion with `as`
 
 ```
@@ -1015,7 +1133,7 @@ let dist = 10cm + 4mm
 let result = dist as cm          // convert to centimeters
 
 let temp = 100°C
-let fahrenheit = temp as °F      // convert to Fahrenheit
+let fahrenheit = temp as K       // convert to Kelvin
 ```
 
 ### Unit Composition with `⚭`
@@ -1024,7 +1142,57 @@ The combine operator (`⚭`) multiplies quantities and composes their units:
 
 ```
 let area = 4cm ⚭ 3cm            // 12cm²
+let volume = 12cm² ⚭ 5cm        // 60cm³
 ```
+
+### Quantity Members
+
+```
+let dist = 23cm
+say dist.value                   // 23
+say dist.unit                    // "cm"
+
+let converted = dist.convertTo("mm")  // 230mm
+say dist.toSuffixString()        // "23cm:i"
+```
+
+### Scientific Notation
+
+KS supports two forms for scientific notation in quantities:
+
+```
+// Parentheses style
+let earth = 5.5e(8)km           // 5.5 × 10⁸ km
+let nano = 5.5e(-7)m            // 5.5 × 10⁻⁷ m
+
+// Letter style (n=negative, p=positive)
+let mass = 9.109en31kg           // 9.109 × 10⁻³¹ kg
+let avogadro = 6.022ep23mol      // 6.022 × 10²³ mol
+```
+
+### Available Units
+
+**Length:** `nm`, `µm`, `mm`, `cm`, `dm`, `m`, `km`
+
+**Mass:** `ng`, `mg`, `cg`, `g`, `kg`
+
+**Area:** `nm²`, `mm²`, `cm²`, `m²`, `km²`
+
+**Volume:** `nm³`, `mm³`, `cm³`, `m³`, `km³`, `mℓ`, `ℓ`
+
+**Temperature:** `K`, `°C` (alias: `dC`)
+
+**Time:** `s`, `min`, `h`, `day`
+
+**Speed:** `kph`, `mps`
+
+**Density:** `kgpm³`
+
+**Other:** `mol`, `A`, `cd`, `pH`
+
+**Fiat Currencies:** `USD` ($), `EUR` (€), `JPY` (¥), `GBP` (£), `CNY`, `AUD`, `CAD`, `CHF`, `HKD`, `SGD`, `INR`, `KRW`
+
+**Cryptocurrencies:** `BTC` (₿), `ETH` (Ξ)
 
 ---
 
@@ -1063,24 +1231,141 @@ let zeros = .grid<Int>(4, 4)              // 4×4, zero-filled
 let ones = .grid<Int>(2, 2, default = 1)  // 2×2, filled with 1
 ```
 
-### Grid Access
+### Cell Access
+
+Grids support multiple access styles:
 
 ```
 let g = .grid { 1 2 3; 4 5 6; 7 8 9 }
+
+// Standard zero-based (x=column, y=row)
 say g[0, 0]                      // 1
-say g[1, 2]                      // 6
+say g[1, 2]                      // 8
+
+// Plate notation (letter row, one-based column)
+say g["A", 1]                    // 1  (row A, column 1)
+say g["B", 3]                    // 6  (row B, column 3)
+
+// Sheet notation string
+say g["A1"]                      // 1
+
+// Coordinate object
+let coord = .coordinate(x=2, y=1)
+say g[coord]                     // 6
+```
+
+### Cell Assignment
+
+```
+var g = .grid<Int>(3, 3)
+g[0, 0] = 42
+g[1, 1] = 99
+g["C", 3] = 7                   // plate notation
+```
+
+### Grid Properties
+
+```
+let g = .grid { 1 2 3; 4 5 6 }
 say g.width                      // 3
-say g.height                     // 3
-say g.size                       // 9
+say g.height                     // 2
+say g.size                       // 6
+say g.isEmpty                    // false (true if all cells nil)
+say g.isNotEmpty                 // true (true if any cell non-nil)
+say g.elementNullable            // false
+```
+
+### Grid Methods
+
+**Transformation:**
+
+```
+let g = .grid { 1 2 3; 4 5 6 }
+
+let doubled = g.map { it * 2 }  // new grid: 2 4 6; 8 10 12
+let transposed = g.transpose()  // 2×3 grid: 1 4; 2 5; 3 6
+let cloned = g.copy()           // independent deep copy
+```
+
+**Row and column access:**
+
+```
+let g = .grid { 1 2 3; 4 5 6; 7 8 9 }
+
+let row = g.getRowCopy(0)        // [1, 2, 3]
+let col = g.getColumnCopy(1)     // [2, 5, 8]
+
+g.setRow(0, [10, 20, 30])       // replaces first row
+g.setColumn(2, [30, 60, 90])    // replaces third column
+```
+
+**Search:**
+
+```
+let g = .grid { 1 2 3; 4 5 6; 7 8 9 }
+
+g.find { it > 5 }               // (.coordinate(x=2, y=1), 6) — first match
+g.findAll { it % 2 == 0 }       // list of (Coordinate, value) pairs
+g.count { it > 3 }              // 6
+g.any { it == 5 }               // true
+g.all { it > 0 }                // true
+g.none { it > 100 }             // true
+```
+
+**Mutation:**
+
+```
+var g = .grid<Int>(3, 3, default = 0)
+
+g.fill(42)                       // set every cell to 42
+g.fillRow(0, 99)                 // fill first row with 99
+g.fillColumn(1, 77)              // fill second column with 77
+g.clear()                        // set all cells to nil
+```
+
+**Subgrid extraction:**
+
+```
+let g = .grid {
+    1  2  3  4
+    5  6  7  8
+    9 10 11 12
+}
+
+let sub = g.subgrid(1, 0, 2, 2)  // 2×2 from (1,0): 2 3; 6 7
+```
+
+**Conversion:**
+
+```
+let g = .grid { 1 2 3; 4 5 6 }
+
+g.toList()                       // [1, 2, 3, 4, 5, 6] (flat, row-major)
+g.toRowList()                    // [[1, 2, 3], [4, 5, 6]]
+```
+
+**Iteration:**
+
+```
+let g = .grid { 1 2; 3 4 }
+
+g.forEach { say it }             // 1, 2, 3, 4
+g.forEachIndexed { x, y, v -> say "$x,$y = $v" }
+// 0,0 = 1
+// 1,0 = 2
+// 0,1 = 3
+// 1,1 = 4
 ```
 
 ---
 
 ## 17. Coordinate
 
-Coordinates support two addressing styles via named arguments.
+Coordinates represent a position in a 2D grid (with optional z for 3D). They support two addressing styles that map to the same underlying (x, y) position.
 
 ### Standard Notation
+
+Zero-based programmer-friendly coordinates:
 
 ```
 let origin = .coordinate(x=0, y=0)
@@ -1090,15 +1375,549 @@ let pos3d = .coordinate(x=0, y=0, z=5)
 
 ### Sheet Notation
 
+Spreadsheet-style with letter columns and one-based rows:
+
 ```
-let cell = .coordinate(c="A", r=1)
-let far = .coordinate(c="AA", r=100)
-let deep = .coordinate(c="E", r=8, z=5)
+let cell = .coordinate(c="A", r=1)       // same as x=0, y=0
+let far = .coordinate(c="AA", r=100)     // x=26, y=99
+let deep = .coordinate(c="E", r=8, z=5)  // x=4, y=7, z=5
+```
+
+### Coordinate Properties
+
+```
+let c = .coordinate(x=4, y=7)
+
+// Standard notation
+say c.x                          // 4
+say c.y                          // 7
+
+// Sheet notation
+say c.column                     // "E"
+say c.row                        // 8 (one-based)
+
+// Plate notation (rows=letters, columns=numbers)
+say c.rowLetter                  // "H"
+say c.columnNumber               // 5 (one-based)
+
+say c.hasZ                       // false
+say c.isOrigin                   // false
+```
+
+### Coordinate Methods
+
+```
+let c = .coordinate(x=2, y=3)
+
+// Navigation — returns new Coordinate
+c.right(1)                       // x=3, y=3
+c.left(1)                        // x=1, y=3
+c.down(1)                        // x=2, y=4
+c.up(1)                          // x=2, y=2
+c.offset(dx=1, dy=-2)           // x=3, y=1
+
+// Z-axis
+c.withZ(5)                       // x=2, y=3, z=5
+c.withoutZ()                     // x=2, y=3 (removes z)
+
+// Formatting
+c.toSheetNotation()              // "C4"
+c.toPlateNotation()              // "D3"
+c.toStandardNotation()           // "2,3"
+```
+
+### Parsing Coordinates
+
+Coordinates can be parsed from strings:
+
+```
+let a = Coordinate.parse("A1")      // sheet notation → x=0, y=0
+let b = Coordinate.parse("AA100")   // x=26, y=99
+let c = Coordinate.parse("4,7")     // standard notation → x=4, y=7
+```
+
+### Coordinate Ranges
+
+Coordinates support range syntax for rectangular regions:
+
+```
+let start = Coordinate.parse("A1")
+let end = Coordinate.parse("C3")
+let range = start..end
+
+for coord in range {
+    say coord.toSheetNotation()  // A1, B1, C1, A2, B2, C2, A3, B3, C3
+}
+say range.size                   // 9
+say range.width                  // 3
+say range.height                 // 3
 ```
 
 ---
 
-## 18. Pattern Matching with `when`
+## 18. Version
+
+The Version type implements [Semantic Versioning 2.0](https://semver.org). Versions use the format `major.minor.micro-qualifier-qualifierNumber`.
+
+### Version Literals
+
+In KS, version literals use underscores to separate qualifiers (since `-` is the minus operator):
+
+```
+let v1 = 5.0.0
+let v2 = 1.2.3_beta
+let v3 = 0.2.0_rc_1
+let v4 = 1_000.0.0_alpha       // underscores in digits for readability
+```
+
+### Constructing Versions
+
+```
+let v = Version(5, 2, 7)
+let pre = Version(1, 0, 0, "beta", 3)
+let parsed = Version.parse("5.2.7-rc-1")
+```
+
+### Version Properties
+
+```
+let v = 5.2.7_beta_3
+say v.major                      // 5
+say v.minor                      // 2
+say v.micro                      // 7
+say v.qualifier                  // "beta"
+say v.qualifierNumber            // 3
+say v.hasQualifier               // true
+say v.isStable                   // false (has qualifier)
+say v.isPreRelease               // true
+```
+
+### Version Methods
+
+```
+let v = 1.2.3_beta_2
+
+v.toStable()                     // 1.2.3 (strip qualifier)
+v.toShortString()                // "1.2.3-beta-2" (omit trailing zeros)
+v.incrementMajor()               // 2.0.0
+v.incrementMinor()               // 1.3.0
+v.incrementMicro()               // 1.2.4
+v.incrementQualifierNumber()     // 1.2.3-beta-3
+v.withQualifier("rc", 1)        // 1.2.3-rc-1
+v.isCompatibleWith(1.5.0)       // true (same major)
+```
+
+### Version Comparison
+
+Versions are compared component by component. Pre-release versions sort below their stable equivalents:
+
+```
+say 1.0.0 < 2.0.0               // true
+say 5.2.0_alpha < 5.2.0         // true (qualifier < stable)
+say 1.0.0_alpha < 1.0.0_beta    // true (lexicographic qualifier)
+say 1.0.0_rc_1 < 1.0.0_rc_2    // true (qualifier number)
+```
+
+### Version Constants
+
+```
+Version.EMPTY                    // 0.0.0
+Version.MIN                      // 0.0.0-AAA (lowest possible)
+Version.MAX                      // MAX_INT.MAX_INT.MAX_INT (highest possible)
+```
+
+---
+
+## 19. Blob
+
+Blob represents arbitrary binary data (a Binary Large Object), stored internally as a byte array and represented in Ki literal format using Base64 encoding.
+
+### Creating Blobs
+
+```
+// From a string (UTF-8 encoded)
+let b = Blob("Hello World!")
+
+// Empty blob
+let empty = Blob.empty()
+
+// From a UTF-8 string via static method
+let b2 = Blob.of("Hello")
+
+// Parse raw Base64
+let b3 = Blob.parse("SGVsbG8gV29ybGQh")
+
+// Parse Ki literal format
+let b4 = Blob.parseLiteral(".blob(SGVsbG8gV29ybGQh)")
+```
+
+### Blob Properties
+
+```
+let b = Blob("Hello World!")
+say b.size                       // 12
+say b.isEmpty                    // false
+say b.isNotEmpty                 // true
+```
+
+### Blob Methods
+
+```
+let b = Blob("Hello World!")
+
+b.toBase64()                     // "SGVsbG8gV29ybGQh"
+b.toBase64UrlSafe()              // URL-safe Base64 encoding
+b.decodeToString()               // "Hello World!"
+b.get(0)                         // first byte
+```
+
+### Blob Literals
+
+In Ki literal format, blobs are written as `.blob(Base64Content)`:
+
+```
+.blob(SGVsbG8gV29ybGQh)         // short form
+.blob()                          // empty blob
+```
+
+### Static Methods
+
+```
+Blob.empty()                     // empty Blob
+Blob.of("text")                  // from UTF-8 string
+Blob.parse("SGVsbG8=")           // from raw Base64
+Blob.parseLiteral(".blob(...)")  // from Ki literal
+Blob.isLiteral(".blob(abc)")     // true (structural check)
+```
+
+---
+
+## 20. Email
+
+The Email type represents a validated email address following RFC 5322.
+
+### Creating Emails
+
+```
+let e = Email.of("dan@leuck.org")
+let tagged = Email.of("dan+spam@leuck.org")
+let parsed = Email.parseLiteral("terada.mika@rakuten.co.jp")
+```
+
+### Email Properties
+
+```
+let e = Email.of("dan+spam@leuck.org")
+
+say e.address                    // "dan+spam@leuck.org"
+say e.localPart                  // "dan+spam"
+say e.domain                     // "leuck.org"
+say e.tld                        // "org"
+say e.hasTag                     // true
+say e.tag                        // "spam"
+say e.baseLocalPart              // "dan"
+```
+
+### Email Methods
+
+```
+let e = Email.of("dan+spam@leuck.org")
+
+e.withoutTag()                   // Email("dan@leuck.org")
+e.withTag("newsletter")          // Email("dan+newsletter@leuck.org")
+e.equalsIgnoreDomainCase(other)  // domain-case-insensitive compare
+```
+
+### Static Methods
+
+```
+Email.of("user@domain.com")      // validated Email
+Email.ofOrNull("bad")            // nil (invalid)
+Email.isValid("x@y.com")        // true
+Email.isLiteral("x@y.com")      // true (structural check)
+```
+
+---
+
+## 21. GeoPoint
+
+GeoPoint represents GPS coordinates (latitude, longitude, optional altitude) on Earth, with high-precision `Dec` storage.
+
+### Creating GeoPoints
+
+```
+// Ki literal syntax
+let sf = .geo(37.7749, -122.4194)
+let tokyo = .geo(35.6762, 139.6503, 40.0)     // with altitude
+
+// Constructor
+let point = GeoPoint(37.7749, -122.4194)
+let withAlt = GeoPoint(35.6762, 139.6503, 40.0)
+
+// Static methods
+let p = GeoPoint.of(37.7749, -122.4194)
+let parsed = GeoPoint.parse(".geo(37.7749, -122.4194)")
+```
+
+### GeoPoint Properties
+
+```
+let sf = .geo(37.7749, -122.4194)
+
+say sf.latitude                  // 37.7749 (Dec)
+say sf.longitude                 // -122.4194 (Dec)
+say sf.altitude                  // nil (not set)
+say sf.lat                       // 37.7749 (Double shorthand)
+say sf.lon                       // -122.4194 (Double shorthand)
+say sf.alt                       // nil
+
+say sf.hasAltitude               // false
+say sf.isOrigin                  // false
+say sf.isNorthern                // true
+say sf.isSouthern                // false
+say sf.isEastern                 // false
+say sf.isWestern                 // true
+```
+
+### GeoPoint Methods
+
+```
+let sf = .geo(37.7749, -122.4194)
+let tokyo = .geo(35.6762, 139.6503)
+
+// Distance in kilometers (Haversine formula)
+let dist = sf.distanceTo(tokyo)  // ~8,270 km
+
+// Bearing in degrees (0=north, 90=east)
+let bearing = sf.bearingTo(tokyo)
+
+// Point at distance and bearing from this point
+let dest = sf.destination(100.0, 45.0)   // 100km northeast
+
+// Altitude manipulation
+let withAlt = sf.withAltitude(100.0)
+let noAlt = withAlt.withoutAltitude()
+
+// Formatting
+sf.toCompactString()             // ".geo(37.7749, -122.4194)"
+```
+
+### GeoPoint Constants
+
+```
+GeoPoint.ORIGIN                  // .geo(0.0, 0.0) — "Null Island"
+GeoPoint.NORTH_POLE              // .geo(90.0, 0.0)
+GeoPoint.SOUTH_POLE              // .geo(-90.0, 0.0)
+```
+
+### Static Methods
+
+```
+GeoPoint.of(lat, lon)           // validated GeoPoint
+GeoPoint.of(lat, lon, alt)     // with altitude
+GeoPoint.parse(".geo(...)")     // from Ki literal
+GeoPoint.center([p1, p2, p3])  // geographic centroid
+GeoPoint.isLiteral(".geo(...)") // structural check
+```
+
+---
+
+## 22. NSID
+
+NSID (Namespaced Identifier) is a name with an optional namespace, used for tag names and attributes in KD.
+
+### Creating NSIDs
+
+```
+let simple = NSID("name")
+let namespaced = NSID("name", "ns")
+let anonymous = NSID()          // NSID.ANONYMOUS
+let parsed = NSID.parse("ns:name")
+```
+
+### NSID Properties
+
+```
+let id = NSID("host", "config")
+
+say id.name                      // "host"
+say id.namespace                 // "config"
+say id.hasNamespace              // true
+say id.isAnonymous               // false
+say id.toString()                // "config:host"
+```
+
+---
+
+## 23. Call and Tag
+
+### Call
+
+A Call represents a function call as data — a name (NSID) with indexed arguments (values) and named arguments (attributes).
+
+```
+let c = Call("greet")
+let c2 = Call("add", values = [1, 2, 3])
+let c3 = Call("config", attributes = [NSID("debug")=true])
+```
+
+**Call properties:**
+
+```
+let c = Call("func", values = [1, "hello"], attributes = [NSID("key")="val"])
+
+say c.name                       // "func"
+say c.namespace                  // ""
+say c.values                     // [1, "hello"]
+say c.attributes                 // {NSID(key)="val"}
+say c.value                      // 1 (first value, convenience)
+say c.valueCount                 // 2
+say c.attributeCount             // 1
+say c.hasValues()                // true
+say c.hasAttributes()            // true
+```
+
+### Tag
+
+Tag extends Call with support for annotations and child tags, forming the basis of KD documents:
+
+```
+let data = lang KD {
+    person "Kai" age=30 {
+        hobby "coding"
+        hobby "cycling"
+    }
+}
+
+// Navigate tag tree
+let person = data.getChild("person")
+say person.value                  // "Kai"
+say person["age"]                 // 30
+
+// Search children
+let hobbies = person.getChildren("hobby")
+say hobbies.size                  // 2
+
+// Recursive search
+let found = data.findChild("hobby")
+
+// Property access (config-file style)
+let config = lang KD {
+    host = "localhost"
+    port = 8080
+}
+say config.getProperty("host")   // "localhost"
+say config.hasProperty("port")   // true
+```
+
+**Tag-specific members:**
+
+```
+tag.children                     // child tag list
+tag.annotations                  // annotation list
+tag.getChild("name")            // first child by name
+tag.getChildren("name")         // all children by name
+tag.findChild("name")           // recursive search (first)
+tag.findChildren("name")        // recursive search (all)
+tag.getChildrenInNamespace("ns")
+tag.getDescendants()             // all descendants (recursive)
+tag.getProperty("key")           // attribute from self or children
+tag.getPropertyOrNull("key")     // nil if not found
+tag.hasProperty("key")           // true if attribute exists
+tag.getProperties()              // all properties as Map<NSID, Any?>
+tag.getPropertiesMap()           // all properties as Map<String, Any?>
+tag.getChildrenValues()          // values of children as list of lists
+```
+
+---
+
+## 24. Regex
+
+KS provides a Regex type for pattern matching, search, and replacement. Regex literals are typically created from verbatim strings using the `.rex` property on strings.
+
+### Creating Regex
+
+```
+let pattern = @"^\d{3}-\d{4}$".rex
+let greeting = @"hello|hi|hey".rex
+let digits = @"\d+".rex
+```
+
+### Regex Properties
+
+```
+let r = @"\d+".rex
+say r.pattern                    // "\\d+"
+```
+
+### Regex Methods
+
+**Matching:**
+
+```
+let r = @"^\d+$".rex
+
+r.matches("12345")               // true  — full string match
+r.matches("abc")                 // false
+r.containsMatchIn("abc 123 def") // true  — partial match
+```
+
+**Finding:**
+
+```
+let r = @"\d+".rex
+
+let match = r.find("abc 123 def 456")
+say match.value                  // "123"
+say match.groupValues            // ["123"]
+
+let all = r.findAll("abc 123 def 456")
+// List of MatchResult objects
+```
+
+**MatchResult properties:**
+
+```
+let r = @"(\w+)@(\w+)\.(\w+)".rex
+let match = r.find("kai@example.com")
+
+say match.value                  // "kai@example.com"
+say match.groupValues            // ["kai@example.com", "kai", "example", "com"]
+say match.groupCount             // 3 (excludes group 0)
+```
+
+**Replacing:**
+
+```
+let r = @"\d+".rex
+
+r.replace("a1b2c3", "X")        // "aXbXcX"
+r.replaceFirst("a1b2c3", "X")   // "aXb2c3"
+```
+
+**Splitting:**
+
+```
+let r = @"[,;\s]+".rex
+
+r.split("a, b; c  d")           // ["a", "b", "c", "d"]
+```
+
+### Regex in String Methods
+
+Strings can also use Regex objects directly:
+
+```
+let text = "Hello World 123"
+
+text.replace(@"\d+".rex, "NUM")      // "Hello World NUM"
+text.split(@"\s+".rex)               // ["Hello", "World", "123"]
+text.matches(@"^Hello.*$".rex)       // true
+```
+
+---
+
+## 25. Pattern Matching with `when`
 
 `when` is KS's pattern matching expression, inspired by Kotlin. It is an expression — it returns a value.
 
@@ -1193,7 +2012,7 @@ say grade
 
 ---
 
-## 19. Error Handling
+## 26. Error Handling
 
 ### try / catch / finally
 
@@ -1251,7 +2070,7 @@ try {
 
 ---
 
-## 20. Constraints
+## 27. Constraints
 
 Constraints are runtime-checked guards that can be attached to variable declarations and function parameters. Violations throw a `ConstraintError`.
 
@@ -1305,7 +2124,7 @@ fun registerUser(email: String matches @"^[\w.]+@") {
 
 ---
 
-## 21. Import System (`use`)
+## 28. Import System (`use`)
 
 The `use` declaration imports types, functions, and packages.
 
@@ -1352,7 +2171,7 @@ use SomeClass.staticFun
 
 ---
 
-## 22. Type Extensions (`extend`)
+## 29. Type Extensions (`extend`)
 
 Extensions add methods or traits to existing types without modifying them.
 
@@ -1380,7 +2199,7 @@ extend trait Comparable
 
 ---
 
-## 23. Reflection
+## 30. Reflection
 
 KS supports basic reflection via the `::class` operator:
 
@@ -1397,7 +2216,7 @@ say list::class                  // List
 
 ---
 
-## 24. The `say` Statement
+## 31. The `say` Statement
 
 `say` is KS's primary output statement. It supports variants for different output styles and accepts parenthesized or bare arguments.
 
@@ -1447,7 +2266,7 @@ say
 
 ---
 
-## 25. Lang Blocks (Embedded DSLs)
+## 32. Lang Blocks (Embedded DSLs)
 
 The `lang` keyword switches the parser to an embedded DSL mode. Currently, KD (Ki Data) is the supported embedded language.
 
@@ -1510,7 +2329,7 @@ lang KD {
 
 ---
 
-## 26. Null Safety
+## 33. Null Safety
 
 KS provides several operators for handling nullable values.
 
@@ -1549,7 +2368,7 @@ let len = name!!.length
 
 ---
 
-## 27. The REPL
+## 34. The REPL
 
 KS includes an interactive REPL (Read-Eval-Print Loop) with the following features:
 
@@ -1608,7 +2427,7 @@ From lowest to highest precedence:
 
 ---
 
-## Appendix: Built-in Methods
+## Appendix: Built-in Methods Reference
 
 ### String Methods
 
@@ -1616,17 +2435,28 @@ From lowest to highest precedence:
 |---|---|
 | `.size`, `.length` | Number of characters |
 | `.isEmpty`, `.isNotEmpty` | Emptiness check |
+| `.isBlank`, `.isNotBlank` | Blank check (empty or all whitespace) |
 | `.first`, `.last` | First/last character |
 | `.uppercase`, `.lowercase` | Case conversion |
-| `.trim` | Strip leading/trailing whitespace |
+| `.trim`, `.trimStart`, `.trimEnd` | Strip whitespace |
 | `.reversed` | Reversed string |
+| `.lines` | Split into list of lines |
+| `.indices` | Range of valid indices |
+| `.rex` | Compile to Regex |
 | `.contains(str)` | Substring check |
 | `.startsWith(str)` | Prefix check |
 | `.endsWith(str)` | Suffix check |
-| `.indexOf(str)` | First occurrence index |
-| `.substring(start, end)` | Extract substring |
-| `.split(delimiter)` | Split into list |
-| `.replace(old, new)` | Replace occurrences |
+| `.indexOf(str)`, `.indexOf(str, from)` | First occurrence index |
+| `.lastIndexOf(str)` | Last occurrence index |
+| `.substring(start)`, `.substring(start, end)` | Extract substring |
+| `.split(delimiter)`, `.split(regex)` | Split into list |
+| `.replace(old, new)`, `.replace(regex, new)` | Replace occurrences |
+| `.replaceFirst(old, new)` | Replace first occurrence |
+| `.matches(regex)` | Full string match |
+| `.repeat(n)` | Repeat n times |
+| `.padStart(len)`, `.padStart(len, char)` | Pad from left |
+| `.padEnd(len)`, `.padEnd(len, char)` | Pad from right |
+| `.charAt(i)` | Character at index |
 | `.toInt()`, `.toDouble()` | Numeric conversion |
 
 ### List Methods
@@ -1636,12 +2466,18 @@ From lowest to highest precedence:
 | `.size`, `.length` | Number of elements |
 | `.isEmpty`, `.isNotEmpty` | Emptiness check |
 | `.first`, `.last` | First/last element |
-| `.reversed()` | Reversed copy |
-| `.sorted()` | Sorted copy |
 | `.contains(elem)` | Element check |
 | `.indexOf(elem)` | First occurrence index |
+| `.reversed()` | Reversed copy |
+| `.sorted()` | Sorted copy |
+| `.shuffled()` | Shuffled copy |
+| `.reverse()` | **Mutator**: reverse in-place, returns nil |
+| `.sort()` | **Mutator**: sort in-place, returns nil |
+| `.shuffle()` | **Mutator**: shuffle in-place, returns nil |
 | `.take(n)` | First n elements |
 | `.drop(n)` | Skip first n elements |
+| `.takeWhile { }` | Take while predicate holds |
+| `.dropWhile { }` | Drop while predicate holds |
 | `.map { }` | Transform elements |
 | `.filter { }` | Keep matching elements |
 | `.forEach { }` | Execute for each |
@@ -1651,6 +2487,9 @@ From lowest to highest precedence:
 | `.any { }` | True if any match |
 | `.all { }` | True if all match |
 | `.none { }` | True if none match |
+| `list += elem` | Append element in-place |
+| `list += [a, b]` | Append list in-place |
+| `list -= elem` | Remove first occurrence in-place |
 
 ### Map Methods
 
@@ -1666,11 +2505,18 @@ From lowest to highest precedence:
 | Method / Property | Description |
 |---|---|
 | `.start`, `.end` | Endpoints |
-| `.min`, `.max` | Minimum/maximum |
-| `.reversed` | Reversed range |
+| `.bound` | Bound operator string (`".."`, `"..<"`, etc.) |
+| `.min`, `.max` | Minimum/maximum (nil if open) |
+| `.reversed` | True if start > end |
+| `.isClosed`, `.isOpen` | Boundedness check |
+| `.isOpenStart`, `.isOpenEnd` | Individual end checks |
+| `.startExclusive`, `.endExclusive` | Exclusivity flags |
 | `.contains(value)` | Containment check |
-| `.toList()` | Materialize to list |
-| `.count()` | Number of elements |
+| `.toList()`, `.toList(step)` | Materialize to list |
+| `.count()`, `.count(step)` | Number of elements |
+| `.overlaps(other)` | Overlap check |
+| `.intersect(other)` | Intersection range |
+| `.clamp(value)` | Clamp value to range |
 
 ### Grid Methods
 
@@ -1679,8 +2525,140 @@ From lowest to highest precedence:
 | `.width`, `.height` | Dimensions |
 | `.size` | Total cell count |
 | `.isEmpty`, `.isNotEmpty` | Emptiness check |
-| `.toList()` | Flatten to list |
-| `[x, y]` | Cell access |
+| `.elementNullable` | Whether elements can be nil |
+| `[x, y]` / `[x, y] = v` | Cell access / assignment |
+| `["A", 1]` | Plate notation access |
+| `[coord]` | Coordinate access |
+| `.transpose()` | Transposed copy |
+| `.copy()` | Deep copy |
+| `.map { }` | Transform all cells |
+| `.forEach { }` | Iterate cells |
+| `.forEachIndexed { x, y, v -> }` | Iterate with coordinates |
+| `.find { }` | First matching (Coordinate, value) |
+| `.findAll { }` | All matching pairs |
+| `.count { }` | Count matching cells |
+| `.any { }`, `.all { }`, `.none { }` | Predicate tests |
+| `.fill(value)` | Fill all cells |
+| `.fillRow(y, value)` | Fill a row |
+| `.fillColumn(x, value)` | Fill a column |
+| `.clear()` | Set all cells to nil |
+| `.getRowCopy(y)` | Copy of row data |
+| `.getColumnCopy(x)` | Copy of column data |
+| `.setRow(y, values)` | Replace a row |
+| `.setColumn(x, values)` | Replace a column |
+| `.subgrid(x, y, w, h)` | Extract rectangular region |
+| `.toList()` | Flatten to list (row-major) |
+| `.toRowList()` | List of row lists |
+
+### Version Methods
+
+| Method / Property | Description |
+|---|---|
+| `.major`, `.minor`, `.micro` | Version components |
+| `.qualifier`, `.qualifierNumber` | Pre-release info |
+| `.hasQualifier`, `.isStable`, `.isPreRelease` | Status checks |
+| `.toStable()` | Strip qualifier |
+| `.toShortString()` | Omit trailing zeros |
+| `.incrementMajor()` | Bump major, reset minor/micro |
+| `.incrementMinor()` | Bump minor, reset micro |
+| `.incrementMicro()` | Bump micro |
+| `.incrementQualifierNumber()` | Bump qualifier number |
+| `.withQualifier(q)`, `.withQualifier(q, n)` | New qualifier |
+| `.isCompatibleWith(other)` | Same major version |
+
+### Quantity Methods
+
+| Method / Property | Description |
+|---|---|
+| `.value` | Numeric value |
+| `.unit` | Unit symbol string |
+| `.convertTo("unit")` | Convert to target unit |
+| `.toSuffixString()` | Always-suffix format |
+
+### Regex Methods
+
+| Method / Property | Description |
+|---|---|
+| `.pattern` | Pattern string |
+| `.matches(str)` | Full string match |
+| `.containsMatchIn(str)` | Partial match |
+| `.find(str)` | First MatchResult or nil |
+| `.findAll(str)` | All MatchResults |
+| `.replace(str, replacement)` | Replace all matches |
+| `.replaceFirst(str, replacement)` | Replace first match |
+| `.split(str)` | Split by pattern |
+
+### MatchResult Properties
+
+| Property | Description |
+|---|---|
+| `.value` | Matched string |
+| `.groupValues` | List of group captures (index 0 = full match) |
+| `.groupCount` | Number of capture groups (excluding group 0) |
+
+### Blob Methods
+
+| Method / Property | Description |
+|---|---|
+| `.size` | Byte count |
+| `.isEmpty`, `.isNotEmpty` | Emptiness check |
+| `.toBase64()` | Standard Base64 string |
+| `.toBase64UrlSafe()` | URL-safe Base64 string |
+| `.decodeToString()` | Decode as UTF-8 |
+| `.get(index)` | Byte at index |
+
+### Email Methods
+
+| Method / Property | Description |
+|---|---|
+| `.address` | Full email string |
+| `.localPart`, `.domain`, `.tld` | Components |
+| `.hasTag`, `.tag`, `.baseLocalPart` | Plus-addressing |
+| `.withoutTag()` | Email without tag |
+| `.withTag(tag)` | Email with new tag |
+| `.equalsIgnoreDomainCase(other)` | Case-insensitive domain compare |
+
+### GeoPoint Methods
+
+| Method / Property | Description |
+|---|---|
+| `.latitude`, `.longitude`, `.altitude` | Dec coordinates |
+| `.lat`, `.lon`, `.alt` | Double shorthand |
+| `.hasAltitude` | Altitude present |
+| `.isOrigin`, `.isNorthern`, `.isSouthern` | Position checks |
+| `.isEastern`, `.isWestern` | Hemisphere checks |
+| `.distanceTo(other)` | Great-circle distance (km) |
+| `.bearingTo(other)` | Initial bearing (degrees) |
+| `.destination(km, bearing)` | Point at distance/bearing |
+| `.withAltitude(m)` | Add altitude |
+| `.withoutAltitude()` | Remove altitude |
+| `.toCompactString()` | Minimal decimal format |
+
+### NSID Properties
+
+| Property | Description |
+|---|---|
+| `.name` | Name component |
+| `.namespace` | Namespace component |
+| `.isAnonymous` | True if both empty |
+| `.hasNamespace` | True if namespace set |
+
+### Coordinate Methods
+
+| Method / Property | Description |
+|---|---|
+| `.x`, `.y`, `.z` | Zero-based indices |
+| `.column` | Letter column (sheet) |
+| `.row` | One-based row (sheet) |
+| `.rowLetter` | Letter row (plate) |
+| `.columnNumber` | One-based column (plate) |
+| `.hasZ`, `.isOrigin` | Status checks |
+| `.right(n)`, `.left(n)`, `.up(n)`, `.down(n)` | Navigation |
+| `.offset(dx, dy)` | General offset |
+| `.withZ(z)`, `.withoutZ()` | Z manipulation |
+| `.toSheetNotation()` | "E8" format |
+| `.toPlateNotation()` | Plate "H5" format |
+| `.toStandardNotation()` | "4,7" format |
 
 ---
 
