@@ -2,7 +2,7 @@
 
 **Version 0.2 — Draft**
 
-KS is a Kotlin-inspired scripting language that runs on the JVM via a tree-walking interpreter. It features delimiter-free control flow, first-class quantities and units of measure, an embedded KD (Ki Data) DSL, and a concise, expressive syntax designed for both interactive exploration (REPL) and scripted automation.
+KS is a Kotlin and Swift-inspired scripting language that runs on the JVM via a tree-walking interpreter. It features delimiter-free control flow, first-class quantities and units of measure, an embedded KD (Ki Data) DSL, and a concise, expressive syntax designed for both interactive exploration (REPL) and scripted automation.
 
 KS is part of the **Ki ecosystem**, which includes Ki.Core-JVM (types, units, quantities, currencies, grids, ranges, coordinates), Ki.KD-JVM (the Ki Data format), and Ki.KS-JVM (this language).
 
