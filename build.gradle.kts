@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.kixi"
-version = "2.3.2"
+version = "2.3.3"
 description = "ki-ks"
 
 // Application config goes HERE - outside plugins block
