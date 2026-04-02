@@ -257,7 +257,7 @@ tasks.register("installLocal") {
             throw GradleException("install.sh not found in distribution layout")
         }
 
-        exec {
+        project.exec {
             workingDir = distRoot
             commandLine("sh", "install.sh")
         }
