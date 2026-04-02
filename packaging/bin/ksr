@@ -1,0 +1,105 @@
+#!/bin/sh
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ksr — Ki Script REPL
+#
+#  Launches the Ki Script interactive shell (Read-Eval-Print Loop).
+#
+#  Usage:
+#      ksr                  Start the REPL
+#      ksr --no-color       Start without ANSI colors
+#      ksr --debug          Start with debug output
+#      ksr --version        Show version
+#
+#  Environment:
+#      KI_HOME        Installation root (default: ~/.ki)
+#      KI_JAVA_HOME   Override JVM location
+#      KS_OPTS        Extra JVM options (e.g., -Xmx512m)
+#      NO_COLOR        Disable ANSI color output
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+set -e
+
+# ── Resolve KI_HOME ──────────────────────────────────────────────────────────
+if [ -z "$KI_HOME" ]; then
+    KI_HOME="$HOME/.ki"
+fi
+
+# ── Locate the runtime ───────────────────────────────────────────────────────
+KI_LIB="$KI_HOME/lib"
+KS_RUNTIME="$KI_LIB/ks-runtime.jar"
+
+if [ ! -f "$KS_RUNTIME" ]; then
+    echo "Error: Ki Script runtime not found at $KS_RUNTIME" >&2
+    echo "Run the Ki Script installer or set KI_HOME to your installation directory." >&2
+    exit 1
+fi
+
+# ── Locate Java ──────────────────────────────────────────────────────────────
+find_java() {
+    if [ -n "$KI_JAVA_HOME" ] && [ -x "$KI_JAVA_HOME/bin/java" ]; then
+        echo "$KI_JAVA_HOME/bin/java"
+        return
+    fi
+    if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+        echo "$JAVA_HOME/bin/java"
+        return
+    fi
+    if command -v java >/dev/null 2>&1; then
+        command -v java
+        return
+    fi
+    echo ""
+}
+
+JAVA=$(find_java)
+if [ -z "$JAVA" ]; then
+    echo "Error: Java not found." >&2
+    echo "Ki Script requires Java 21 or later." >&2
+    echo "Set JAVA_HOME or KI_JAVA_HOME, or add java to your PATH." >&2
+    exit 1
+fi
+
+# ── Handle --version ─────────────────────────────────────────────────────────
+case "${1:-}" in
+    --version|-v)
+        exec "$JAVA" -jar "$KS_RUNTIME" --repl-version
+        ;;
+    --help|-h)
+        cat <<'HELP'
+Ki Script REPL — https://github.com/kixi-io
+
+Usage:
+    ksr                  Start the interactive REPL
+    ksr --no-color       Disable ANSI colors
+    ksr --debug          Enable debug output
+    ksr --version        Show version
+    ksr --help           Show this help
+
+REPL Commands (once inside):
+    :help  :h            Show REPL help
+    :quit  :q            Exit
+    :reset :r            Reset interpreter state
+    :env   :e            Show defined variables
+    :type  :t <expr>     Show expression type
+    :clear :cls          Clear screen
+
+Environment:
+    KI_HOME          Installation root (default: ~/.ki)
+    KI_JAVA_HOME     Override JVM location
+    KS_OPTS          Extra JVM options
+    NO_COLOR         Disable color (same as --no-color)
+HELP
+        exit 0
+        ;;
+esac
+
+# ── Launch REPL ──────────────────────────────────────────────────────────────
+# shellcheck disable=SC2086
+exec "$JAVA" \
+    -Dfile.encoding=UTF-8 \
+    -Dstdout.encoding=UTF-8 \
+    -Dstderr.encoding=UTF-8 \
+    $KS_OPTS \
+    -cp "$KS_RUNTIME" \
+    io.kixi.ks.tools.ReplKt \
+    "$@"
