@@ -1,4 +1,4 @@
-package io.kixi.ks.repl
+package io.kixi.ks.tools
 
 import io.kixi.ks.ANSI
 

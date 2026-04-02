@@ -1,4 +1,4 @@
-package io.kixi.ks.repl
+package io.kixi.ks.tools
 
 import io.kixi.ks.ANSI
 import io.kixi.ks.KSRuntime
@@ -75,10 +75,10 @@ import java.util.logging.Logger
 class Repl(private val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
     companion object {
-        /** KS version string displayed in the banner. */
-        const val VERSION = "2.3.1"
+        /** KS version string — injected from gradle.properties at build time. */
+        val VERSION: String = Repl::class.java.getResource("/ks-version.txt")?.readText()?.trim()
+            ?: "dev"
 
-        /** Maximum number of continuation lines before forcing execution. */
         private const val MAX_CONTINUATION_LINES = 200
     }
 

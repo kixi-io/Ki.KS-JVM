@@ -107,12 +107,173 @@ val dokkaJavadocJar by tasks.registering(Jar::class) {
 /** Fat JAR containing the KS REPL and all dependencies. */
 tasks.register<Jar>("replJar") {
     archiveFileName.set("ks-repl.jar")
-    manifest { attributes("Main-Class" to "io.kixi.ks.repl.ReplKt") }
+    manifest { attributes("Main-Class" to "io.kixi.ks.tools.ReplKt") }
     from(sourceSets["main"].output)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     dependsOn(configurations.runtimeClasspath)
     from({ configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) } })
 }
+
+// New tasks for supporting popular operating systems and shells
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  build.gradle.kts — Distribution Tasks for Ki Script
+//
+//  Add these tasks to your existing build.gradle.kts.
+//  They create the installable distribution package.
+//
+//  Usage:
+//      ./gradlew dist          Create distribution archive
+//      ./gradlew installLocal  Install to ~/.ki directly
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ── Fat JAR (all dependencies bundled, hidden from user) ────────────────────
+
+// NOTE: If you already have a `replJar` task, rename or merge with this.
+// The key difference: the main class here is Run (for `ks`), while the
+// REPL main class is used for `ksr`. Both are in the same JAR — the
+// launcher scripts select the entry point via -cp + class name.
+
+tasks.register<Jar>("runtimeJar") {
+    group = "distribution"
+    description = "Build the Ki Script runtime (fat JAR with all dependencies)"
+
+    archiveBaseName.set("ks-runtime")
+    archiveVersion.set("")  // no version suffix — just ks-runtime.jar
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    // Primary manifest for `java -jar` (defaults to script runner)
+    manifest {
+        attributes(
+            "Main-Class" to "io.kixi.ks.Run",
+            "Implementation-Title" to "Ki Script",
+            // "Implementation-Version" pulled from Repl.VERSION at runtime
+        )
+    }
+
+    // Bundle all runtime dependencies
+    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
+    with(tasks.jar.get())
+}
+
+// ── Distribution Layout ─────────────────────────────────────────────────────
+
+val distDir = layout.buildDirectory.dir("dist/ki-script")
+
+tasks.register<Copy>("distLayout") {
+    group = "distribution"
+    description = "Assemble the distribution directory layout"
+    dependsOn("runtimeJar")
+
+    // Launcher scripts (Unix)
+    from("dist/bin/ks")   { into("bin") }
+    from("dist/bin/ksr")  { into("bin") }
+
+    // Launcher scripts (Windows)
+    from("dist/bin/ks.cmd")  { into("bin") }
+    from("dist/bin/ksr.cmd") { into("bin") }
+
+    // Runtime JAR
+    from(tasks.named("runtimeJar").map { (it as Jar).archiveFile }) {
+        into("lib")
+        rename { "ks-runtime.jar" }
+    }
+
+    // Installers
+    from("dist/install.sh")
+    from("dist/install.ps1")
+
+    // Version file
+    doFirst {
+        val ksVersion = project.property("ksVersion") as String
+        file("${layout.buildDirectory.get()}/VERSION").writeText(ksVersion)
+    }
+    from(layout.buildDirectory.file("VERSION"))
+
+    into(distDir)
+}
+
+tasks.named<ProcessResources>("processResources") {
+    val ksVersion = project.property("ksVersion") as String
+    doFirst {
+        file("$destinationDir/ks-version.txt").writeText(ksVersion)
+    }
+}
+
+// Make Unix scripts executable after copy
+tasks.named("distLayout") {
+    doLast {
+        val binDir = distDir.get().dir("bin").asFile
+        listOf("ks", "ksr").forEach { name ->
+            val f = File(binDir, name)
+            if (f.exists()) f.setExecutable(true, false)
+        }
+        val installSh = File(distDir.get().asFile, "install.sh")
+        if (installSh.exists()) installSh.setExecutable(true, false)
+    }
+}
+
+// ── Archive ─────────────────────────────────────────────────────────────────
+
+tasks.register<Tar>("kiDist") {
+    group = "distribution"
+    description = "Create ki-script distribution archive (.tar.gz)"
+    dependsOn("distLayout")
+
+    archiveBaseName.set("ki-script")
+    archiveVersion.set("")  // use VERSION file content instead
+    compression = Compression.GZIP
+
+    from(distDir)
+    into("ki-script")
+}
+
+tasks.register<Zip>("kiDistZip") {
+    group = "distribution"
+    description = "Create ki-script distribution archive (.zip, for Windows)"
+    dependsOn("distLayout")
+
+    archiveBaseName.set("ki-script")
+    archiveVersion.set("")
+
+    from(distDir)
+    into("ki-script")
+}
+
+// ── Local Install ───────────────────────────────────────────────────────────
+
+tasks.register("installLocal") {
+    group = "distribution"
+    description = "Install Ki Script to ~/.ki (runs the installer)"
+    dependsOn("distLayout")
+
+    doLast {
+        val distRoot = distDir.get().asFile
+        val installer = File(distRoot, "install.sh")
+
+        if (!installer.exists()) {
+            throw GradleException("install.sh not found in distribution layout")
+        }
+
+        exec {
+            workingDir = distRoot
+            commandLine("sh", "install.sh")
+        }
+    }
+}
+
+// ── Dev REPL (preserves existing IDE workflow) ──────────────────────────────
+
+// This is equivalent to your existing ksr.sh workflow.
+// Run from terminal: ./gradlew -q --console=plain repl
+tasks.register<JavaExec>("repl") {
+    group = "application"
+    description = "Launch the KS interactive REPL (development)"
+    mainClass.set("io.kixi.ks.tools.ReplKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    standardInput = System.`in`
+}
+
 
 /**
  * Build and launch the KS REPL.  Usage: ./gradlew -q repl
