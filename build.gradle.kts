@@ -166,12 +166,12 @@ tasks.register<Copy>("distLayout") {
     dependsOn("runtimeJar")
 
     // Launcher scripts (Unix)
-    from("dist/bin/ks")   { into("bin") }
-    from("dist/bin/ksr")  { into("bin") }
+    from("packaging/bin/ks")   { into("bin") }
+    from("packaging/bin/ksr")  { into("bin") }
 
     // Launcher scripts (Windows)
-    from("dist/bin/ks.cmd")  { into("bin") }
-    from("dist/bin/ksr.cmd") { into("bin") }
+    from("packaging/bin/ks.cmd")  { into("bin") }
+    from("packaging/bin/ksr.cmd") { into("bin") }
 
     // Runtime JAR
     from(tasks.named("runtimeJar").map { (it as Jar).archiveFile }) {
@@ -180,8 +180,8 @@ tasks.register<Copy>("distLayout") {
     }
 
     // Installers
-    from("dist/install.sh")
-    from("dist/install.ps1")
+    from("packaging/install.sh")
+    from("packaging/install.ps1")
 
     // Version file
     doFirst {
