@@ -257,9 +257,14 @@ tasks.register("installLocal") {
             throw GradleException("install.sh not found in distribution layout")
         }
 
-        project.exec {
-            workingDir = distRoot
-            commandLine("sh", "install.sh")
+        val result = ProcessBuilder("sh", "install.sh")
+            .directory(distRoot)
+            .inheritIO()
+            .start()
+            .waitFor()
+
+        if (result != 0) {
+            throw GradleException("install.sh failed with exit code $result")
         }
     }
 }
