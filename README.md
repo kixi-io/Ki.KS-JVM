@@ -1,3 +1,6 @@
+# Getting Started
+[Comprehensive KS Tutorial](KS-Language-Manual.md)
+
 # Ki Script Command-Line Tools
 
 Cross-platform launchers for running Ki Script files and the interactive REPL.
