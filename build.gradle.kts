@@ -3,8 +3,8 @@
 // import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.3.0"
     `java-library`
+    kotlin("jvm") version "2.3.0"
     `maven-publish`
     application  // Just the plugin ID here - nothing else!
     id("org.jetbrains.dokka") version "2.1.0"
@@ -26,8 +26,11 @@ repositories {
 
 dependencies {
     // === Ki Dependencies (resolved via composite builds — see settings.gradle.kts) ===
-    implementation("io.kixi:Ki.Core-JVM:2.3.2")
-    implementation("io.kixi:Ki.KD-JVM:2.3.2")
+    // implementation("io.kixi:Ki.Core-JVM:2.3.2")
+    // implementation("io.kixi:Ki.KD-JVM:2.3.2")
+
+    api("io.kixi:Ki.Core-JVM:2.3.2")
+    api("io.kixi:Ki.KD-JVM:2.3.2")
 
     // === JLine (REPL terminal handling) ===
     implementation("org.jline:jline:3.26.3")
