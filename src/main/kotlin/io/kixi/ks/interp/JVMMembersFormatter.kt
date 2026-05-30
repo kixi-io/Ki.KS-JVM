@@ -312,7 +312,7 @@ object JVMMembersFormatter {
      * - `isEmpty()` → `isEmpty`
      * - `size()` (no "get" prefix, for collections) → null (handled as method)
      */
-    private fun extractPropertyName(method: Method): String? {
+    internal fun extractPropertyName(method: Method): String? {
         val name = method.name
         return when {
             name.startsWith("get") && name.length > 3 && name[3].isUpperCase() ->
@@ -452,7 +452,7 @@ object JVMMembersFormatter {
     // Method Formatting
     // ====================================================================
 
-    private fun formatMethod(method: Method): String {
+    internal fun formatMethod(method: Method): String {
         val params = formatParameters(method.parameters, method.genericParameterTypes)
         val returnType = mapGenericType(method.genericReturnType)
 
@@ -547,7 +547,7 @@ object JVMMembersFormatter {
     /**
      * Get all public methods including inherited, excluding Object noise.
      */
-    private fun getAllPublicMethods(clazz: Class<*>): List<Method> {
+    internal fun getAllPublicMethods(clazz: Class<*>): List<Method> {
         return clazz.methods
             .filter { Modifier.isPublic(it.modifiers) }
             .filter { !it.isSynthetic && !it.isBridge }
