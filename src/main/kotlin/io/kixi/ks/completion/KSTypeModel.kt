@@ -16,6 +16,7 @@ import io.kixi.ks.parser.ClassDecl
 import io.kixi.ks.parser.TraitDecl
 import io.kixi.ks.parser.StructDecl
 import io.kixi.ks.parser.EnumDecl
+import io.kixi.ks.parser.ExtendDecl
 import io.kixi.ks.parser.UseDecl
 import io.kixi.ks.parser.FunDecl
 import io.kixi.ks.parser.VarDecl
@@ -77,7 +78,7 @@ fun buildKSTypeModel(source: String): TypeModel {
     } catch (t: Throwable) {
         // Unparseable buffer — still return a usable (import/native/builtin
         // only) model rather than nothing.
-        return KSTypeModel(interp, emptyList())
+        return KSTypeModel(interp, emptyList(), emptyList())
     }
 
     val topLevel: List<Node> = program.body
@@ -101,6 +102,14 @@ fun buildKSTypeModel(source: String): TypeModel {
         it is ClassDecl || it is TraitDecl || it is StructDecl || it is EnumDecl
     }
 
+    // Extension blocks (`extend Type { fun … }`). Retained as AST and folded
+    // into the target type's instance members during enumeration — see
+    // [KSTypeModel.collectExtensionMembers]. We never call the evaluator's
+    // `evaluateExtendDecl`, so no user code runs and the never-throws,
+    // side-effect-free contract holds; this is purely declarative, exactly
+    // like the rest of the member enumeration here.
+    val extendDecls: List<ExtendDecl> = topLevel.filterIsInstance<ExtendDecl>()
+
     val pending = typeDecls.toMutableList()
     while (pending.isNotEmpty()) {
         val before = pending.size
@@ -120,7 +129,7 @@ fun buildKSTypeModel(source: String): TypeModel {
         }
     }
 
-    return KSTypeModel(interp, typeDecls)
+    return KSTypeModel(interp, typeDecls, extendDecls)
 }
 
 /**
@@ -232,18 +241,37 @@ private fun defineTypeUnchecked(interp: Interpreter, decl: Node) {
  * @param typeDecls  The in-buffer type declaration nodes, in source
  *                   order, used for [topLevelCallables] ordering and
  *                   [typeNames].
+ * @param extendDecls The in-buffer `extend Type { … }` blocks. Their
+ *                   methods are folded into the target type's instance
+ *                   members (see [collectExtensionMembers]); nothing here
+ *                   evaluates them.
  */
 internal class KSTypeModel(
     private val interp: Interpreter,
-    private val typeDecls: List<Node>
+    private val typeDecls: List<Node>,
+    private val extendDecls: List<ExtendDecl>
 ) : TypeModel {
+
+    /**
+     * Extension methods indexed by the simple name of the type they target
+     * (`extend Person { … }` → key `"Person"`). Only `fun` members are
+     * collected — KS has no extension properties — and they are surfaced as
+     * ordinary instance [MemberKind.METHOD]s, since after an `extend` block
+     * is evaluated they behave exactly like declared methods. Provenance is
+     * still [MemberOrigin.KS]; "extension-ness" is intentionally not tracked
+     * as a distinct origin.
+     */
+    private val extensionMethodsByTarget: Map<String, List<FunDecl>> =
+        extendDecls
+            .groupBy { it.target.name }
+            .mapValues { (_, decls) -> decls.flatMap { it.members.filterIsInstance<FunDecl>() } }
 
     override fun resolveType(name: String): ResolvedType? {
         // 1. In-buffer KS declarations.
-        interp.classes[name]?.let { return KsClassType(it) }
-        interp.structs[name]?.let { return KsStructType(it) }
-        interp.traits[name]?.let { return KsTraitType(it) }
-        interp.enums[name]?.let { return KsEnumType(it) }
+        interp.classes[name]?.let { return KSClassType(it) }
+        interp.structs[name]?.let { return KSStructType(it) }
+        interp.traits[name]?.let { return KSTraitType(it) }
+        interp.enums[name]?.let { return KSEnumType(it) }
 
         // 2. `use` imports (JVM classes; imported KS types already covered
         //    above once registered).
@@ -266,10 +294,10 @@ internal class KSTypeModel(
     }
 
     override fun members(type: ResolvedType): List<MemberItem> = when (type) {
-        is KsClassType  -> ksClassMembers(type.cls)
-        is KsStructType -> ksStructMembers(type.struct)
-        is KsTraitType  -> ksTraitMembers(type.trait)
-        is KsEnumType   -> ksEnumMembers(type.enum)
+        is KSClassType  -> ksClassMembers(type.cls)
+        is KSStructType -> ksStructMembers(type.struct)
+        is KSTraitType  -> ksTraitMembers(type.trait)
+        is KSEnumType   -> ksEnumMembers(type.enum)
         is JvmType      -> jvmMembers(type.name, type.proxy.clazz)
         is BuiltinType  -> builtinMembers(type.name)
         is NativeType   -> emptyList() // native member enumeration: slice 2+
@@ -304,7 +332,8 @@ internal class KSTypeModel(
 
     private fun ksClassMembers(cls: KSClass): List<MemberItem> {
         val out = mutableListOf<MemberItem>()
-        val seen = HashSet<String>() // nearest-declaration-wins for KS names
+        val seen = HashSet<String>()        // nearest-declaration-wins for instance names
+        val seenStatic = HashSet<String>()  // nearest-declaration-wins for static names
 
         var current: KSClass? = cls
         while (current != null) {
@@ -319,6 +348,10 @@ internal class KSTypeModel(
             for (trait in current.traits) {
                 collectTraitMembers(trait, seen, out)
             }
+            // Statics declared at this level (own `static { … }` blocks).
+            // Tracked with a separate `seen` set so a static and an instance
+            // member may share a name without shadowing each other.
+            collectStaticMembers(current.name, current.declaration.members, seenStatic, out)
             current = current.superclass
         }
         return out
@@ -339,6 +372,7 @@ internal class KSTypeModel(
         for (trait in struct.traits) {
             collectTraitMembers(trait, seen, out)
         }
+        collectStaticMembers(struct.name, struct.declaration.members, HashSet(), out)
         return out
     }
 
@@ -378,14 +412,15 @@ internal class KSTypeModel(
             seen = seen,
             out = out
         )
+        collectStaticMembers(enum.name, decl.members, HashSet(), out)
         return out
     }
 
     /**
      * Collect instance methods + properties declared directly on a KS type
      * level (class/struct/enum), honouring nearest-wins via [seen]. Static
-     * members and embedded enums are skipped (statics belong to type-name
-     * receivers, handled separately in a later step).
+     * members and embedded enums are skipped here — statics belong to
+     * type-name receivers and are collected by [collectStaticMembers].
      */
     private fun collectKsDeclMembers(
         declaringType: String,
@@ -447,6 +482,10 @@ internal class KSTypeModel(
                 else -> { /* StaticBlock, EnumDecl, etc. — not instance members */ }
             }
         }
+
+        // Extension methods (`extend <declaringType> { fun … }`) added after
+        // declared members so a declared method of the same name wins.
+        collectExtensionMembers(declaringType, seen, out)
     }
 
     private fun collectTraitMembers(
@@ -468,8 +507,97 @@ internal class KSTypeModel(
                 )
             }
         }
+        // Extensions targeting this trait, before super-traits so nearer
+        // declarations win.
+        collectExtensionMembers(trait.name, seen, out)
         for (superTrait in trait.superTraits) {
             collectTraitMembers(superTrait, seen, out)
+        }
+    }
+
+    /**
+     * Fold extension methods declared via `extend <typeName> { … }` into the
+     * member list as ordinary instance [MemberKind.METHOD]s. Honours the
+     * caller's [seen] set, so a declared member of the same name (added
+     * first) wins. Keyed by the simple target name, so an extension on a
+     * supertype or implemented trait is picked up at that level of the walk,
+     * giving extensions the same inheritance behaviour as declared members.
+     */
+    private fun collectExtensionMembers(
+        typeName: String,
+        seen: MutableSet<String>,
+        out: MutableList<MemberItem>
+    ) {
+        val fns = extensionMethodsByTarget[typeName] ?: return
+        for (fn in fns) {
+            if (!seen.add(fn.name)) continue
+            out.add(
+                MemberItem(
+                    name = fn.name,
+                    kind = MemberKind.METHOD,
+                    signature = MembersFormatter.formatFunSignature(fn),
+                    declaringType = typeName,
+                    origin = MemberOrigin.KS
+                )
+            )
+        }
+    }
+
+    /**
+     * Collect static members from a KS type's `static { … }` blocks: `fun`s
+     * become [MemberKind.STATIC_METHOD], `var`/`let`s become
+     * [MemberKind.STATIC_PROPERTY]. Surfaced for type-name receivers
+     * (`MathUtils.`), kept distinct from instance members by [MemberKind] so
+     * the consumer can filter by receiver context.
+     *
+     * Read straight off the AST (`StaticBlock`), not the runtime static
+     * environment: [buildKSTypeModel] deliberately skips static
+     * initialisation (it runs user code), so the runtime environment is
+     * unpopulated here — and it exposes no way to enumerate its functions
+     * regardless.
+     */
+    private fun collectStaticMembers(
+        declaringType: String,
+        members: List<Node>,
+        seen: MutableSet<String>,
+        out: MutableList<MemberItem>
+    ) {
+        for (member in members) {
+            if (member !is StaticBlock) continue
+            for (staticMember in member.members) {
+                when (staticMember) {
+                    is FunDecl -> {
+                        if (!seen.add(staticMember.name)) continue
+                        out.add(
+                            MemberItem(
+                                name = staticMember.name,
+                                kind = MemberKind.STATIC_METHOD,
+                                signature = MembersFormatter.formatFunSignature(staticMember),
+                                declaringType = declaringType,
+                                origin = MemberOrigin.KS
+                            )
+                        )
+                    }
+                    is VarDecl -> {
+                        if (!seen.add(staticMember.name)) continue
+                        val binding = if (staticMember.mutable) BindingType.VAR else BindingType.LET
+                        out.add(
+                            MemberItem(
+                                name = staticMember.name,
+                                kind = MemberKind.STATIC_PROPERTY,
+                                signature = ksPropertySignature(
+                                    binding = binding,
+                                    name = staticMember.name,
+                                    typeRef = staticMember.typeAnnotation
+                                ),
+                                declaringType = declaringType,
+                                origin = MemberOrigin.KS
+                            )
+                        )
+                    }
+                    else -> { /* nested decls in a static block are not members */ }
+                }
+            }
         }
     }
 
@@ -551,22 +679,22 @@ internal class KSTypeModel(
 //  ResolvedType implementations (opaque to consumers)
 // ─────────────────────────────────────────────────────────────────────────────
 
-private class KsClassType(val cls: KSClass) : ResolvedType {
+private class KSClassType(val cls: KSClass) : ResolvedType {
     override val name: String get() = cls.name
     override val kind: TypeKind get() = TypeKind.CLASS
 }
 
-private class KsStructType(val struct: KSStruct) : ResolvedType {
+private class KSStructType(val struct: KSStruct) : ResolvedType {
     override val name: String get() = struct.name
     override val kind: TypeKind get() = TypeKind.STRUCT
 }
 
-private class KsTraitType(val trait: KSTrait) : ResolvedType {
+private class KSTraitType(val trait: KSTrait) : ResolvedType {
     override val name: String get() = trait.name
     override val kind: TypeKind get() = TypeKind.TRAIT
 }
 
-private class KsEnumType(val enum: KSEnum) : ResolvedType {
+private class KSEnumType(val enum: KSEnum) : ResolvedType {
     override val name: String get() = enum.name
     override val kind: TypeKind get() = TypeKind.ENUM
 }
