@@ -1,6 +1,4 @@
-// Ki.KS-JVM
-
-// import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+// Ki.KS-JVM/build.gradle.kts
 
 plugins {
     `java-library`
