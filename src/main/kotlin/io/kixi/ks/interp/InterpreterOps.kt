@@ -1948,6 +1948,19 @@ class InterpreterOps(internal val interp: Interpreter) {
                 }
             }
 
+            // Universal members (explicit, so they resolve without the
+            // hostLang-gated reflection backstop — mirrors String/List).
+            "equals" -> NativeCallable("equals") { args, loc ->
+                if (args.isEmpty()) throw RuntimeError("equals() requires 1 argument", loc)
+                range == args[0]
+            }
+            "hashCode" -> NativeCallable("hashCode") { _, _ ->
+                range.hashCode()
+            }
+            "toString" -> NativeCallable("toString") { _, _ ->
+                range.toString()
+            }
+
             else -> throw MemberNotFoundError(member, "Range", location)
         }
     }

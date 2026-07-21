@@ -1050,19 +1050,28 @@ class Range<T>
 Properties:
   val start: T?
   val end: T?
-  val isClosed: Bool
+  val min: T?
+  val max: T?
+  val bound: String
+  val reversed: Range<T>
   val isOpen: Bool
+  val isClosed: Bool
   val isOpenStart: Bool
   val isOpenEnd: Bool
-  val isExclusive: Bool
-  val isEmpty: Bool
+  val startExclusive: Bool
+  val endExclusive: Bool
 
 Methods:
+  fun clamp(value: T): T
   fun contains(value: T): Bool
+  fun count(step: Int = 1): Int
   fun equals(other: Any?): Bool
   fun hashCode(): Int
+  fun intersect(other: Range<T>): Range<T>
   fun overlaps(other: Range<T>): Bool
   fun picked(step: Int = 1): T
+  fun toList(step: Int = 1): List<T>
+  fun toSequence(step: Int = 1): List<T>
   fun toString(): String
         """.trimIndent(),
 

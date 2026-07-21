@@ -437,7 +437,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
-            }
+            }.let { checkReturnType(function, it, location) }
         } finally {
             recursionDepth--
             environment = previousEnv
@@ -602,7 +602,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
-            }
+            }.let { checkReturnType(method, it, location) }
         } finally {
             recursionDepth--
             environment = previousEnv
@@ -620,6 +620,30 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         arguments: List<Any?>,
         location: SourceLocation?
     ): Any? = typeDecls.callStructMethod(receiver, method, arguments, location)
+
+    /**
+     * Validate a function/method return value against its declared return type.
+     *
+     * No-op when the declaration carries no return-type annotation. Otherwise
+     * applies the same null-safety and type-compatibility checks used for
+     * parameters and variable declarations, so return types are enforced
+     * consistently with the rest of the type system, including numeric
+     * widening (e.g. an Int result satisfies a declared Long, Double, or Dec
+     * return). Respects the `strictNullSafety` runtime toggle via
+     * [InterpreterOps.checkNullSafety].
+     *
+     * Called from every function/method body executor: [callFunction],
+     * [callMethod], and [TypeDeclarationEvaluator.callStructMethod].
+     *
+     * @return [result] unchanged when it satisfies the declared type
+     * @throws TypeError if [result] is incompatible with the declared return type
+     */
+    internal fun checkReturnType(function: KSFunction, result: Any?, location: SourceLocation?): Any? {
+        val returnType = function.declaration.returnType ?: return result
+        ops.checkNullSafety(function.name, result, returnType, location)
+        ops.checkTypeCompatibility(function.name, result, returnType, location)
+        return result
+    }
 
     /**
      * Evaluate a call expression.
