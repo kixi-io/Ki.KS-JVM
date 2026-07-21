@@ -2,6 +2,7 @@ package io.kixi.ks.ext
 
 import io.kixi.Range
 import io.kixi.Range.Bound
+import kotlin.random.Random
 
 /**
  * Extensions for [Range] that provide discrete enumeration of values.
@@ -17,6 +18,8 @@ import io.kixi.Range.Bound
  * (5..1).toList()          // [5, 4, 3, 2, 1]
  * ('a'..'f').toList()      // [a, b, c, d, e, f]
  * (0..10).toList(step=2)   // [0, 2, 4, 6, 8, 10]
+ * (1..6).picked()          // e.g. 4  (a random value in the range)
+ * (10..50).picked(step=10) // e.g. 30 (a random stepped value)
  * ```
  *
  * Open ranges (`_..5`, `1.._`) cannot be enumerated and will throw
@@ -268,4 +271,75 @@ private fun discreteCount(first: Long, last: Long, forward: Boolean, step: Long)
         if (first < last) 0  // empty: bounds crossed after exclusivity adjustment
         else ((first - last) / step + 1).toInt()
     }
+}
+
+// ============================================================================
+// picked — select a single random value from a closed, discrete range
+// ============================================================================
+
+/**
+ * Returns a single uniformly-random value from this range.
+ *
+ * Non-mutating: a range is an immutable descriptor, so there is no `pick`
+ * counterpart here (only [List] has a mutating `pick`). The value is chosen
+ * arithmetically from the range's discrete steps without materializing the
+ * full sequence, so this is O(1) even for enormous ranges.
+ *
+ * ```ks
+ * (1..6).picked()          // e.g. 4
+ * (10..50).picked(step=10) // e.g. 30
+ * ('a'..'z').picked()      // e.g. 'q'
+ * ```
+ *
+ * Uses [Random.Default], matching `List.shuffled`.
+ *
+ * @param step The step size between candidate values (default: 1). Must be
+ *             positive; direction is taken from the range.
+ * @return A random value from start to end, respecting bound exclusivity.
+ * @throws IllegalArgumentException if the range is open, non-discrete, or
+ *         [step] is less than 1
+ * @throws NoSuchElementException if the effective range is empty (e.g.
+ *         `5<..<6` has no integers between 5 and 6 exclusive)
+ */
+fun Range<*>.picked(step: Int = 1): Any {
+    require(isClosed) { "Cannot pick from an open range: $this" }
+    require(step >= 1) { "Step must be >= 1, got $step" }
+
+    return when (start) {
+        is Int  -> pickInt(start as Int, end as Int, bound, step)
+        is Long -> pickLong(start as Long, end as Long, bound, step.toLong())
+        is Char -> pickChar(start as Char, end as Char, bound, step)
+        else -> throw IllegalArgumentException(
+            "Cannot pick from Range<${start!!::class.simpleName}>: " +
+                    "only Int, Long, and Char ranges are discrete"
+        )
+    }
+}
+
+private fun pickInt(start: Int, end: Int, bound: Bound, step: Int): Int {
+    val (first, last) = intBounds(start, end, bound)
+    val forward = start <= end
+    val n = discreteCount(first.toLong(), last.toLong(), forward, step.toLong())
+    if (n == 0) throw NoSuchElementException("Cannot pick from an empty range")
+    val k = Random.Default.nextInt(n)
+    return if (forward) first + k * step else first - k * step
+}
+
+private fun pickLong(start: Long, end: Long, bound: Bound, step: Long): Long {
+    val (first, last) = longBounds(start, end, bound)
+    val forward = start <= end
+    val n = discreteCount(first, last, forward, step)
+    if (n == 0) throw NoSuchElementException("Cannot pick from an empty range")
+    val k = Random.Default.nextLong(n.toLong())
+    return if (forward) first + k * step else first - k * step
+}
+
+private fun pickChar(start: Char, end: Char, bound: Bound, step: Int): Char {
+    val (first, last) = charBounds(start, end, bound)
+    val forward = start <= end
+    val n = discreteCount(first.code.toLong(), last.code.toLong(), forward, step.toLong())
+    if (n == 0) throw NoSuchElementException("Cannot pick from an empty range")
+    val k = Random.Default.nextInt(n)
+    val code = if (forward) first.code + k * step else first.code - k * step
+    return code.toChar()
 }

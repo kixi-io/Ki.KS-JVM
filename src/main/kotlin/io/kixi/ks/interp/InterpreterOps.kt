@@ -14,6 +14,7 @@ import io.kixi.ks.*
 import io.kixi.ks.ext.toList as rangeToList
 import io.kixi.ks.ext.asSequence as rangeAsSequence
 import io.kixi.ks.ext.count as rangeCount
+import io.kixi.ks.ext.picked as rangePicked
 import io.kixi.ks.parser.*
 import io.kixi.uom.Currency
 import io.kixi.uom.Quantity
@@ -1271,6 +1272,10 @@ class InterpreterOps(internal val interp: Interpreter) {
             else throw IndexOutOfBoundsError(0, 0, location)
             "last" -> if (str.isNotEmpty()) str.last()
             else throw IndexOutOfBoundsError(0, 0, location)
+            "picked" -> NativeCallable("picked") { _, loc ->
+                if (str.isEmpty()) throw IndexOutOfBoundsError(0, 0, loc ?: location)
+                str[str.indices.random()]
+            }
             "indices" -> if (str.isEmpty()) {
                 Range(0, 0, Range.Bound.ExclusiveEnd)  // 0..<0 = empty
             } else {
@@ -1642,6 +1647,25 @@ class InterpreterOps(internal val interp: Interpreter) {
                 list.shuffled()
             }
 
+            "picked" -> NativeCallable("picked") { _, loc ->
+                if (list.isEmpty()) throw IndexOutOfBoundsError(0, 0, loc ?: location)
+                list[list.indices.random()]
+            }
+
+            "pick" -> NativeCallable("pick") { _, loc ->
+                if (list !is MutableList<*>) {
+                    throw RuntimeError(
+                        "pick() requires a mutable list. Use picked() to take a " +
+                                "random item without removing it.",
+                        loc ?: location
+                    )
+                }
+                if (list.isEmpty()) throw IndexOutOfBoundsError(0, 0, loc ?: location)
+                @Suppress("UNCHECKED_CAST")
+                val mutable = list as MutableList<Any?>
+                mutable.removeAt(mutable.indices.random())
+            }
+
             "sort" -> NativeCallable("sort") { _, loc ->
                 if (list is MutableList<*>) {
                     @Suppress("UNCHECKED_CAST")
@@ -1886,6 +1910,19 @@ class InterpreterOps(internal val interp: Interpreter) {
                     range.rangeToList(step)
                 } catch (e: IllegalArgumentException) {
                     throw RuntimeError(e.message ?: "Cannot convert range to list", loc)
+                }
+            }
+            "picked" -> NativeCallable("picked") { args, loc ->
+                val step = if (args.isNotEmpty()) {
+                    (args[0] as? Number)?.toInt()
+                        ?: throw TypeError("picked() step must be an Int", loc)
+                } else 1
+                try {
+                    range.rangePicked(step)
+                } catch (e: NoSuchElementException) {
+                    throw IndexOutOfBoundsError(0, 0, loc ?: location)
+                } catch (e: IllegalArgumentException) {
+                    throw RuntimeError(e.message ?: "Cannot pick from range", loc)
                 }
             }
             "toSequence" -> NativeCallable("toSequence") { args, loc ->

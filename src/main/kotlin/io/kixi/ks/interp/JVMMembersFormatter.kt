@@ -610,6 +610,7 @@ Methods:
   fun matches(pattern: String): Bool
   fun padEnd(length: Int, padChar: Char = ' '): String
   fun padStart(length: Int, padChar: Char = ' '): String
+  fun picked(): Char
   fun repeat(n: Int): String
   fun replace(old: String, new: String): String
   fun replace(regex: Regex, replacement: String): String
@@ -978,11 +979,14 @@ Methods:
   fun lastIndexOf(element: E): Int
   fun map(transform: (E) -> R): List<R>
   fun none(predicate: (E) -> Bool): Bool
+  fun pick(): E
+  fun picked(): E
   fun reduce(operation: (E, E) -> E): E
   fun remove(element: E): Bool
   fun removeAt(index: Int): E
   fun reversed(): List<E>
   fun set(index: Int, element: E): E
+  fun shuffle()
   fun shuffled(): List<E>
   fun slice(indices: IntRange): List<E>
   fun sort()
@@ -1058,6 +1062,7 @@ Methods:
   fun equals(other: Any?): Bool
   fun hashCode(): Int
   fun overlaps(other: Range<T>): Bool
+  fun picked(step: Int = 1): T
   fun toString(): String
         """.trimIndent(),
 
