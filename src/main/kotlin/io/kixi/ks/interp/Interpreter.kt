@@ -371,7 +371,12 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * @param location Call site location for error reporting
      * @return The function's return value
      */
-    fun callFunction(function: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+    fun callFunction(
+        function: KSFunction,
+        arguments: List<Any?>,
+        location: SourceLocation?,
+        argNodes: List<Argument> = emptyList()
+    ): Any? {
         // Check recursion depth
         if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
             throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
@@ -389,15 +394,11 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Create new scope with function's closure as parent (lexical scoping)
         val functionEnv = function.closure.child("function:${function.name}")
 
-        // Bind parameters
+        // Resolve arguments (named + positional + defaults), then bind
+        val resolved = resolveArguments(params, argNodes, arguments, function.name, location)
         for (i in params.indices) {
             val param = params[i]
-            val value = if (i < arguments.size) {
-                ops.copyIfStruct(arguments[i])
-            } else {
-                // Use default value (must exist since we passed arity check)
-                param.defaultValue?.let { evaluate(it) }
-            }
+            val value = ops.copyIfStruct(resolved[i])
 
             // Check null safety for non-nullable parameter types
             ops.checkNullSafety(param.name, value, param.type, location)
@@ -536,7 +537,13 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * @param location Call site location for error reporting
      * @return The method's return value
      */
-    fun callMethod(receiver: KSObject, method: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+    fun callMethod(
+        receiver: KSObject,
+        method: KSFunction,
+        arguments: List<Any?>,
+        location: SourceLocation?,
+        argNodes: List<Argument> = emptyList()
+    ): Any? {
         // Check recursion depth
         if (runtime.maxRecursionDepth > 0 && recursionDepth >= runtime.maxRecursionDepth) {
             throw RuntimeError("Maximum recursion depth exceeded (${runtime.maxRecursionDepth})", location)
@@ -557,14 +564,11 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         // Bind `this` to the receiver object
         methodEnv.define("this", receiver, mutable = false, location = location)
 
-        // Bind parameters
+        // Resolve arguments (named + positional + defaults), then bind
+        val resolved = resolveArguments(params, argNodes, arguments, method.name, location)
         for (i in params.indices) {
             val param = params[i]
-            val value = if (i < arguments.size) {
-                arguments[i]
-            } else {
-                param.defaultValue?.let { evaluate(it) }
-            }
+            val value = resolved[i]
 
             // Check null safety for non-nullable parameter types
             ops.checkNullSafety(param.name, value, param.type, location)
@@ -618,8 +622,69 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         receiver: KSStructInstance,
         method: KSFunction,
         arguments: List<Any?>,
+        location: SourceLocation?,
+        argNodes: List<Argument> = emptyList()
+    ): Any? = typeDecls.callStructMethod(receiver, method, arguments, location, argNodes)
+
+    /**
+     * Resolves call arguments against [params], honoring named arguments
+     * (matched by parameter name), positional arguments (filled left to
+     * right), and defaults — the same binding used for class/struct
+     * construction.
+     *
+     * Fast path: when no argument is named, values are filled positionally
+     * with defaults for the remainder, identical to the prior behavior.
+     * Named/positional mixes follow the constructor rule: a parameter takes
+     * its named value if present, else the next unconsumed positional value,
+     * else its default. A named argument that matches no parameter is an
+     * error.
+     *
+     * @param args     Evaluated argument values, aligned 1:1 with [argNodes]
+     *                 when [argNodes] is non-empty.
+     * @param argNodes The argument AST nodes (carrying names); empty for
+     *                 synthetic callers that only ever pass positional values.
+     * @return One resolved value per parameter, in declaration order.
+     */
+    internal fun resolveArguments(
+        params: List<Parameter>,
+        argNodes: List<Argument>,
+        args: List<Any?>,
+        calleeName: String,
         location: SourceLocation?
-    ): Any? = typeDecls.callStructMethod(receiver, method, arguments, location)
+    ): List<Any?> {
+        // Fast path: no named arguments — positional fill with defaults.
+        if (argNodes.none { it.name != null }) {
+            var idx = 0
+            return params.map { param ->
+                if (idx < args.size) args[idx++]
+                else param.defaultValue?.let { evaluate(it) }
+            }
+        }
+
+        // Split into named (by parameter name) and positional (in order).
+        val namedArgs = mutableMapOf<String, Any?>()
+        val positionalArgs = mutableListOf<Any?>()
+        for ((index, argNode) in argNodes.withIndex()) {
+            if (argNode.name != null) namedArgs[argNode.name] = args[index]
+            else positionalArgs.add(args[index])
+        }
+
+        // Reject a named argument that matches no parameter (e.g. a typo).
+        val paramNames = params.mapTo(HashSet()) { it.name }
+        namedArgs.keys.firstOrNull { it !in paramNames }?.let { unknown ->
+            throw RuntimeError("Unknown named argument '$unknown' for '$calleeName'", location)
+        }
+
+        var positionalIndex = 0
+        return params.map { param ->
+            when {
+                namedArgs.containsKey(param.name) -> namedArgs[param.name]
+                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
+                param.defaultValue != null -> evaluate(param.defaultValue)
+                else -> throw ArityError(calleeName, params.size, args.size, location)
+            }
+        }
+    }
 
     /**
      * Validate a function/method return value against its declared return type.
@@ -660,7 +725,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
         // Handle different callable types
         return when (callee) {
-            is KSFunction -> callFunction(callee, args, location)
+            is KSFunction -> callFunction(callee, args, location, expr.arguments)
             is KSClass -> typeDecls.instantiateClass(callee, args, expr.arguments, location)
             is KSStruct -> typeDecls.instantiateStruct(callee, args, expr.arguments, location)
             is KSEnum -> throw RuntimeError("Cannot instantiate enum '${callee.name}' directly", location)
@@ -703,7 +768,14 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 throw NotCallableError(callee, location)
             }
 
-            // Generic Callable dispatch
+            // Bound methods routed explicitly (before generic Callable) so the
+            // argument names survive into callMethod / callStructMethod.
+            is BoundMethod ->
+                callMethod(callee.receiver, callee.method, args, location, expr.arguments)
+            is StructBoundMethod ->
+                callStructMethod(callee.receiver, callee.method, args, location, expr.arguments)
+
+            // Generic Callable dispatch (NativeCallable, lambdas, …): positional.
             is Callable -> callee.call(this, args, location)
             else -> {
                 // Check if it's a function name
@@ -713,7 +785,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                     // Check functions first
                     if (environment.isFunctionDefined(name)) {
                         val fn = environment.getFunction(name, location)
-                        return callFunction(fn, args, location)
+                        return callFunction(fn, args, location, expr.arguments)
                     }
 
                     // Check classes

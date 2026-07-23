@@ -390,12 +390,13 @@ class JVMMembersTest : FunSpec({
             val result = eval("Range.members") as String
             result shouldContain "val start: T?"
             result shouldContain "val end: T?"
-            result shouldContain "val isEmpty: Bool"
+            result shouldContain "val isClosed: Bool"
         }
 
         test("Range.members shows methods") {
             val result = eval("Range.members") as String
             result shouldContain "fun contains(value: T): Bool"
+            result shouldContain "fun picked(step: Int = 1): T"
         }
     }
 

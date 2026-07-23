@@ -144,27 +144,17 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         // Bind constructor parameters to properties
         val params = ksClass.constructorParams
 
-        // Build argument map for named arguments
-        val namedArgs = mutableMapOf<String, Any?>()
-        val positionalArgs = mutableListOf<Any?>()
+        // Resolve arguments (named + positional + defaults) via the shared
+        // binder, so constructors and calls share one set of rules — including
+        // rejection of unknown named arguments. Constructor params are adapted
+        // to Parameter for the resolution (only name + default are consulted).
+        val resolved = interp.resolveArguments(
+            params.map { Parameter(it.name, it.type, it.defaultValue, it.constraint, it.location) },
+            argNodes, args, ksClass.name, location
+        )
 
-        for ((index, argNode) in argNodes.withIndex()) {
-            if (argNode.name != null) {
-                namedArgs[argNode.name] = args[index]
-            } else {
-                positionalArgs.add(args[index])
-            }
-        }
-
-        // Assign values to constructor parameters
-        var positionalIndex = 0
-        for (param in params) {
-            val value = when {
-                namedArgs.containsKey(param.name) -> namedArgs[param.name]
-                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
-                param.defaultValue != null -> interp.evaluate(param.defaultValue)
-                else -> throw ArityError(ksClass.name, params.size, args.size, location)
-            }
+        for ((i, param) in params.withIndex()) {
+            val value = resolved[i]
 
             // Check null safety for non-nullable constructor parameter types
             ops.checkNullSafety(param.name, value, param.type, location)
@@ -354,27 +344,17 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
 
         val params = ksStruct.constructorParams
 
-        // Build argument map for named arguments
-        val namedArgs = mutableMapOf<String, Any?>()
-        val positionalArgs = mutableListOf<Any?>()
+        // Resolve arguments (named + positional + defaults) via the shared
+        // binder, so constructors and calls share one set of rules — including
+        // rejection of unknown named arguments. Constructor params are adapted
+        // to Parameter for the resolution (only name + default are consulted).
+        val resolved = interp.resolveArguments(
+            params.map { Parameter(it.name, it.type, it.defaultValue, it.constraint, it.location) },
+            argNodes, args, ksStruct.name, location
+        )
 
-        for ((index, argNode) in argNodes.withIndex()) {
-            if (argNode.name != null) {
-                namedArgs[argNode.name] = args[index]
-            } else {
-                positionalArgs.add(args[index])
-            }
-        }
-
-        // Assign values to constructor parameters
-        var positionalIndex = 0
-        for (param in params) {
-            val value = when {
-                namedArgs.containsKey(param.name) -> namedArgs[param.name]
-                positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
-                param.defaultValue != null -> interp.evaluate(param.defaultValue)
-                else -> throw ArityError(ksStruct.name, params.size, args.size, location)
-            }
+        for ((i, param) in params.withIndex()) {
+            val value = resolved[i]
 
             // Check null safety for non-nullable constructor parameter types
             ops.checkNullSafety(param.name, value, param.type, location)
@@ -418,7 +398,13 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     /**
      * Call a method on a struct instance with proper `this` binding.
      */
-    internal fun callStructMethod(receiver: KSStructInstance, method: KSFunction, arguments: List<Any?>, location: SourceLocation?): Any? {
+    internal fun callStructMethod(
+        receiver: KSStructInstance,
+        method: KSFunction,
+        arguments: List<Any?>,
+        location: SourceLocation?,
+        argNodes: List<Argument> = emptyList()
+    ): Any? {
         if (interp.runtime.maxRecursionDepth > 0 && interp.recursionDepth >= interp.runtime.maxRecursionDepth) {
             throw RuntimeError("Maximum recursion depth exceeded (${interp.runtime.maxRecursionDepth})", location)
         }
@@ -434,13 +420,10 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         val methodEnv = method.closure.child("method:${method.name}")
         methodEnv.define("this", receiver, mutable = false, location = location)
 
+        val resolved = interp.resolveArguments(params, argNodes, arguments, method.name, location)
         for (i in params.indices) {
             val param = params[i]
-            val value = if (i < arguments.size) {
-                ops.copyIfStruct(arguments[i])
-            } else {
-                param.defaultValue?.let { interp.evaluate(it) }
-            }
+            val value = ops.copyIfStruct(resolved[i])
 
             // Check null safety for non-nullable parameter types
             ops.checkNullSafety(param.name, value, param.type, location)
@@ -470,7 +453,7 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
                 } catch (ret: ReturnValue) {
                     ret.value
                 }
-            }
+            }.let { interp.checkReturnType(method, it, location) }
         } finally {
             interp.recursionDepth--
             interp.environment = previousEnv
