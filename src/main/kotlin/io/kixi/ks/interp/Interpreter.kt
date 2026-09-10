@@ -186,6 +186,40 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     fun stringify(value: Any?): String = ops.stringify(value)
 
     /**
+     * Binds [value] to [name] in the current scope — the global scope when
+     * called before any execution — as an immutable (`let`) binding.
+     *
+     * This is the host-interop seam: the way Kotlin code injects values
+     * and callables that have no source spelling. A [io.kixi.ks.NativeFunction]
+     * bound here is called exactly as a lambda held in a `let` is — the
+     * call evaluator resolves the identifier to the value and dispatches
+     * on `Callable` — so `mw("NaCl")` works with no parser or evaluator
+     * change. Before this, hosts could only generate source
+     * (`let A1 = 5`), which covers literals and nothing else. The Boa
+     * counterpart is `Interpreter.set(name, value)`.
+     *
+     * Throws [io.kixi.ks.RedefinitionError] if [name] is already bound in
+     * the current scope: hosts bind each name once per interpreter, which
+     * suits the fresh-interpreter-per-evaluation model. Arity of a
+     * [io.kixi.ks.NativeFunction] is not enforced by the call evaluator;
+     * the function validates its own arguments.
+     *
+     * ```kotlin
+     * val interp = Interpreter(KSRuntime.PORTABLE)
+     * interp.define("mw", NativeFunction("mw", 1) { args -> molarMass(args[0]) })
+     * interp.execute("mw(\"NaCl\")")   // 58.44Da
+     * ```
+     *
+     * @param name  The identifier to bind. Must be a legal KS identifier.
+     * @param value The value: any KS runtime value, a [io.kixi.ks.Callable],
+     *              or a host object (see [io.kixi.ks.KSMembers] for
+     *              exposing its members without `hostLang`).
+     */
+    fun define(name: String, value: Any?) {
+        environment.define(name, value, mutable = false)
+    }
+
+    /**
      * Reset all import state. Called by REPL on `:reset`.
      */
     fun resetImports() {

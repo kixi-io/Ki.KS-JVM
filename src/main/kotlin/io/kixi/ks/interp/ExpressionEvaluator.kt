@@ -651,6 +651,17 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 is NSID -> interp.nativeTypes.getNSIDMember(obj, member, location)
                 is KiTag -> interp.nativeTypes.getTagMember(obj, member, location)
                 is Call -> interp.nativeTypes.getCallMember(obj, member, location)
+
+                // Host objects that opt in (see KSMembers): members the
+                // object itself chooses to expose, resolved without
+                // reflection and therefore in every hostLang mode. A
+                // null answer is "no such member" — the object cannot
+                // expose a legitimately-nil member through this seam.
+                is KSMembers -> obj.ksMember(member)
+                    ?: throw MemberNotFoundError(
+                        member, obj::class.simpleName ?: "Object", location
+                    )
+
                 else -> CuratedNotFound // No curated method for this type
             }
         } catch (e: MemberNotFoundError) {
