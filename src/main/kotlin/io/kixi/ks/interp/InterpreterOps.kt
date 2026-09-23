@@ -19,12 +19,13 @@ import io.kixi.ks.parser.*
 import io.kixi.uom.Currency
 import io.kixi.uom.Quantity
 import io.kixi.uom.Unit as KiUnit
-import io.kixi.uom.combineUnits
+import io.kixi.uom.UnitAlgebra
+import io.kixi.uom.UndefinedUnitArithmeticException
 
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.math.BigDecimal as Dec
-import java.math.RoundingMode
+import java.math.MathContext
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -113,6 +114,12 @@ class InterpreterOps(internal val interp: Interpreter) {
         if (left is Int && right is String) {
             return right.repeat(left)
         }
+        // Quantity * Quantity (cross-dimension: 150mM * 1\u2113 \u2192 150mmol).
+        // Delegates to UnitAlgebra; an undefined dimension pair throws
+        // UndefinedUnitArithmeticException with a dimensional message.
+        if (left is Quantity<*> && right is Quantity<*>) {
+            return UnitAlgebra.multiply(left, right)
+        }
         // Quantity * Number (scalar multiplication)
         if (left is Quantity<*> && right is Number) {
             return quantityScalarOp(left, right, "multiply")
@@ -125,6 +132,15 @@ class InterpreterOps(internal val interp: Interpreter) {
     }
 
     internal fun divide(left: Any?, right: Any?): Any {
+        // Quantity / Quantity. Same dimension yields a plain number
+        // (300mm / 1m \u2192 0.3) \u2014 UnitAlgebra returns it as a
+        // dimensionless ratio quantity, unwrapped here so KS sees a Number.
+        // Across dimensions a UnitAlgebra rule applies
+        // (150mmol / 1\u2113 \u2192 150mM).
+        if (left is Quantity<*> && right is Quantity<*>) {
+            val result = UnitAlgebra.divide(left, right)
+            return if (result.unit == KiUnit.ratio) result.value else result
+        }
         // Quantity / Number (scalar division)
         if (left is Quantity<*> && right is Number) {
             return quantityScalarOp(left, right, "divide")
@@ -174,7 +190,14 @@ class InterpreterOps(internal val interp: Interpreter) {
                 "add" -> l.add(r)
                 "subtract" -> l.subtract(r)
                 "multiply" -> l.multiply(r)
-                "divide" -> l.divide(r, 10, RoundingMode.HALF_UP)
+                "divide" -> {
+                    if (r.signum() == 0) throw DivisionByZeroError()
+                    // DECIMAL128, matching Ki.Core: terminating quotients are
+                    // exact (1/2 \u2192 0.5, no trailing zeros), only
+                    // non-terminating ones round (at 34 significant digits,
+                    // not at a fixed scale of 10 as before).
+                    l.divide(r, MathContext.DECIMAL128)
+                }
                 "modulo" -> l.remainder(r)
                 else -> throw RuntimeError("Unknown operation: $op")
             }
@@ -290,39 +313,21 @@ class InterpreterOps(internal val interp: Interpreter) {
         }
     }
 
-    /**
-     * Multiply two Number values preserving appropriate types.
-     * Used by the combine (\u2695) operator for unit composition.
-     */
-    internal fun multiplyNumbers(a: Number, b: Number): Number {
-        return when {
-            a is Dec || b is Dec -> toBigDecimal(a).multiply(toBigDecimal(b))
-            a is Double || b is Double -> a.toDouble() * b.toDouble()
-            a is Float || b is Float -> a.toFloat() * b.toFloat()
-            a is Long || b is Long -> a.toLong() * b.toLong()
-            else -> {
-                val result = a.toLong() * b.toLong()
-                if (result in Int.MIN_VALUE..Int.MAX_VALUE) result.toInt() else result
-            }
-        }
-    }
-
     // ========================================================================
     // Combine (\u2695) Operator
     // ========================================================================
 
     /**
-     * Evaluate the unit composition operator \u2695.
-     *
-     * Combines two quantities into a higher-dimensional unit:
+     * Evaluate the unit composition operator \u2695. Kept as a synonym for
+     * quantity multiplication, which `*` now performs directly:
      * - Length \u00d7 Length \u2192 Area:   `4cm \u2695 3cm \u2192 12cm\u00b2`
      * - Length \u00d7 Area \u2192 Volume:  `2m \u2695 3m\u00b2 \u2192 6m\u00b3`
-     * - Area \u00d7 Length \u2192 Volume:  `3m\u00b2 \u2695 2m \u2192 6m\u00b3`
      *
-     * If units match, the combination is direct. If units differ within the
-     * same dimension (e.g., m and cm), both are converted to base units first.
+     * Delegates to [UnitAlgebra.multiply], which converts both operands to
+     * the rule's pairing units before multiplying, so mixed prefixes are
+     * handled correctly (`1km \u2695 1m \u2192 1000m\u00b2` \u2014 the old
+     * combineUnits path ignored the prefixes).
      */
-    @Suppress("UNCHECKED_CAST")
     internal fun evaluateCombine(left: Any?, right: Any?, location: SourceLocation?): Quantity<*> {
         if (left !is Quantity<*> || right !is Quantity<*>) {
             throw TypeError(
@@ -333,28 +338,11 @@ class InterpreterOps(internal val interp: Interpreter) {
             )
         }
 
-        val lUnit = left.unit
-        val rUnit = right.unit
-
-        // Try to combine units directly
-        val resultUnit = combineUnits(lUnit, rUnit)
-            ?: throw RuntimeError(
-                "Cannot combine units '${lUnit.symbol}' and '${rUnit.symbol}' " +
-                        "(supported: Length\u00d7Length\u2192Area, Length\u00d7Area\u2192Volume)",
-                location
-            )
-
-        // If units are the same, multiply values directly
-        val resultValue = if (lUnit == rUnit) {
-            multiplyNumbers(left.value, right.value)
-        } else {
-            // Convert both to base units before multiplying
-            val lBase = (left as Quantity<KiUnit>).convertTo(lUnit.baseUnit as KiUnit)
-            val rBase = (right as Quantity<KiUnit>).convertTo(rUnit.baseUnit as KiUnit)
-            multiplyNumbers(lBase.value, rBase.value)
+        return try {
+            UnitAlgebra.multiply(left, right)
+        } catch (e: UndefinedUnitArithmeticException) {
+            throw RuntimeError(e.message ?: "Cannot combine units", location)
         }
-
-        return Quantity(resultValue, resultUnit)
     }
 
     // ========================================================================
@@ -597,7 +585,10 @@ class InterpreterOps(internal val interp: Interpreter) {
     internal fun toBigDecimal(value: Any?): Dec {
         return when (value) {
             is Dec -> value
-            is Number -> Dec(value.toDouble())
+            // Through the decimal string form, so 0.1:d contributes one
+            // tenth, not its binary expansion (the Dec(Double) constructor
+            // yields 0.1000000000000000055511151231257827021181583404541015625).
+            is Number -> Dec(value.toString())
             is String -> Dec(value)
             else -> throw TypeError("Cannot convert to BigDecimal")
         }
