@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.kixi"
-version = "2.3.3"
+version = providers.gradleProperty("ksVersion").getOrElse("2.3.3")
 description = "ki-ks"
 
 // Application config goes HERE - outside plugins block
@@ -24,10 +24,7 @@ repositories {
 
 dependencies {
     // === Ki Dependencies (resolved via composite builds — see settings.gradle.kts) ===
-    // implementation("io.kixi:Ki.Core-JVM:2.3.2")
-    // implementation("io.kixi:Ki.KD-JVM:2.3.2")
-
-    api("io.kixi:Ki.Core-JVM:2.3.2")
+    api("io.kixi:Ki.Core-JVM:2.4.0")
     api("io.kixi:Ki.KD-JVM:2.3.2")
 
     // === JLine (REPL terminal handling) ===
@@ -155,11 +152,25 @@ tasks.register<Jar>("runtimeJar") {
     }
 
     // Bundle all runtime dependencies
-    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
+    dependsOn(configurations.runtimeClasspath)
+    from({ configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) } })
     with(tasks.jar.get())
 }
 
 // ── Distribution Layout ─────────────────────────────────────────────────────
+
+// A declared task output ensures version-only changes invalidate resources and archives.
+val generatedVersionDir = layout.buildDirectory.dir("generated/ks-version")
+val generateKsVersion by tasks.registering {
+    val runtimeVersion = project.version.toString()
+    inputs.property("ksVersion", runtimeVersion)
+    outputs.dir(generatedVersionDir)
+    doLast {
+        val directory = generatedVersionDir.get().asFile
+        directory.mkdirs()
+        directory.resolve("ks-version.txt").writeText(runtimeVersion)
+    }
+}
 
 val distDir = layout.buildDirectory.dir("dist/ki-script")
 
@@ -186,21 +197,17 @@ tasks.register<Copy>("distLayout") {
     from("packaging/install.sh")
     from("packaging/install.ps1")
 
-    // Version file
-    doFirst {
-        val ksVersion = project.property("ksVersion") as String
-        file("${layout.buildDirectory.get()}/VERSION").writeText(ksVersion)
+    // Reuse the same generated version for the distribution and classpath resource.
+    from(generateKsVersion) {
+        include("ks-version.txt")
+        rename { "VERSION" }
     }
-    from(layout.buildDirectory.file("VERSION"))
 
     into(distDir)
 }
 
 tasks.named<ProcessResources>("processResources") {
-    val ksVersion = project.property("ksVersion") as String
-    doFirst {
-        file("$destinationDir/ks-version.txt").writeText(ksVersion)
-    }
+    from(generateKsVersion)
 }
 
 // Make Unix scripts executable after copy

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")"
-./gradlew -q replJar || exit 1
+set -euo pipefail
+cd -- "$(dirname -- "$0")"
+./gradlew -q --console=plain replJar
 
-# Use the same JDK that Gradle uses
-JAVA=$(./gradlew -q javaPath 2>/dev/null)
-if [ -z "$JAVA" ]; then
-    JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+# Resolve the Java 21 toolchain; do not fall back to an unrelated PATH runtime.
+ks_java=$(./gradlew -q --console=plain javaPath)
+if [[ ! -x "$ks_java" ]]; then
+    printf 'Could not resolve an executable Java 21 toolchain: %s\n' "$ks_java" >&2
+    exit 1
 fi
-exec "$JAVA" -jar build/libs/ks-repl.jar "$@"
+exec "$ks_java" -jar build/libs/ks-repl.jar "$@"
