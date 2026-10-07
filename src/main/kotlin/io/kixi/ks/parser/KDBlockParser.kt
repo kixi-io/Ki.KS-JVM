@@ -226,7 +226,9 @@ class KDBlockParser(internal val p: Parser) {
             return tryParseRangeContinuation(versionExpr) ?: versionExpr
         }
 
-        return p.expr.parseExpression()
+        // A KD value is never followed by a trailing-lambda call: a `{` after
+        // a value opens the tag's children block.
+        return p.expr.parseExpressionNoTrailingLambda()
     }
 
     /**

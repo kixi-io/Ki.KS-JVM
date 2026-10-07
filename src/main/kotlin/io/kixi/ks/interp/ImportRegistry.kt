@@ -350,33 +350,82 @@ class JVMMethodProxy(
     }
 
     override fun call(interpreter: Interpreter, arguments: List<Any?>, location: SourceLocation?): Any? {
-        // Try with original arguments
-        return try {
-            method.invoke(receiver, *arguments.toTypedArray())
-        } catch (e: IllegalArgumentException) {
-            // Try with type coercion
-            val coerced = tryCoerceArgs(arguments, method.parameterTypes)
-            if (coerced != null) {
-                try {
-                    method.invoke(receiver, *coerced.toTypedArray())
-                } catch (e2: java.lang.reflect.InvocationTargetException) {
-                    throw RuntimeError(
-                        "Error calling $ownerName.${method.name}: ${e2.targetException.message}",
-                        location, e2.targetException
-                    )
-                }
-            } else {
-                throw TypeError(
-                    "Argument type mismatch calling $ownerName.${method.name}: ${e.message}",
-                    location
-                )
+        // The proxy was resolved by name only, so [method] may be the wrong
+        // overload for these arguments (e.g. KDS.compile(File) when a String
+        // was passed). Select among all same-name overloads of the declaring
+        // class, mirroring the instance-member resolution in
+        // ExpressionEvaluator.buildJavaCallable: exact type match first,
+        // then numeric coercion.
+        val candidates = overloads(arguments.size)
+        if (candidates.isEmpty()) {
+            throw TypeError(
+                "No overload of $ownerName.${method.name} takes ${arguments.size} argument(s). " +
+                        "Available: ${overloads(null).map { "${method.name}(${it.parameterCount} args)" }
+                            .distinct().joinToString(", ")}",
+                location
+            )
+        }
+
+        val exact = candidates.firstOrNull { m ->
+            arguments.indices.all { i ->
+                val arg = arguments[i]
+                if (arg == null) !m.parameterTypes[i].isPrimitive
+                else isAssignableWithBoxing(m.parameterTypes[i], arg.javaClass)
             }
+        }
+        if (exact != null) return invoke(exact, arguments, location)
+
+        for (candidate in candidates) {
+            val coerced = tryCoerceArgs(arguments, candidate.parameterTypes)
+            if (coerced != null) return invoke(candidate, coerced, location)
+        }
+
+        throw TypeError(
+            "Argument type mismatch calling $ownerName.${method.name}: no overload accepts (" +
+                    arguments.joinToString(", ") { it?.javaClass?.simpleName ?: "nil" } + ")",
+            location
+        )
+    }
+
+    /** Same-name overloads of the declaring class with the same static-ness as [method]. */
+    private fun overloads(argCount: Int?): List<Method> {
+        val declaring = method.declaringClass
+        val static = Modifier.isStatic(method.modifiers)
+        return (declaring.declaredMethods.toList() + declaring.methods.toList())
+            .filter {
+                it.name == method.name && Modifier.isStatic(it.modifiers) == static &&
+                        !it.isSynthetic && !it.isBridge && (argCount == null || it.parameterCount == argCount)
+            }
+            .distinctBy { it.parameterTypes.toList() }
+            .let { list -> if (list.any { it == method }) listOf(method) + list.filter { it != method } else list }
+    }
+
+    private fun invoke(m: Method, args: List<Any?>, location: SourceLocation?): Any? {
+        m.isAccessible = true
+        return try {
+            m.invoke(receiver, *args.toTypedArray())
         } catch (e: java.lang.reflect.InvocationTargetException) {
             throw RuntimeError(
-                "Error calling $ownerName.${method.name}: ${e.targetException.message}",
+                "Error calling $ownerName.${m.name}: ${e.targetException.message}",
                 location, e.targetException
             )
         }
+    }
+
+    private fun isAssignableWithBoxing(paramType: Class<*>, argType: Class<*>): Boolean {
+        if (paramType.isAssignableFrom(argType)) return true
+        val boxed = when (paramType) {
+            java.lang.Boolean.TYPE -> java.lang.Boolean::class.java
+            java.lang.Byte.TYPE -> java.lang.Byte::class.java
+            java.lang.Short.TYPE -> java.lang.Short::class.java
+            java.lang.Integer.TYPE -> java.lang.Integer::class.java
+            java.lang.Long.TYPE -> java.lang.Long::class.java
+            java.lang.Float.TYPE -> java.lang.Float::class.java
+            java.lang.Double.TYPE -> java.lang.Double::class.java
+            java.lang.Character.TYPE -> java.lang.Character::class.java
+            else -> paramType
+        }
+        return boxed.isAssignableFrom(argType)
     }
 
     /**
