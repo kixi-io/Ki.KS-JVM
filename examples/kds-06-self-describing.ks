@@ -36,7 +36,7 @@ fun show(name: String) {
             else           -> say.warn "  " + doc.report()
         }
     } catch(e) {
-        say.error "  " + e
+        say.error """🚨 ${e.substring(e.indexOf("KD.load: ") + 9)}"""
     }
     say
 }
