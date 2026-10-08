@@ -33,10 +33,10 @@ fun show(name: String) {
         when {
             !doc.hasSchema -> say "  no schema declared; loaded " + doc.tags.size + " top-level tag(s) as plain data"
             doc.isValid    -> say "  schema " + doc.schema.name + ": valid, " + doc.tags.size + " top-level tag(s)"
-            else           -> say.warn "  " + doc.report()
+            else           -> say "🟠 " + doc.report()
         }
     } catch(e) {
-        say.error """🚨 ${e.substring(e.indexOf("KD.load: ") + 9)}"""
+        say.error "🚨 " + e.substring(e.indexOf("KD.load: ") + 9)
     }
     say
 }
@@ -59,7 +59,7 @@ show("plain.kd")
 try {
     KD.load(File(folder, "plain.kd"), LoadOptions.SCHEMA_REQUIRED)
 } catch(e) {
-    say.error "  with SCHEMA_REQUIRED: " + e
+    say.error "🚨 with SCHEMA_REQUIRED: " + e
 }
 say
 
