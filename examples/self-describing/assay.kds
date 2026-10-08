@@ -1,0 +1,30 @@
+# assay.kds: the schema for one high-throughput screening run.
+# Referenced from run-*.kd via the .schema(assay) directive.
+
+schema Assay kds=1 {
+    definitions {
+        valueType WellId type=String pattern=@"[A-P]\d{1,2}"
+        valueType Signal type=Number min=0
+    }
+
+    tag assay {
+        attribute id type=String required=true pattern=@"HTS-\d{4}"
+        attribute operator type=String required=true
+        children {
+            tag instrument occurs=0..1 {
+                attribute model type=String required=true
+                attribute serial type=String required=true
+            }
+            tag status {
+                value type=String enum=[planned running complete]
+            }
+            tag temperature occurs=0..1 {
+                value type=Quantity dimension=Temperature min=20°C max=40°C
+            }
+            tag measurement occurs=1.._ {
+                attribute well ref=WellId required=true
+                value ref=Signal
+            }
+        }
+    }
+}

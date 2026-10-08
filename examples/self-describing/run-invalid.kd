@@ -1,0 +1,12 @@
+# Same schema, five mistakes: bad id, unknown status, out-of-range temperature,
+# a well outside A-P, a negative signal, and an undeclared tag.
+
+.schema(assay)
+
+assay id="HTS-42" operator="dan" {
+    status paused
+    temperature 120°F
+    measurement -0.5 well=Q1
+    measurement 0.77 well=A2
+    note "remember to recalibrate"
+}

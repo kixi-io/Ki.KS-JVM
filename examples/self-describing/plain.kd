@@ -1,0 +1,6 @@
+# An ordinary KD file with no schema declaration. KD.load reads it as data.
+
+experiment "Dose response" {
+    compound "CMP-0117"
+    concentrations [0.1µM 1µM 10µM]
+}

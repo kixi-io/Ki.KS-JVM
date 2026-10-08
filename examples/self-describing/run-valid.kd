@@ -1,0 +1,13 @@
+# A standalone KD document that names its schema. The directive must be the
+# first tag; the path is relative to this file and ".kds" is implied.
+
+.schema(assay)
+
+assay id="HTS-0042" operator="dan" {
+    .snip(shared/instrument)
+    status running
+    temperature 37°C
+    measurement 0.82 well=A1
+    measurement 0.91 well=A2
+    measurement 1.07 well=B1
+}

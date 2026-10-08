@@ -1,0 +1,15 @@
+# A single file carrying both the schema and the data. The schema is an
+# ordinary KDS schema tag and must come first; everything after it is data.
+
+schema Reagents kds=1 {
+    tag reagent occurs=1.._ {
+        attribute name type=String required=true minLength=1
+        attribute volume type=Quantity dimension=Volume min=1mℓ max=10ℓ
+        attribute storage type=Quantity dimension=Temperature min=-80°C max=25°C
+        attribute price type=Quantity dimension=Currency unit=USD min=0USD
+    }
+}
+
+reagent name="Trypsin"        volume=250mℓ storage=-20°C price=$42.50
+reagent name="DMEM"           volume=2ℓ    storage=4°C   price=$18.00
+reagent name="Sodium azide"   volume=50mℓ  storage=20°C
