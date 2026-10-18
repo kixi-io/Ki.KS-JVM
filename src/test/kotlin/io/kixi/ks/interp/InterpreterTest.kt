@@ -1123,7 +1123,7 @@ class InterpreterTest : FunSpec({
             """.trimIndent()) shouldBe "true\nfalse"
         }
 
-        test("!in check with range") {
+        test("'!in' check with range") {
             run("""
                 say 5 !in 1..3
                 say 2 !in 1..3
@@ -1201,7 +1201,7 @@ class InterpreterTest : FunSpec({
             """.trimIndent()) shouldBe "true\nfalse"
         }
 
-        test("!is negated type check") {
+        test("'!is' negated type check") {
             run("""
                 say 42 !is String
                 say 42 !is Int

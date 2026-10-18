@@ -586,7 +586,7 @@ class ParserTest : FunSpec({
             expr.negated shouldBe false
         }
 
-        test("!is check") {
+        test("'!is' check") {
             val expr = parseExpr("x !is Int") as TypeCheckExpr
             expr.negated shouldBe true
         }
@@ -607,7 +607,7 @@ class ParserTest : FunSpec({
             expr.negated shouldBe false
         }
 
-        test("!in check") {
+        test("'!in' check") {
             val expr = parseExpr("x !in range") as InCheckExpr
             expr.negated shouldBe true
         }

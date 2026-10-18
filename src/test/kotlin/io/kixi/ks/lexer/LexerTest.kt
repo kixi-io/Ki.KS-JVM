@@ -693,19 +693,19 @@ class LexerTest : FunSpec({
     // ====================================================================
 
     context("Compound negation operators") {
-        test("!in is a single token") {
+        test("'!in' is a single token") {
             val toks = tokens("5 !in list")
             toks[1].type shouldBe TokenType.NOT_IN
             toks[1].value shouldBe "!in"
         }
 
-        test("!is is a single token") {
+        test("'!is' is a single token") {
             val toks = tokens("x !is String")
             toks[1].type shouldBe TokenType.NOT_IS
             toks[1].value shouldBe "!is"
         }
 
-        test("!identifier is BANG + IDENTIFIER (not !in or !is)") {
+        test("'!identifier' is BANG + IDENTIFIER (not !in or !is)") {
             val toks = tokens("!done")
             toks[0].type shouldBe TokenType.BANG
             toks[1].type shouldBe TokenType.IDENTIFIER

@@ -728,7 +728,7 @@ class InheritanceAndTraitsTest : FunSpec({
             result shouldBe "false"
         }
 
-        test("!is negation works") {
+        test("'!is' negation works") {
             val result = run("""
                 class Cat { }
                 class Dog { }

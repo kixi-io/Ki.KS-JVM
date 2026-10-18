@@ -1324,7 +1324,7 @@ class NativeTypeMemberAccessTest : FunSpec({
             """.trimIndent()) shouldBe "true\nfalse"
         }
 
-        test("!is operator") {
+        test("'!is' operator") {
             run("""
                 say 42 !is Version
                 say Version(1, 0, 0) !is Version

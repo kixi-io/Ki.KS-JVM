@@ -11,6 +11,7 @@ This build includes `../Ki.Core-JVM` and `../Ki.KD-JVM` via `settings.gradle.kts
 - Runtime fat jar: `./gradlew runtimeJar`
 - Distribution / local install: `./gradlew kiDist` / `./gradlew installLocal` (require the `ksVersion` project property and a populated `packaging/` dir)
 - Tests (Kotest on JUnit Platform): `./gradlew test`
+- Never start a test name with `!`: Kotest treats a leading `!` as "disabled" and silently skips the test. Quote the operator instead: `test("'!in' check")`.
 - Publish to GitHub Packages: `./gradlew publish` (needs `GITHUB_ACTOR` / `GITHUB_TOKEN`) — **don't run without asking.**
 
 ## Notes

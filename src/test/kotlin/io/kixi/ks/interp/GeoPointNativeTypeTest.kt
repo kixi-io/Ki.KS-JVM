@@ -439,7 +439,7 @@ class GeoPointNativeTypeTest : FunSpec({
             """.trimIndent()) shouldBe "false"
         }
 
-        test("!is GeoPoint") {
+        test("'!is' GeoPoint") {
             run("""
                 say "hello" !is GeoPoint
             """.trimIndent()) shouldBe "true"

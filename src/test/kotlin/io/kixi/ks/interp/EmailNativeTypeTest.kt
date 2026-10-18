@@ -342,7 +342,7 @@ class EmailNativeTypeTest : FunSpec({
             """.trimIndent()) shouldBe "false"
         }
 
-        test("!is Email") {
+        test("'!is' Email") {
             run("""
                 say 42 !is Email
             """.trimIndent()) shouldBe "true"
