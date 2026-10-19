@@ -1073,7 +1073,16 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 }
             }
             null -> throw NullPointerError("Cannot index into nil", expr.location)
-            else -> throw TypeError("Cannot index into ${obj::class.simpleName}", expr.location)
+            else -> {
+                // As in Kotlin, obj[index] is obj.get(index): a host object with a public
+                // one-argument get method (an operator get) can be indexed (hostLang only).
+                val getters = if (!interp.runtime.hostLang) emptyList() else obj.javaClass.methods.filter {
+                    it.name == "get" && it.parameterCount == 1 && Modifier.isPublic(it.modifiers) &&
+                            !Modifier.isStatic(it.modifiers) && !it.isSynthetic && !it.isBridge
+                }
+                if (getters.isEmpty()) throw TypeError("Cannot index into ${obj::class.simpleName}", expr.location)
+                buildJavaCallable(obj, getters, "get", obj::class.simpleName ?: "object").call(interp, listOf(index), expr.location)
+            }
         }
     }
 

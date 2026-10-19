@@ -674,16 +674,23 @@ data class MatchesExpr(
 ) : Expr
 
 /**
- * DSL block: `lang KD { ... }`
+ * DSL block: `lang KD { ... }`, or `lang Name { ... }` for an embedded language.
  *
- * The body is parsed as KD tag structure by the parser's built-in KD mode.
- * Extensible to future DSLs by language name.
+ * For KD the body is parsed as KD tag structure by the parser's built-in KD
+ * mode. For any other language the block's text is kept unchanged in [text],
+ * with its KS interpolations in [interpolations], and is evaluated by the
+ * `io.kixi.lang.EmbeddedLanguage` of that name (Ki.Core).
  */
 data class LangBlockExpr(
     val language: String,
     val body: List<KDTagNode>,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    val text: io.kixi.ks.lexer.LangBody? = null,
+    val interpolations: List<LangInterpolation> = emptyList(),
 ) : Expr
+
+/** An interpolation in an embedded-language block: `$name`, `${expr}` or `$(expr)`, with its key (see [LangTextParser]). */
+data class LangInterpolation(val key: String, val expr: Expr, val location: SourceLocation)
 
 /**
  * Dot-Prefixed Enum Constant (DPEC): `.SUCCESS`, `.Shrub`

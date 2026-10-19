@@ -753,7 +753,38 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
                     root
                 }
             }
-            else -> throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
+            else -> evaluateEmbeddedLanguage(expr)
+        }
+    }
+
+    /**
+     * Evaluates `lang Name { ... }` for a language other than KD: the block's
+     * interpolations are evaluated here, in order, and the text and values are
+     * passed to the `io.kixi.lang.EmbeddedLanguage` called Name (Ki.Core), found
+     * by registration or through ServiceLoader. An
+     * `io.kixi.lang.EmbeddedLanguageException` is reported at its position in the
+     * block.
+     */
+    private fun evaluateEmbeddedLanguage(expr: LangBlockExpr): Any? {
+        val body = expr.text ?: throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
+        val language = io.kixi.lang.EmbeddedLanguages.find(expr.language)
+            ?: throw RuntimeError(
+                "No embedded language '${expr.language}' is available",
+                expr.location,
+                suggestion = io.kixi.lang.EmbeddedLanguages.names().let {
+                    if (it.isEmpty()) "Add a library that provides it (an io.kixi.lang.EmbeddedLanguage) to the classpath"
+                    else "Available: KD, " + it.joinToString()
+                },
+            )
+        val values = LinkedHashMap<String, Any?>()
+        for (interpolation in expr.interpolations) values[interpolation.key] = interp.evaluate(interpolation.expr)
+        try {
+            return language.evaluate(
+                io.kixi.lang.EmbeddedSource(body.text, body.location.line, body.location.column, body.location.file), values
+            )
+        } catch (e: io.kixi.lang.EmbeddedLanguageException) {
+            val at = if (e.offset >= 0) body.locationOf(e.offset) else expr.location
+            throw RuntimeError("${language.name}: ${e.reason}", at, e)
         }
     }
 

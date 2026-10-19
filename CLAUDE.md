@@ -16,6 +16,7 @@ This build includes `../Ki.Core-JVM` and `../Ki.KD-JVM` via `settings.gradle.kts
 
 ## Notes
 - `io.kixi.ks.interp.Interpreter` is the engine that LabNexus's `KS` facade drives.
+- `lang Name { ... }` for anything but KD is an embedded language (`io.kixi.lang.EmbeddedLanguage` in Ki.Core, e.g. RevDB's KQ): the lexer asks the language to `scan` its block (`Lexer.scanLangBody`), so never add KS-side rules for reading a block's text; `LangTextParser` only parses the interpolation expressions the scan reports. KS must not depend on any language's library.
 - `replJar` and `runtimeJar` overlap — both bundle the full runtime classpath; a merge candidate if you touch them.
 
 ## Working agreements

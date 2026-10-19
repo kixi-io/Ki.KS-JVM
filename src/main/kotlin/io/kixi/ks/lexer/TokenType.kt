@@ -163,6 +163,7 @@ enum class TokenType {
     LANG,                   // lang
 
     // --- Special ---
+    LANG_BODY,              // the raw text of `lang Name { ... }` for an embedded language (not KD); literal is a LangBody
     NEWLINE,                // significant newline (statement separator)
     EOF;                    // end of file
 

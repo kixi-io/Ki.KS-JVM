@@ -2225,6 +2225,10 @@ use io.kixi.kd.Tag as T, Annotation as Ann
 use SomeClass.staticFun
 ```
 
+### Indexing Host Objects
+
+As in Kotlin, `obj[index]` on a host (JVM) object calls its public `get(index)` method, choosing the overload that matches the index. So a RevDB `Row` is read as `row["name"]` or `row[0]`. This needs host interop (`hostLang`); in portable mode only KS's own types can be indexed.
+
 ---
 
 ## 29. Type Extensions (`extend`)
@@ -2324,7 +2328,7 @@ say
 
 ## 32. Lang Blocks (Embedded DSLs)
 
-The `lang` keyword switches the parser to an embedded DSL mode. Currently, KD (Ki Data) is the supported embedded language.
+The `lang` keyword switches the parser to an embedded DSL mode. KD (Ki Data) is built in; other languages, such as KQ, RevDB's query language, are provided by libraries (see [Other Embedded Languages](#other-embedded-languages)).
 
 ### KD Block
 
@@ -2382,6 +2386,33 @@ lang KD {
     user $name age=${age + 1}
 }
 ```
+
+### Other Embedded Languages
+
+Any other name after `lang` is an *embedded language*: a language provided by a library rather than by KS, such as KQ, RevDB's query language. KS does not read the block as KS. It keeps the text between the braces exactly as written and hands it to the language, together with the values of the block's interpolations:
+
+```
+let maxMw = 500Da
+let n = 10
+
+let q = lang KQ {
+    from c in compounds
+    where c.mw < $maxMw          // a value from KS
+    orderby c.mw desc
+    select c.name, c.mw.to(Da) as mass
+    limit ${n * 2}
+}
+
+for row in db.kq(q) {
+    say row["name"] + " " + row["mass"]
+}
+```
+
+- **Interpolations** are `$name`, `${expr}` and `$(expr)`, where the name and the expression are KS. KS evaluates each one and passes its value; the language decides what the value means. KQ binds each value as a query parameter, so a value is never pasted into the query text.
+- **The language reads its own text.** KS asks the language where the block ends and where its interpolations are, so the block's strings, comments and literals follow the language's rules: a brace or `$` inside a KQ string or comment is just text, and `$` before a digit is a currency literal (`$5`). A language without its own rules gets a generic scanner (`io.kixi.lang.EmbeddedText`).
+- **Errors** point at the line and column in your script. Errors in how the block's text is written (an unterminated string, a stray character) are reported when the script is loaded; other errors when the block runs, or, for KQ, when the query runs.
+- **The value** of the block is whatever the language returns. `lang KQ` returns a prepared query, which runs with `db.kq(q)`.
+- **Finding the language.** A library provides a language by implementing `io.kixi.lang.EmbeddedLanguage` (Ki.Core) and listing the class in `META-INF/services/io.kixi.lang.EmbeddedLanguage`; it is found when the library is on the classpath. A host can also add one with `EmbeddedLanguages.register(...)`. Names are matched without regard to case. An unknown name is an error that lists the languages available.
 
 ---
 

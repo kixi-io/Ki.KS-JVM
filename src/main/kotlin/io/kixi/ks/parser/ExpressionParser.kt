@@ -1404,16 +1404,23 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     /**
-     * Parse `lang KD { ... }` DSL block.
+     * Parse a `lang Name { ... }` block.
      *
-     * The language name is an identifier. The block is delegated to the
-     * appropriate DSL parser (currently only KD is supported).
+     * `lang KD` is parsed as KD tag structure. For any other name the lexer has
+     * captured the text between the braces as one LANG_BODY token; the text is
+     * kept unchanged for the embedded language, and only its interpolations are
+     * parsed as KS ([LangTextParser]).
      */
     private fun parseLangBlock(): LangBlockExpr {
         val loc = p.advance().location // consume LANG
         val language = p.expectIdentifier("Expected language name after 'lang'")
-        val body = p.kd.parseKDBlock()
-        return LangBlockExpr(language, body, loc)
+        if (language.equals("KD", ignoreCase = true)) {
+            val body = p.kd.parseKDBlock()
+            return LangBlockExpr(language, body, loc)
+        }
+        val token = p.expect(LANG_BODY, "Expected '{' to start the $language block")
+        val text = token.literal as io.kixi.ks.lexer.LangBody
+        return LangBlockExpr(language, emptyList(), loc, text, LangTextParser.interpolations(text))
     }
 
     // ====================================================================

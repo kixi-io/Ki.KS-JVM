@@ -1384,7 +1384,43 @@ class Lexer(private val source: String) {
             }
         } else {
             addToken(TokenType.IDENTIFIER)
+            if (tokens.size >= 2 && tokens[tokens.size - 2].type == TokenType.LANG && !text.equals("KD", ignoreCase = true)) {
+                scanLangBody(text)
+            }
         }
+    }
+
+    /**
+     * After `lang Name` for an embedded language other than KD, captures the
+     * block's text unchanged as one [TokenType.LANG_BODY] token. The language
+     * itself says where the block ends and where its interpolations are
+     * ([io.kixi.lang.EmbeddedLanguage.scan]), so its strings, comments and
+     * literals are read by its own rules; a language that is not available yet
+     * is scanned by the generic [io.kixi.lang.EmbeddedText] (it fails later, when
+     * evaluated). If no `{` follows the name, nothing is captured and the parser
+     * reports the missing brace.
+     */
+    private fun scanLangBody(name: String) {
+        var j = current
+        while (j < source.length && (source[j] == ' ' || source[j] == '\t' || source[j] == '\r' || source[j] == '\n')) j++
+        if (j >= source.length || source[j] != '{') return
+        while (current <= j) { if (advance() == '\n') { line++; column = 1 } }   // whitespace and the opening brace
+        start = current; startLine = line; startColumn = column
+        val language = io.kixi.lang.EmbeddedLanguages.find(name)
+        val block = try {
+            language?.scan(source, current) ?: io.kixi.lang.EmbeddedText.scan(source, current)
+        } catch (e: io.kixi.lang.EmbeddedLanguageException) {
+            val at = if (e.offset in 0..source.length) e.offset else start
+            val prefix = source.substring(0, at)
+            throw LexerException("$name: ${e.reason}", SourceLocation(line = prefix.count { it == '\n' } + 1, column = at - prefix.lastIndexOf('\n'), offset = at))
+        }
+        val text = source.substring(start, block.end)
+        val location = SourceLocation(line = startLine, column = startColumn, offset = start)
+        val interpolations = block.interpolations.map {
+            it.copy(start = it.start - start, end = it.end - start, expressionStart = it.expressionStart - start)
+        }
+        tokens.add(Token(TokenType.LANG_BODY, text, LangBody(text, location, interpolations), location))
+        while (current <= block.end) { if (advance() == '\n') { line++; column = 1 } }   // the text and the closing brace
     }
 
     /**
