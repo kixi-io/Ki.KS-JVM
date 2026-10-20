@@ -1022,6 +1022,33 @@ class ParserTest : FunSpec({
             expr.finallyBlock.shouldNotBeNull()
         }
 
+        test("catch without parentheses: catch e, catch e: Type, catch *") {
+            val untyped = parseExpr("try { foo() } catch e { bar() }") as TryExpr
+            untyped.catches[0].name shouldBe "e"
+            untyped.catches[0].type.shouldBeNull()
+            val typed = parseExpr("try { foo() } catch e: IOException { bar() } catch (f: Exception) { baz() }") as TryExpr
+            typed.catches shouldHaveSize 2
+            typed.catches[0].name shouldBe "e"
+            typed.catches[0].type?.name shouldBe "IOException"
+            typed.catches[1].name shouldBe "f"
+            val all = parseExpr("try { foo() } catch * { fallback() } finally { cleanup() }") as TryExpr
+            all.catches[0].isCatchAll shouldBe true
+            all.finallyBlock.shouldNotBeNull()
+            // A multi-line layout works without parentheses too.
+            val multiline = parseExpr("""
+                try {
+                    risky()
+                } catch e: IOException {
+                    handleIO()
+                } catch *
+                {
+                    handleRest()
+                }
+            """.trimIndent()) as TryExpr
+            multiline.catches shouldHaveSize 2
+            multiline.catches[1].isCatchAll shouldBe true
+        }
+
         test("multiple catch clauses") {
             val expr = parseExpr("""
                 try {

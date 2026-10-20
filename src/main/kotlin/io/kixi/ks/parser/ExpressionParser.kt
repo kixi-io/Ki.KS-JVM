@@ -1354,6 +1354,9 @@ class ExpressionParser(internal val p: Parser) {
      *     try { body } catch(e: Type) { handler } finally { cleanup }
      *     try { body } catch(e) { handler }
      *     try { body } catch(*) { handler }           // catch-all wildcard
+     *     try { body } catch e { handler }            // the parentheses are optional
+     *     try { body } catch e: Type { handler }
+     *     try { body } catch * { handler }
      *
      * The try body and catch/finally bodies are always blocks.
      * Multiple catch clauses are supported.
@@ -1368,19 +1371,21 @@ class ExpressionParser(internal val p: Parser) {
 
         while (p.check(CATCH)) {
             val catchLoc = p.advance().location // consume CATCH
-            p.expect(LPAREN, "Expected '(' after 'catch'")
+            // The parentheses around the clause are optional (2026-10-20): catch (e) and catch e,
+            // catch (e: Type) and catch e: Type, catch (*) and catch * all parse the same.
+            val parenthesized = p.match(LPAREN)
 
             if (p.match(STAR)) {
-                // catch(*) — wildcard catch-all
-                p.expect(RPAREN, "Expected ')' after '*' in catch")
+                // catch(*) or catch * — wildcard catch-all
+                if (parenthesized) p.expect(RPAREN, "Expected ')' after '*' in catch")
                 p.skipNewlines()
                 val catchBody = p.parseBlock()
                 catches.add(CatchClause(null, null, isCatchAll = true, catchBody, catchLoc))
             } else {
-                // catch(name) or catch(name: Type)
-                val name = p.expectIdentifier("Expected exception variable name")
+                // catch(name), catch(name: Type), or the same without parentheses
+                val name = p.expectIdentifier("Expected an exception variable name or '*' after 'catch'")
                 val type = if (p.match(COLON)) p.types.parseTypeRef() else null
-                p.expect(RPAREN, "Expected ')' in catch clause")
+                if (parenthesized) p.expect(RPAREN, "Expected ')' in catch clause")
                 p.skipNewlines()
                 val catchBody = p.parseBlock()
                 catches.add(CatchClause(name, type, isCatchAll = false, catchBody, catchLoc))
