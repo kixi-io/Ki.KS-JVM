@@ -4,8 +4,6 @@ import io.kixi.ks.SourceLocation
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
 
 /**
  * KS Language Lexer
@@ -824,33 +822,23 @@ class Lexer(private val source: String) {
                 }
             }
 
-            // Check for timezone: -Z, -UTC, +offset, -offset
+            // A zone directly after the time, scanned as KD scans it: the sign and
+            // then the run of letters, digits, '/', ':' and '_'. That covers -Z,
+            // -UTC, -GMT, +9, -5:30 and KiTZ zones such as -JP/JST or -US/PST.
+            // (`t - x` with a space is subtraction, as in KD.)
             if (peek() == '-' || peek() == '+') {
                 hasTimezone = true
                 advance()
-                if (previous() == '-' && (peek() == 'Z' || peek() == 'U')) {
-                    if (peek() == 'Z') {
-                        advance()
-                    } else {
-                        // -UTC
-                        if (peekWord() == "UTC") {
-                            advance(); advance(); advance()
-                        }
-                    }
-                } else {
-                    // Numeric offset: +9, -5, +5:30
-                    consumeDigits()
-                    if (peek() == ':') {
-                        advance()
-                        consumeDigits()
-                    }
+                while (!isAtEnd()) {
+                    val c = peek()
+                    if (c.isLetterOrDigit() || c == '/' || c == ':' || c == '_') advance() else break
                 }
             }
         }
 
         val text = currentText()
 
-        // Parse into the appropriate java.time type, falling back to string
+        // Parse into the type KD gives the same literal, falling back to string
         val parsedValue: Any = when {
             hasTimezone -> tryParseZonedDateTime(text) ?: text
             hasTime -> tryParseLocalDateTime(text) ?: text
@@ -888,25 +876,21 @@ class Lexer(private val source: String) {
     }
 
     /**
-     * Parses a KD zoned datetime literal (y/M/d@H:mm:ss-Z, y/M/d@H:mm:ss+5, etc.)
-     * into an [OffsetDateTime]. Returns null if parsing fails.
+     * Parses a KD zoned date-time literal into the value KD gives it (one rule for
+     * both languages): a [io.kixi.KiTZDateTime] for a KiTZ zone (`-JP/JST`, `-US/PST`)
+     * and for `-Z`, `-UTC` and `-GMT`, a [java.time.ZonedDateTime] for a numeric
+     * offset (`+9`, `-5:30`). Both parsers are Ki.Core's. Returns null if parsing fails.
      */
-    private fun tryParseZonedDateTime(text: String): OffsetDateTime? {
+    private fun tryParseZonedDateTime(text: String): Any? {
         return try {
-            val atIdx = text.indexOf('@')
-            if (atIdx < 0) return null
-            val date = tryParseLocalDate(text.substring(0, atIdx)) ?: return null
-            val afterAt = text.substring(atIdx + 1)
-
-            // Find timezone separator: last + or - in the time part
-            val tzIdx = findTzSeparator(afterAt)
-            if (tzIdx < 0) return null
-
-            val timeStr = afterAt.substring(0, tzIdx)
-            val tzStr = afterAt.substring(tzIdx)
-            val time = parseTimePart(timeStr)
-            val offset = parseTzOffset(tzStr)
-            OffsetDateTime.of(date, time, offset)
+            val afterAt = text.substringAfterLast('@')
+            val zone = when {
+                afterAt.contains('-') -> afterAt.substringAfter('-')
+                afterAt.contains('+') -> afterAt.substringAfter('+')
+                else -> return null
+            }
+            val isKiTZ = zone.matches(Regex("[A-Z]{2}/[A-Z]+")) || zone == "Z" || zone == "UTC" || zone == "GMT"
+            if (isKiTZ) io.kixi.KiTZDateTime.parse(text) else io.kixi.Ki.parseZonedDateTime(text)
         } catch (e: Exception) { null }
     }
 
@@ -925,41 +909,6 @@ class Lexer(private val source: String) {
             }
         }
         return LocalTime.of(hour, minute, second, nano)
-    }
-
-    /** Finds the start of the timezone separator (+/-) after the time digits. */
-    private fun findTzSeparator(afterAt: String): Int {
-        // Walk backwards from the end to find the timezone separator
-        // Timezone patterns: -Z, -UTC, +N, -N, +N:NN, -N:NN
-        for (i in afterAt.indices.reversed()) {
-            if ((afterAt[i] == '+' || afterAt[i] == '-') && i > 0) {
-                // Make sure this isn't inside the time part (i.e., after last ':')
-                val beforeSign = afterAt.substring(0, i)
-                if (beforeSign.last().isDigit()) return i
-            }
-        }
-        return -1
-    }
-
-    /** Parses a timezone offset: -Z, -UTC, +5, -5:30, etc. */
-    private fun parseTzOffset(tzStr: String): ZoneOffset {
-        val stripped = tzStr.removePrefix("+").removePrefix("-")
-        val negative = tzStr.startsWith("-")
-
-        return when {
-            stripped == "Z" || stripped == "UTC" -> ZoneOffset.UTC
-            ':' in stripped -> {
-                val parts = stripped.split(':')
-                val hours = parts[0].toInt()
-                val minutes = parts[1].toInt()
-                val totalSeconds = (hours * 3600 + minutes * 60) * (if (negative) -1 else 1)
-                ZoneOffset.ofTotalSeconds(totalSeconds)
-            }
-            else -> {
-                val hours = stripped.toInt()
-                ZoneOffset.ofHours(if (negative) -hours else hours)
-            }
-        }
     }
 
     // ========================================================================

@@ -1281,4 +1281,45 @@ class LexerTest : FunSpec({
             typeList.contains(TokenType.ELVIS) shouldBe true
         }
     }
+
+    // ====================================================================
+    // Date-times with zones: the same literal is the same value as in KD
+    // ====================================================================
+
+    context("Zoned date-time literals") {
+        fun literal(src: String): Any? = tokens(src).single().literal
+
+        test("a KiTZ zone (country/zone), -Z, -UTC and -GMT give a KiTZDateTime, as KD does") {
+            val jst = literal("2026/10/1@9:00:00-JP/JST")
+            jst shouldBe io.kixi.KiTZDateTime.parse("2026/10/1@9:00:00-JP/JST")
+            literal("2026/10/1@0:00:00-US/PST") shouldBe io.kixi.KiTZDateTime.parse("2026/10/1@0:00:00-US/PST")
+            literal("2026/10/1@0:00:00-Z") shouldBe io.kixi.KiTZDateTime.parse("2026/10/1@0:00:00-Z")
+            literal("2026/10/1@0:00:00-UTC") shouldBe io.kixi.KiTZDateTime.parse("2026/10/1@0:00:00-UTC")
+            literal("2026/10/1@0:00:00-GMT") shouldBe io.kixi.KiTZDateTime.parse("2026/10/1@0:00:00-GMT")
+            // The value is exactly KD's: the same text reads to an equal value there.
+            io.kixi.kd.KD.read("t v=2026/10/1@9:00:00-JP/JST")["v"] shouldBe jst
+        }
+
+        test("a numeric offset gives a ZonedDateTime, as KD does") {
+            literal("2026/10/1@0:00:00+9") shouldBe io.kixi.Ki.parseZonedDateTime("2026/10/1@0:00:00+9")
+            literal("2026/10/1@0:00:00-5:30") shouldBe io.kixi.Ki.parseZonedDateTime("2026/10/1@0:00:00-5:30")
+            literal("2026/10/1@10:32:05.250+5:30") shouldBe io.kixi.Ki.parseZonedDateTime("2026/10/1@10:32:05.250+5:30")
+            io.kixi.kd.KD.read("t v=2026/10/1@0:00:00+9")["v"] shouldBe literal("2026/10/1@0:00:00+9")
+        }
+
+        test("the zone ends where KD's does: before a range, a comma, a bracket or a space") {
+            val range = tokens("2026/9/1@0:00:00-Z..2026/9/30@0:00:00-JP/JST")
+            range.map { it.type } shouldBe listOf(TokenType.STRING_LITERAL, TokenType.DOT_DOT, TokenType.STRING_LITERAL)
+            range[2].literal shouldBe io.kixi.KiTZDateTime.parse("2026/9/30@0:00:00-JP/JST")
+            tokens("[2026/9/1@0:00:00-US/PST, 2026/9/2@0:00:00+9]").map { it.type } shouldBe
+                listOf(TokenType.LBRACKET, TokenType.STRING_LITERAL, TokenType.COMMA, TokenType.STRING_LITERAL, TokenType.RBRACKET)
+            // With a space the minus is subtraction, as in KD.
+            tokens("2026/9/1@0:00:00 - x").map { it.type } shouldBe listOf(TokenType.STRING_LITERAL, TokenType.MINUS, TokenType.IDENTIFIER)
+        }
+
+        test("a date-time without a zone is still a LocalDateTime, a date a LocalDate") {
+            literal("2026/10/1@10:32") shouldBe java.time.LocalDateTime.of(2026, 10, 1, 10, 32)
+            literal("2026/10/1") shouldBe java.time.LocalDate.of(2026, 10, 1)
+        }
+    }
 })

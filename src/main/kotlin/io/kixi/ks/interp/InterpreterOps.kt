@@ -468,6 +468,9 @@ class InterpreterOps(internal val interp: Interpreter) {
             is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
             is LocalDateTime -> stringifyLocalDateTime(value)
             is OffsetDateTime -> stringifyOffsetDateTime(value)
+            // Zoned date-times are KD's types (the lexer reads them with Ki.Core); print them as KD writes them.
+            is io.kixi.KiTZDateTime -> io.kixi.Ki.format(value)
+            is java.time.ZonedDateTime -> io.kixi.Ki.format(value)
 
             // ============================================================================
             // 8. UPDATE stringify() for new types
