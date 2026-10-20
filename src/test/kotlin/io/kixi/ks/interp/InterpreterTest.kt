@@ -1671,6 +1671,80 @@ class InterpreterTest : FunSpec({
                 }
             """.trimIndent()) shouldBe "caught\ndone"
         }
+
+        test("e is the error object: message, location and suggestion, printed as its message") {
+            run("""
+                try { throw "oops" } catch e {
+                    say e
+                    say e.message
+                    say e.location != nil
+                    say e.type
+                    say e is RuntimeError
+                }
+            """.trimIndent()) shouldBe "[1:7] oops\n[1:7] oops\ntrue\nRuntimeError\ntrue"
+            run("""
+                try { 1 / 0 } catch e { say e.suggestion }
+            """.trimIndent()) shouldBe "Check that the divisor is not zero before dividing"
+        }
+
+        test("typed catch clauses take only their type, in order; the rest propagates") {
+            val src = """
+                class ValidationError(let field: String, let reason: String) {
+                    fun describe() = "${'$'}field: ${'$'}reason"
+                }
+                fun check(n) {
+                    if n == 1 { 1 / 0 }
+                    if n == 2 { throw "plain" }
+                    if n == 3 { throw ValidationError("age", "must be positive") }
+                    if n == 4 { throw 42 }
+                    return "fine"
+                }
+                for n in 0..4 {
+                    try {
+                        say check(n)
+                    } catch e: DivisionByZeroError {
+                        say "division"
+                    } catch e: ValidationError {
+                        say "validation " + e.describe()
+                    } catch e: RuntimeError {
+                        say "runtime " + e.message
+                    } catch * {
+                        say "other"
+                    }
+                }
+            """.trimIndent()
+            run(src) shouldBe "fine\ndivision\nruntime [6:17] plain\nvalidation age: must be positive\nother"
+        }
+
+        test("a thrown value is what catch binds; a thrown error is rethrown as itself") {
+            run("""
+                try { throw 42 } catch e: Int { say e + 1 }
+                try { throw [1, 2] } catch e: List { say e.size }
+                try {
+                    try { 1 / 0 } catch e { throw e }
+                } catch e: DivisionByZeroError {
+                    say "same error"
+                }
+            """.trimIndent()) shouldBe "43\n2\nsame error"
+        }
+
+        test("an unmatched typed catch lets the error through, after finally") {
+            run("""
+                try {
+                    try { throw "x" } catch e: DivisionByZeroError { say "no" } finally { say "finally" }
+                } catch e {
+                    say "outer " + e.message
+                }
+            """.trimIndent()) shouldBe "finally\nouter [2:11] x"
+        }
+
+        test("catch without parentheses runs like the parenthesized form") {
+            run("""
+                try { throw "a" } catch e { say "1 " + e.message }
+                try { throw "b" } catch * { say "2" }
+                try { 1 / 0 } catch e: DivisionByZeroError { say "3" } finally { say "4" }
+            """.trimIndent()) shouldBe "1 [1:7] a\n2\n3\n4"
+        }
     }
 
     // ====================================================================

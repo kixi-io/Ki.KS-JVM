@@ -1203,8 +1203,12 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     private fun evaluateThrow(stmt: ThrowStmt): Nothing {
-        val value = evaluate(stmt.expression)
-        throw RuntimeError(ops.stringify(value), stmt.location)
+        when (val value = evaluate(stmt.expression)) {
+            is RuntimeError -> throw value                                   // rethrow (catch e { throw e })
+            is Throwable -> throw RuntimeError(value.message ?: value.javaClass.simpleName, stmt.location, value)
+            is String -> throw RuntimeError(value, stmt.location)
+            else -> throw ThrownValue(value, ops.stringify(value), stmt.location)
+        }
     }
 
     // ========================================================================
@@ -1290,25 +1294,32 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
+    /**
+     * `try { } catch e: Type { } catch * { } finally { }`. The error object is
+     * what `catch e` binds: the thrown value for `throw MyError(...)`, else the
+     * error itself (a [RuntimeError]; `e.message`, `e.location`, `e.suggestion`,
+     * `e.cause` through the host members). A typed clause takes the error when
+     * [catchMatches] says so; clauses are tried in order; an unmatched error
+     * propagates after `finally`.
+     */
     private fun evaluateTry(expr: TryExpr): Any? {
         return try {
             evaluateBlock(expr.body)
         } catch (e: RuntimeError) {
             for (catch in expr.catches) {
-                if (catch.isCatchAll || catchMatches(e, catch)) {
-                    val catchEnv = environment.child("catch")
-                    val previousEnv = environment
+                val bound = catchMatches(e, catch) ?: continue
+                val catchEnv = environment.child("catch")
+                val previousEnv = environment
 
-                    if (catch.name != null) {
-                        catchEnv.define(catch.name, e.message, mutable = false)
-                    }
+                if (catch.name != null) {
+                    catchEnv.define(catch.name, bound, mutable = false)
+                }
 
-                    environment = catchEnv
-                    try {
-                        return evaluateBlock(catch.body)
-                    } finally {
-                        environment = previousEnv
-                    }
+                environment = catchEnv
+                try {
+                    return evaluateBlock(catch.body)
+                } finally {
+                    environment = previousEnv
                 }
             }
             throw e
@@ -1317,9 +1328,26 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         }
     }
 
-    private fun catchMatches(error: RuntimeError, catch: CatchClause): Boolean {
-        // For now, all catches match. Type-based matching requires more infrastructure.
-        return true
+    /**
+     * The value a [catch] clause binds for [error], or null when the clause does
+     * not take it. Untyped and catch-all clauses take everything and bind the
+     * error object ([ThrownValue.value] for a thrown value). A typed clause
+     * matches a thrown value with the usual type check (`catch e: MyError`), and
+     * an error by its class: the error's own class or a superclass, by simple or
+     * qualified name (`DivisionByZeroError`, `RuntimeError`, `Exception`), or a
+     * cause in its chain (`catch e: NumberFormatException` for a host call that
+     * failed), which is then the bound value.
+     */
+    private fun catchMatches(error: RuntimeError, catch: CatchClause): Any? {
+        val payload: Any? = if (error is ThrownValue) error.value else error
+        val type = catch.type ?: return payload
+        if (error is ThrownValue) return if (ops.checkType(payload, type)) payload else null
+        var t: Throwable? = error
+        while (t != null) {
+            if (ops.throwableIs(t, type.name)) return t
+            t = t.cause
+        }
+        return null
     }
 
     internal fun evaluateBlock(block: BlockExpr): Any? {

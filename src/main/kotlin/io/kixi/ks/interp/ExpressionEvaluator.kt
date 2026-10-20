@@ -652,6 +652,17 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 is KiTag -> interp.nativeTypes.getTagMember(obj, member, location)
                 is Call -> interp.nativeTypes.getCallMember(obj, member, location)
 
+                // The error object a catch binds (RuntimeError, or a host exception
+                // reached through a typed catch): its parts, in every hostLang mode.
+                is Throwable -> when (member) {
+                    "message" -> obj.message ?: obj.javaClass.simpleName
+                    "location" -> (obj as? RuntimeError)?.location
+                    "suggestion" -> (obj as? io.kixi.KiError)?.suggestion
+                    "cause" -> obj.cause
+                    "type" -> obj.javaClass.simpleName
+                    else -> CuratedNotFound
+                }
+
                 // Host objects that opt in (see KSMembers): members the
                 // object itself chooses to expose, resolved without
                 // reflection and therefore in every hostLang mode. A

@@ -811,4 +811,17 @@ class ReflectionBackstopTest : FunSpec({
             """.trimIndent()) shouldBe "4"
         }
     }
+
+    context("Errors from host calls") {
+        test("a host exception matches by its own class or a cause in the chain") {
+            run("""
+                use java.lang.Integer
+                try { Integer.parseInt("abc") } catch e: NumberFormatException { say "nfe " + e.message }
+                let fallback = try { Integer.parseInt("abc") } catch e: Exception { -1 }
+                say fallback
+                try { Integer.parseInt("abc") } catch e { say e.type + " / " + e.cause.type }
+            """.trimIndent()) shouldBe "nfe For input string: \"abc\"\n-1\nRuntimeError / NumberFormatException"
+        }
+
+    }
 })

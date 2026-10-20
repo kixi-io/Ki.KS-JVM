@@ -70,6 +70,18 @@ open class RuntimeError(
     cause
 )
 
+/**
+ * A value thrown by a script: `throw MyError("x")`, `throw 42`. The [value] is
+ * what a `catch` binds and what a typed clause checks (`catch e: MyError`); a
+ * thrown String is a plain [RuntimeError] with that message instead, and a
+ * thrown Throwable is rethrown as itself.
+ */
+class ThrownValue(
+    val value: Any?,
+    text: String,
+    location: SourceLocation? = null
+) : RuntimeError(text, location)
+
 // ============================================================================
 // Type Errors
 // ============================================================================

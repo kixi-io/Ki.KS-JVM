@@ -468,6 +468,9 @@ class InterpreterOps(internal val interp: Interpreter) {
             is LocalDate -> "${value.year}/${value.monthValue}/${value.dayOfMonth}"
             is LocalDateTime -> stringifyLocalDateTime(value)
             is OffsetDateTime -> stringifyOffsetDateTime(value)
+            // An error prints as its message (a RuntimeError's carries the location), not as "class: message".
+            is io.kixi.ks.ThrownValue -> stringify(value.value)
+            is Throwable -> value.message ?: value.javaClass.simpleName
             // Zoned date-times are KD's types (the lexer reads them with Ki.Core); print them as KD writes them.
             is io.kixi.KiTZDateTime -> io.kixi.Ki.format(value)
             is java.time.ZonedDateTime -> io.kixi.Ki.format(value)
@@ -983,6 +986,7 @@ class InterpreterOps(internal val interp: Interpreter) {
             else -> {
                 // Check user-defined types
                 when (value) {
+                    is Throwable -> throwableIs(value, type.name)
                     is KSObject -> {
                         // Direct class name match or subclass
                         if (value.klass.name == type.name) return true
@@ -1005,6 +1009,16 @@ class InterpreterOps(internal val interp: Interpreter) {
                 }
             }
         }
+    }
+
+    /** True when [t]'s class or a superclass has the simple or qualified name [typeName] (`RuntimeError`, `java.lang.Exception`). */
+    internal fun throwableIs(t: Throwable, typeName: String): Boolean {
+        var c: Class<*>? = t.javaClass
+        while (c != null) {
+            if (c.simpleName == typeName || c.name == typeName) return true
+            c = c.superclass
+        }
+        return false
     }
 
     internal fun castTo(value: Any?, type: TypeRef, location: SourceLocation?): Any? {
