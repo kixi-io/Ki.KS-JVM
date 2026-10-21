@@ -2328,9 +2328,11 @@ say
 
 ## 32. Lang Blocks (Embedded DSLs)
 
-The `lang` keyword switches the parser to an embedded DSL mode. KD (Ki Data) is built in; other languages, such as KQ, RevDB's query language, are provided by libraries (see [Other Embedded Languages](#other-embedded-languages)).
+The `lang` keyword embeds another language's text in a script. KD (Ki Data) is always available, since KS depends on Ki.KD; other languages, such as KQ, RevDB's query language, are provided by libraries (see [Other Embedded Languages](#other-embedded-languages)). Either way the block's text is read by its language, not by KS.
 
 ### KD Block
+
+A `lang KD` block is KD, read by Ki.KD exactly as a KD file is: its comments (`#`, `//`, `/* */`), literals, bare words and map keys follow KD's rules, not KS's. The block's value is its tag, or a tag named `root` holding several (as `KD.read` returns). KS values come in only through interpolations (below).
 
 ```
 let data = lang KD {
@@ -2374,18 +2376,36 @@ lang KD {
 }
 ```
 
+In KD a bare word is a string and a map key is a value, so neither needs quotes:
+
+```
+let fees = lang KD {
+    map1 [fee = 23, fi = 26, foe = 12, fum = 16]   // keys "fee", "fi", ...
+    status active                                  // the string "active"
+}
+```
+
 ### Interpolation in KD Blocks
 
-KD blocks support `$var` and `${expr}` interpolation:
+KS values come in with `$name`, `${expr}` or `$(expr)`:
 
 ```
 let name = "Kai"
 let age = 30
+let tags = ["a", "b"]
 
 lang KD {
-    user $name age=${age + 1}
+    user $name age=${age + 1} tags=$tags note="born $(2026 - age)"
 }
 ```
+
+- Where a value can stand (a tag's value, an attribute's value, a list or map element or key, an annotation's value, a grid cell, a range's bound as in `$lo..$hi`), the KS value is put in as it is: a list stays a list, a string stays one string, and nothing in it is read as KD. A `nil` value is KD's `nil`, except as a range's bound (use `_` for an open bound).
+- Inside a `"…"` or `"""…"""` string, the value's text is put in, as KS prints it; `\$` is a literal `$`. Inside a dot literal's parentheses (`.geo($lat, $lng)`, a type bag's `.ref($id)`) the text is put in too, since the literal is read from its text. Raw strings (`@"…"`, `` `…` ``), chars and comments are left as written.
+- Names cannot be interpolated: not a tag's name, not an attribute's (`$k=1` is an error). A line that starts with `$x` is an anonymous tag whose first value is `x`, as a line starting with a value is in KD.
+- An interpolation ends where its name or brackets end. `$a.b` is `$a` followed by `.b`, so write `${a.b}`; `${x}y` is two values. An expression needs brackets: in KD, `n=a + 1` is the string `"a"` followed by the value `1`, so write `n=${a + 1}`.
+- `$` before a digit is KD's currency prefix (`price=$5.25`), and `$` inside a word is part of the word (`active$x` is the string `"active$x"`), as in a KD file.
+- A bare word is never a KS variable: write `$x` to use one.
+- Strings are KD's too. A `"""…"""` string keeps its text as written (indentation and backslashes included) and drops only its first and last newline; KS's own `"""` strings resolve escapes and remove the indentation. Scripts from before KS read `lang KD` blocks with Ki.KD got the KS reading, so check their `"""` values.
 
 ### Other Embedded Languages
 

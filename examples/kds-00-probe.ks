@@ -99,6 +99,6 @@ if failures.isEmpty {
 } else {
     say.warn "" + failures.size + " check(s) failed."
     say "kds-01, kds-03 and kds-04 need only the first two checks."
-    say "kds-02 needs the lang KD checks (KDBlockParser trailing-lambda fix)."
+    say "kds-02 needs the lang KD checks (the lang KD trailing-lambda fix)."
     say "kds-05 needs the File overload checks (JVMMethodProxy overload fix)."
 }

@@ -3,14 +3,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #
 #  KS can build KD tag trees directly with an embedded lang KD block. The
-#  values inside the block are KS expressions, so you can interpolate
-#  variables, compute values, and use quantities. The result is a real
-#  io.kixi.kd.Tag, which KDSchema.validate accepts without re-parsing.
+#  block is KD, read by Ki.KD as a KD file is, and KS values come in with
+#  $name, ${expr} or $(expr), so you can interpolate variables, compute values
+#  and use quantities. The result is a real io.kixi.kd.Tag, which
+#  KDSchema.validate accepts without re-parsing.
 #
-#  Two things to remember inside lang KD blocks:
-#    * strings are quoted ("A1"), because a bare word is a KS identifier
-#    * the schema itself stays a KD string, since schema vocabulary such as
-#      occurs=1.._ and type=String is KD, not KS
+#  Inside a lang KD block a bare word is a KD string, so a KS variable is
+#  always written with $. The schema below could be a lang KD block too; it
+#  stays a KD string here to show KDS.compile reading text.
 
 use io.kixi.kd.schema.KDS
 
