@@ -118,7 +118,7 @@ enum class TokenType {
     AT,                     // @
     UNDERSCORE,             // _
     COLON_COLON,            // ::
-    DOLLAR,                 // $ (interpolation prefix in KD blocks: $var, ${expr})
+    DOLLAR,                 // $ not before a digit, outside a string or lang block (an error the parser explains)
 
     // --- Keywords: Declarations ---
     VAR,                    // var
@@ -164,7 +164,7 @@ enum class TokenType {
     LANG,                   // lang
 
     // --- Special ---
-    LANG_BODY,              // the raw text of `lang Name { ... }` for an embedded language (not KD); literal is a LangBody
+    LANG_BODY,              // the raw text of `lang Name { ... }` for an embedded language (KD included); literal is a LangBody
     NEWLINE,                // significant newline (statement separator)
     EOF;                    // end of file
 

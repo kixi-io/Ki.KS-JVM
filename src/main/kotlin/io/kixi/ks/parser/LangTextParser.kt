@@ -6,8 +6,8 @@ import io.kixi.ks.lexer.Token
 import io.kixi.ks.lexer.TokenType
 
 /**
- * Parses the interpolations of an embedded-language block (`lang Name { ... }`
- * for a language other than KD). The lexer has already asked the language where
+ * Parses the interpolations of an embedded-language block (`lang Name { ... }`,
+ * KD included). The lexer has already asked the language where
  * they are ([io.kixi.lang.EmbeddedLanguage.scan]); each one's expression is KS:
  * `$name` is the variable, `${expression}` and `$(expression)` the expression.
  *

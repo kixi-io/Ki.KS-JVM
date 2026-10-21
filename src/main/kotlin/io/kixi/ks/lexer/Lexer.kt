@@ -317,7 +317,7 @@ class Lexer(private val source: String) {
                 if (isDigit(peek())) {
                     scanCurrencyQuantity()
                 } else if (c == '$') {
-                    // $ not followed by a digit = interpolation reference (used in KD blocks)
+                    // $ not followed by a digit: interpolation, which only strings and lang blocks have (the parser says so)
                     addToken(TokenType.DOLLAR)
                 } else {
                     error("Currency symbol '${c}' must be followed by a digit (e.g., ${c}100)")
@@ -1417,15 +1417,15 @@ class Lexer(private val source: String) {
             }
         } else {
             addToken(TokenType.IDENTIFIER)
-            if (tokens.size >= 2 && tokens[tokens.size - 2].type == TokenType.LANG && !text.equals("KD", ignoreCase = true)) {
+            if (tokens.size >= 2 && tokens[tokens.size - 2].type == TokenType.LANG) {
                 scanLangBody(text)
             }
         }
     }
 
     /**
-     * After `lang Name` for an embedded language other than KD, captures the
-     * block's text unchanged as one [TokenType.LANG_BODY] token. The language
+     * After `lang Name`, captures the block's text unchanged as one
+     * [TokenType.LANG_BODY] token (KD's block too: Ki.KD's `KDLanguage` scans it). The language
      * itself says where the block ends and where its interpolations are
      * ([io.kixi.lang.EmbeddedLanguage.scan]), so its strings, comments and
      * literals are read by its own rules; a language that is not available yet
@@ -1439,7 +1439,7 @@ class Lexer(private val source: String) {
         if (j >= source.length || source[j] != '{') return
         while (current <= j) { if (advance() == '\n') { line++; column = 1 } }   // whitespace and the opening brace
         start = current; startLine = line; startColumn = column
-        val language = io.kixi.lang.EmbeddedLanguages.find(name)
+        val language = if (name.equals("KD", ignoreCase = true)) io.kixi.kd.KDLanguage else io.kixi.lang.EmbeddedLanguages.find(name)
         val block = try {
             language?.scan(source, current) ?: io.kixi.lang.EmbeddedText.scan(source, current)
         } catch (e: io.kixi.lang.EmbeddedLanguageException) {

@@ -5,6 +5,7 @@ import io.kixi.ks.parser.UseWildcard
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -1527,88 +1528,23 @@ class ParserTest : FunSpec({
     // ====================================================================
 
     context("Lang blocks") {
-        test("simple KD block") {
+        test("a KD block keeps its text for Ki.KD's KDLanguage, with its interpolations parsed as KS") {
             val expr = parseExpr("""
                 lang KD {
-                    book "The Hobbit"
-                }
-            """.trimIndent()) as LangBlockExpr
-            expr.language shouldBe "KD"
-            expr.body shouldHaveSize 1
-            expr.body[0].name shouldBe "book"
-            expr.body[0].values shouldHaveSize 1
-        }
-
-        test("KD tag with attributes") {
-            val expr = parseExpr("""
-                lang KD {
-                    book "The Hobbit" author="Tolkien" year=1937
-                }
-            """.trimIndent()) as LangBlockExpr
-            val tag = expr.body[0]
-            tag.attributes shouldHaveSize 2
-            tag.attributes[0].name shouldBe "author"
-            tag.attributes[1].name shouldBe "year"
-        }
-
-        test("KD tag with namespace") {
-            val expr = parseExpr("""
-                lang KD {
-                    config:db host="localhost" port=5432
-                }
-            """.trimIndent()) as LangBlockExpr
-            val tag = expr.body[0]
-            tag.namespace shouldBe "config"
-            tag.name shouldBe "db"
-        }
-
-        test("KD tag with children") {
-            val expr = parseExpr("""
-                lang KD {
-                    library {
-                        book "Book 1"
-                        book "Book 2"
+                    run plate=${'$'}id operator="${'$'}who" {
+                        read ${'$'}{signal - 1}
                     }
                 }
             """.trimIndent()) as LangBlockExpr
-            val parent = expr.body[0]
-            parent.name shouldBe "library"
-            parent.children shouldHaveSize 2
+            expr.language shouldBe "KD"
+            expr.text!!.text shouldContain "run plate=${'$'}id"
+            expr.interpolations.map { it.key } shouldBe listOf("id", "who", "signal - 1")
+            expr.interpolations[2].expr.shouldBeInstanceOf<BinaryExpr>()
         }
 
-        test("KD tag with annotation") {
-            val expr = parseExpr("""
-                lang KD {
-                    @Important
-                    task "Do something"
-                }
-            """.trimIndent()) as LangBlockExpr
-            val tag = expr.body[0]
-            tag.annotations shouldHaveSize 1
-            tag.annotations[0].name shouldBe "Important"
-        }
-
-        test("KD annotation with values and attributes") {
-            val expr = parseExpr("""
-                lang KD {
-                    @Test(true enabled=false)
-                    testCase "example"
-                }
-            """.trimIndent()) as LangBlockExpr
-            val annotation = expr.body[0].annotations[0]
-            annotation.values shouldHaveSize 1
-            annotation.attributes shouldHaveSize 1
-        }
-
-        test("multiple top-level KD tags") {
-            val expr = parseExpr("""
-                lang KD {
-                    tag1 "value1"
-                    tag2 "value2"
-                    tag3 "value3"
-                }
-            """.trimIndent()) as LangBlockExpr
-            expr.body shouldHaveSize 3
+        test("KD's own comments, raw strings and currency are not interpolations") {
+            val expr = parseExpr("lang KD {\n t a=@\"${'$'}x\" price=${'$'}5 # ${'$'}y\n}") as LangBlockExpr
+            expr.interpolations shouldHaveSize 0
         }
     }
 

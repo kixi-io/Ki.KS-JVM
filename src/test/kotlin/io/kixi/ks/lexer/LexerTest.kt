@@ -1014,7 +1014,9 @@ class LexerTest : FunSpec({
             typeList.contains(TokenType.LANG) shouldBe true
             val langIdx = typeList.indexOf(TokenType.LANG)
             toks[langIdx + 1].value shouldBe "KD"
-            typeList[langIdx + 2] shouldBe TokenType.LBRACE
+            // The block is one token, scanned by Ki.KD's KDLanguage as KD.
+            typeList[langIdx + 2] shouldBe TokenType.LANG_BODY
+            toks[langIdx + 2].value.trim() shouldBe "book \"The Hobbit\""
         }
     }
 

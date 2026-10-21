@@ -732,24 +732,8 @@ class ExpressionParser(internal val p: Parser) {
                 else IdentifierExpr(t.value, t.location)
             }
 
-            // --- Interpolation reference: $var, ${expr}, or $(expr) (used in KD blocks) ---
-            DOLLAR -> {
-                p.advance() // consume $
-                if (p.match(LBRACE)) {
-                    // ${expr} form
-                    val expr = parseExpression()
-                    p.expect(RBRACE, "Expected '}' after interpolation expression")
-                    expr
-                } else if (p.match(LPAREN)) {
-                    // $(expr) form
-                    val expr = parseExpression()
-                    p.expect(RPAREN, "Expected ')' after interpolation expression")
-                    expr
-                } else {
-                    val name = p.expectIdentifier("Expected identifier after '\$'")
-                    IdentifierExpr(name, loc)
-                }
-            }
+            // --- `$x` outside a string or lang block: interpolation has nothing to put a value into ---
+            DOLLAR -> p.error("'\$' interpolates only inside a string or a lang block; here write the name or expression alone")
 
             // --- Parenthesized expression ---
             LPAREN -> {
@@ -1415,23 +1399,17 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     /**
-     * Parse a `lang Name { ... }` block.
-     *
-     * `lang KD` is parsed as KD tag structure. For any other name the lexer has
-     * captured the text between the braces as one LANG_BODY token; the text is
-     * kept unchanged for the embedded language, and only its interpolations are
+     * Parse a `lang Name { ... }` block. The lexer has captured the text between the
+     * braces as one LANG_BODY token, as the language scanned it (KD included); the
+     * text is kept unchanged for the language, and only its interpolations are
      * parsed as KS ([LangTextParser]).
      */
     private fun parseLangBlock(): LangBlockExpr {
         val loc = p.advance().location // consume LANG
         val language = p.expectIdentifier("Expected language name after 'lang'")
-        if (language.equals("KD", ignoreCase = true)) {
-            val body = p.kd.parseKDBlock()
-            return LangBlockExpr(language, body, loc)
-        }
         val token = p.expect(LANG_BODY, "Expected '{' to start the $language block")
         val text = token.literal as io.kixi.ks.lexer.LangBody
-        return LangBlockExpr(language, emptyList(), loc, text, LangTextParser.interpolations(text))
+        return LangBlockExpr(language, loc, text, LangTextParser.interpolations(text))
     }
 
     // ====================================================================

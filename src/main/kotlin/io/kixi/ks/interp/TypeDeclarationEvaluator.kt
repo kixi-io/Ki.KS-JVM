@@ -1,8 +1,6 @@
 package io.kixi.ks.interp
 
 import io.kixi.NSID
-import io.kixi.kd.Tag as KdTag
-import io.kixi.kd.Annotation as KdAnnotation
 import io.kixi.ks.*
 import io.kixi.ks.parser.*
 
@@ -729,45 +727,32 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // ========================================================================
 
     /**
-     * Evaluate a lang block expression.
-     *
-     * Currently only KD is supported:
+     * Evaluate a lang block expression. `lang KD` is read by Ki.KD's `KDLanguage`
+     * exactly as a KD file is, with the block's `$x`, `${expr}` and `$(expr)` values
+     * put in where they stand (and their text inside strings):
      *
      *     lang KD {
-     *         book "The Hobbit" author="Tolkien"
+     *         book "The Hobbit" author="Tolkien" readers=$n
      *         book "Dune" author="Herbert"
      *     }
      *
-     * Returns a Tag if there's a single root tag, or a root Tag named "root"
-     * wrapping multiple tags as children (matching KD.read() behavior).
+     * It returns a Tag if there's a single root tag, or a root Tag named "root"
+     * wrapping multiple tags as children (as KD.read() does).
      */
-    internal fun evaluateLangBlock(expr: LangBlockExpr): Any? {
-        return when (expr.language.uppercase()) {
-            "KD" -> {
-                val tags = expr.body.map { evaluateKDTag(it) }
-                if (tags.size == 1) tags[0]
-                else {
-                    // Multiple root tags → wrap in a "root" Tag (matches KD.read() behavior)
-                    val root = KdTag("root")
-                    root.children.addAll(tags)
-                    root
-                }
-            }
-            else -> evaluateEmbeddedLanguage(expr)
-        }
-    }
+    internal fun evaluateLangBlock(expr: LangBlockExpr): Any? = evaluateEmbeddedLanguage(expr)
 
     /**
-     * Evaluates `lang Name { ... }` for a language other than KD: the block's
-     * interpolations are evaluated here, in order, and the text and values are
-     * passed to the `io.kixi.lang.EmbeddedLanguage` called Name (Ki.Core), found
-     * by registration or through ServiceLoader. An
+     * Evaluates `lang Name { ... }`: the block's interpolations are evaluated here,
+     * in order, and the text and values are passed to the
+     * `io.kixi.lang.EmbeddedLanguage` called Name (Ki.Core): Ki.KD's `KDLanguage`
+     * for KD, any other found by registration or through ServiceLoader. An
      * `io.kixi.lang.EmbeddedLanguageException` is reported at its position in the
      * block.
      */
     private fun evaluateEmbeddedLanguage(expr: LangBlockExpr): Any? {
         val body = expr.text ?: throw RuntimeError("Unsupported DSL language: '${expr.language}'", expr.location)
-        val language = io.kixi.lang.EmbeddedLanguages.find(expr.language)
+        val kd = expr.language.equals("KD", ignoreCase = true)
+        val language = (if (kd) io.kixi.kd.KDLanguage else io.kixi.lang.EmbeddedLanguages.find(expr.language))
             ?: throw RuntimeError(
                 "No embedded language '${expr.language}' is available",
                 expr.location,
@@ -779,52 +764,14 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         val values = LinkedHashMap<String, Any?>()
         for (interpolation in expr.interpolations) values[interpolation.key] = interp.evaluate(interpolation.expr)
         try {
-            return language.evaluate(
-                io.kixi.lang.EmbeddedSource(body.text, body.location.line, body.location.column, body.location.file), values
-            )
+            val source = io.kixi.lang.EmbeddedSource(body.text, body.location.line, body.location.column, body.location.file)
+            // KD puts a value into a string as KS prints it ("Dr. $last").
+            return if (kd) io.kixi.kd.KDLanguage.evaluate(source, values) { ops.stringify(it) }
+            else language.evaluate(source, values)
         } catch (e: io.kixi.lang.EmbeddedLanguageException) {
             val at = if (e.offset >= 0) body.locationOf(e.offset) else expr.location
             throw RuntimeError("${language.name}: ${e.reason}", at, e)
         }
-    }
-
-    /**
-     * Evaluate a KD tag node into an io.kixi.kd.Tag runtime object.
-     */
-    internal fun evaluateKDTag(tag: KDTagNode): KdTag {
-        // Create the Tag with name and optional namespace
-        val kdTag = KdTag(tag.name, tag.namespace ?: "")
-
-        // Evaluate and add values
-        for (valueExpr in tag.values) {
-            kdTag.values.add(interp.evaluate(valueExpr))
-        }
-
-        // Evaluate and add attributes (using NSID keys)
-        for (attr in tag.attributes) {
-            val nsid = NSID(attr.name, attr.namespace ?: "")
-            kdTag.attributes[nsid] = interp.evaluate(attr.value)
-        }
-
-        // Evaluate and add annotations
-        for (ann in tag.annotations) {
-            val kdAnn = KdAnnotation(ann.name)
-            for (valueExpr in ann.values) {
-                kdAnn.values.add(interp.evaluate(valueExpr))
-            }
-            for (attr in ann.attributes) {
-                val nsid = NSID(attr.name, attr.namespace ?: "")
-                kdAnn.attributes[nsid] = interp.evaluate(attr.value)
-            }
-            kdTag.annotations.add(kdAnn)
-        }
-
-        // Recursively evaluate and add children
-        for (child in tag.children) {
-            kdTag.children.add(evaluateKDTag(child))
-        }
-
-        return kdTag
     }
 
     // ========================================================================

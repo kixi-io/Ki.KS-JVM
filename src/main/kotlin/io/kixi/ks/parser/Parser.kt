@@ -33,9 +33,6 @@ import io.kixi.ks.lexer.TokenType.*
  *     constraints (`> 25`, `1..100`, `in [...]`, `matches "..."`),
  *     function parameters, and constructor parameters.
  *
- *   - **KDBlockParser.kt**
- *     Parsing of `lang KD { ... }` DSL blocks into [KDTagNode] trees.
- *
  * Each sub-parser holds a reference back to this [Parser] for shared token utilities.
  * Visibility is `internal` so sub-parsers can access the token stream directly.
  *
@@ -69,7 +66,6 @@ class Parser(private val tokens: List<Token>) {
     internal val decl   = DeclarationParser(this)
     internal val stmt   = StatementParser(this)
     internal val types  = TypeParser(this)
-    internal val kd     = KDBlockParser(this)
 
     // ====================================================================
     // Public API
@@ -402,7 +398,7 @@ class Parser(private val tokens: List<Token>) {
         // Identifiers
         IDENTIFIER -> true
 
-        // Interpolation reference: $var (used in KD blocks)
+        // `$x` outside a string or lang block: parsed so the expression parser can say why it is wrong
         DOLLAR -> true
 
         // Prefix operators

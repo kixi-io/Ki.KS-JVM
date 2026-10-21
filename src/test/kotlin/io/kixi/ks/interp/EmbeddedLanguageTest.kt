@@ -108,8 +108,9 @@ class EmbeddedLanguageTest : FunSpec({
             (body.literal as LangBody).text shouldBe text
         }
 
-        test("lang KD is unchanged, and an unterminated block is a lexer error") {
-            Lexer("lang KD { run x=1 }").tokenize().none { it.type == TokenType.LANG_BODY } shouldBe true
+        test("lang KD is an embedded language too (Ki.KD scans it), and an unterminated block is a lexer error") {
+            Lexer("lang KD { run x=1 }").tokenize().single { it.type == TokenType.LANG_BODY }.value shouldBe " run x=1 "
+            shouldThrow<LexerException> { Lexer("lang KD { run x=1").tokenize() }.message shouldContain "KD: Unterminated KD block"
             val e = shouldThrow<LexerException> { Lexer("let a = 1\nlang Probe { from c in c").tokenize() }
             e.message shouldContain "Probe: Unterminated block"
             e.location!!.line shouldBe 2

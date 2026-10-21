@@ -676,16 +676,13 @@ data class MatchesExpr(
 ) : Expr
 
 /**
- * DSL block: `lang KD { ... }`, or `lang Name { ... }` for an embedded language.
- *
- * For KD the body is parsed as KD tag structure by the parser's built-in KD
- * mode. For any other language the block's text is kept unchanged in [text],
- * with its KS interpolations in [interpolations], and is evaluated by the
- * `io.kixi.lang.EmbeddedLanguage` of that name (Ki.Core).
+ * An embedded-language block, `lang Name { ... }`: the block's text kept unchanged
+ * in [text], with its KS interpolations in [interpolations], evaluated by the
+ * `io.kixi.lang.EmbeddedLanguage` of that name (Ki.Core). KD is one too: Ki.KD's
+ * `KDLanguage`, which reads the block as a KD file, with the interpolations' values.
  */
 data class LangBlockExpr(
     val language: String,
-    val body: List<KDTagNode>,
     override val location: SourceLocation,
     val text: io.kixi.ks.lexer.LangBody? = null,
     val interpolations: List<LangInterpolation> = emptyList(),
@@ -1049,48 +1046,3 @@ data class MatchesConstraint(
     val pattern: Expr,
     override val location: SourceLocation
 ) : Constraint
-
-// ============================================================================
-// 7. KD-Specific Nodes (for `lang` blocks)
-// ============================================================================
-//
-// When the parser encounters `lang KD { ... }`, it switches to KD parsing
-// mode. KD tags are parsed from the same token stream (the KS lexer already
-// tokenizes KD content correctly).
-//
-// KD tag structure:
-//   annotation(s)
-//   namespace:name value(s) attribute(s) { children }
-
-/**
- * A KD tag within a `lang KD { ... }` block.
- *
- *     book "The Hobbit" author="Tolkien" published=1937/9/21
- *     things { child1; child2 }
- *     @Personal favorite_books { ... }
- */
-data class KDTagNode(
-    val name: String,
-    val namespace: String?,
-    val values: List<Expr>,                 // positional values
-    val attributes: List<KDAttribute>,      // name=value pairs
-    val annotations: List<KDAnnotationNode>,
-    val children: List<KDTagNode>,
-    override val location: SourceLocation
-) : Node
-
-/** KD attribute: `author="Tolkien"`, `ns:key=value` */
-data class KDAttribute(
-    val name: String,
-    val namespace: String?,
-    val value: Expr,
-    val location: SourceLocation
-)
-
-/** KD annotation: `@Test`, `@Test(true log="output.txt")` */
-data class KDAnnotationNode(
-    val name: String,
-    val values: List<Expr>,
-    val attributes: List<KDAttribute>,
-    val location: SourceLocation
-)

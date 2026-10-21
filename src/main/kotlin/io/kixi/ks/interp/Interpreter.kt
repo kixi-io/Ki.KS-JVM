@@ -328,9 +328,6 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is LangBlockExpr -> typeDecls.evaluateLangBlock(node)
             is ReflectionExpr -> typeDecls.evaluateReflection(node)
 
-            // --- KD Nodes ---
-            is KDTagNode -> typeDecls.evaluateKDTag(node)
-
             is Program -> executeProgram(node)
         }
     }
