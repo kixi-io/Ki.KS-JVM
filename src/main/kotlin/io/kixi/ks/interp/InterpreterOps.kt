@@ -397,6 +397,8 @@ class InterpreterOps(internal val interp: Interpreter) {
             @Suppress("UNCHECKED_CAST")
             return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>)
         }
+        // Type bag values order by their type's sort key, as KQ and RevDB's indexes order them.
+        if (left !is Number || right !is Number) bagCompare(left, right)?.let { return it }
         return toDouble(left).compareTo(toDouble(right))
     }
 
@@ -783,7 +785,12 @@ class InterpreterOps(internal val interp: Interpreter) {
             is Regex -> KSType("Regex")
             is MatchResult -> KSType("MatchResult")
             is NativeTypeConstructor -> KSType("class ${value.typeName}")
-            else -> KSType(value::class.simpleName ?: "Unknown")
+            is BagMethod -> KSType("fun ${value.member.name}")
+            is BagFunctionCallable -> KSType("fun ${value.function.name}")
+            is BagObject -> KSType("bag ${value.bag.name}")
+            is io.kixi.types.ExtLiteral -> KSType("ExtLiteral")
+            // A type bag's value: its type's name ("DNA"), as `is` and typed declarations use it.
+            else -> io.kixi.types.TypeBags.typeFor(value)?.let { KSType(it.name) } ?: KSType(value::class.simpleName ?: "Unknown")
         }
     }
 
@@ -1005,7 +1012,10 @@ class InterpreterOps(internal val interp: Interpreter) {
                         false
                     }
                     is KSEnumConstant -> value.enum.name == type.name
-                    else -> false
+                    // A literal kept without its type bag (from KD or RevDB): `x is ExtLiteral`.
+                    is io.kixi.types.ExtLiteral -> type.name == "ExtLiteral"
+                    // A type bag's type (io.kixi.types): `x is DNA`, `let s: DNA`.
+                    else -> io.kixi.types.TypeBags.typeNamed(type.name)?.kotlinClass?.isInstance(value) == true
                 }
             }
         }
@@ -1080,7 +1090,13 @@ class InterpreterOps(internal val interp: Interpreter) {
                 val comp = value as? Comparable<Any> ?: return false
                 comp in range
             }
-            else -> false
+            // A type bag's value whose type has a one-argument `contains` (`motif in seq`).
+            null -> false
+            is io.kixi.types.ExtLiteral -> throw RuntimeError("in needs a container, not ${container.literal}, which was read without its type bag")
+            else -> {
+                val m = io.kixi.types.TypeBags.member(container, "contains")
+                if (m != null && m.arity?.contains(1) == true) bagContains(container, m, value) else false
+            }
         }
     }
 
@@ -1135,7 +1151,10 @@ class InterpreterOps(internal val interp: Interpreter) {
         is KSLambda -> "Function"
         is NativeCallable -> "Function"
         is NativeTypeConstructor -> "Type"
-        else -> null
+        is BagMethod, is BagFunctionCallable -> "Function"
+        is BagObject -> "bag ${value.bag.name}"
+        is io.kixi.types.ExtLiteral -> "ExtLiteral"
+        else -> io.kixi.types.TypeBags.typeFor(value)?.name     // a type bag's value: its type's name ("DNA")
     }
 
     /**
@@ -1679,7 +1698,9 @@ class InterpreterOps(internal val interp: Interpreter) {
                     @Suppress("UNCHECKED_CAST")
                     val mutable = list as MutableList<Any?>
                     try {
-                        @Suppress("UNCHECKED_CAST")
+                        // Type bag values are not Comparable; they order by their sort keys.
+                        if (mutable.any { it != null && io.kixi.types.TypeBags.typeFor(it) != null }) mutable.sortWith { a, b -> compare(a, b) }
+                        else @Suppress("UNCHECKED_CAST")
                         (mutable as MutableList<Comparable<Any>>).sort()
                     } catch (e: ClassCastException) {
                         throw RuntimeError(
@@ -1698,6 +1719,8 @@ class InterpreterOps(internal val interp: Interpreter) {
 
             "sorted" -> NativeCallable("sorted") { _, loc ->
                 try {
+                    // Type bag values are not Comparable; they order by their sort keys.
+                    if (list.any { it != null && io.kixi.types.TypeBags.typeFor(it) != null }) return@NativeCallable list.sortedWith { a, b -> compare(a, b) }
                     @Suppress("UNCHECKED_CAST")
                     (list as List<Comparable<Any>>).sorted()
                 } catch (e: ClassCastException) {

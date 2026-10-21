@@ -67,6 +67,7 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
             LiteralKind.QUANTITY -> parseQuantityLiteral(expr.value as String, expr.location)
             LiteralKind.CURRENCY_QUANTITY -> parseCurrencyQuantityLiteral(expr.value as String, expr.location)
             LiteralKind.VERSION -> parseVersionLiteral(expr.value as String, expr.location)
+            LiteralKind.EXT -> parseBagLiteral(expr.value as String, expr.location)
             LiteralKind.URL -> {
                 val text = expr.value as String
                 try { URL(text) } catch (e: Exception) {
@@ -663,17 +664,26 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                     else -> CuratedNotFound
                 }
 
-                // Host objects that opt in (see KSMembers): members the
-                // object itself chooses to expose, resolved without
-                // reflection and therefore in every hostLang mode. A
-                // null answer is "no such member" — the object cannot
-                // expose a legitimately-nil member through this seam.
-                is KSMembers -> obj.ksMember(member)
-                    ?: throw MemberNotFoundError(
-                        member, obj::class.simpleName ?: "Object", location
-                    )
+                // A literal read without its type bag (io.kixi.types.ExtLiteral) has no members.
+                is io.kixi.types.ExtLiteral -> CuratedNotFound
 
-                else -> CuratedNotFound // No curated method for this type
+                // A type bag's value (io.kixi.types): the members its type declares,
+                // in every hostLang mode, like KSMembers below. A member may be nil.
+                else -> if (io.kixi.types.TypeBags.typeFor(obj) != null) {
+                    bagMember(obj, member, location, CuratedNotFound)
+                } else when (obj) {
+                    // Host objects that opt in (see KSMembers): members the
+                    // object itself chooses to expose, resolved without
+                    // reflection and therefore in every hostLang mode. A
+                    // null answer is "no such member" — the object cannot
+                    // expose a legitimately-nil member through this seam.
+                    is KSMembers -> obj.ksMember(member)
+                        ?: throw MemberNotFoundError(
+                            member, obj::class.simpleName ?: "Object", location
+                        )
+
+                    else -> CuratedNotFound // No curated method for this type
+                }
             }
         } catch (e: MemberNotFoundError) {
             CuratedNotFound // Curated method couldn't resolve this member
@@ -683,8 +693,13 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
 
         // Phase 2: Universal JVM reflection backstop
         if (!interp.runtime.hostLang) {
+            if (obj is io.kixi.types.ExtLiteral) throw extLiteralMemberError(obj, member, location)
             val typeName = ops.runtimeTypeName(obj) ?: obj::class.simpleName ?: "Unknown"
             throw MemberNotFoundError(member, typeName, location)
+        }
+        if (obj is io.kixi.types.ExtLiteral) {
+            // With hostLang, reflection may still find a Kotlin member of the literal; otherwise say why there is none.
+            return try { resolveObjectMember(obj, member, location) } catch (e: MemberNotFoundError) { throw extLiteralMemberError(obj, member, location) }
         }
         return resolveObjectMember(obj, member, location)
     }

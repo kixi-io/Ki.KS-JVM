@@ -266,6 +266,7 @@ class Lexer(private val source: String) {
                             addToken(TokenType.DOT_DOT)
                         }
                     }
+                    bagLiteralAhead() -> scanBagLiteral()
                     match('b') -> {
                         // .blob(...) literal
                         if (peekWord() == "lob") {
@@ -1303,6 +1304,89 @@ class Lexer(private val source: String) {
     }
 
     // ========================================================================
+    // Type bag literals: .dna("ATG")
+    // ========================================================================
+
+    /**
+     * True when the `.` just read starts a dot literal of a type bag (`io.kixi.types`):
+     * a lowercase letter, letters, then `(` with nothing between, where an operand can
+     * start. After an operand (an identifier, a literal, `)`, `]`, `}`, `!!`), `.name(`
+     * is member access, so `s.motif("GAATTC")` stays a method call, and so is a `.`
+     * written against a word with no space between (`say.note(…)`). A newline ends the
+     * operand (KS has no leading-dot continuation lines), so a line may start with one.
+     *
+     * The rule does not ask which bags are loaded: lexing stays the same for every
+     * host (highlighters, completion), and the literal is read when it is evaluated,
+     * so a script whose bag is missing says so. Nothing is lost: `.name(` was a call of
+     * an enum constant (DPEC), which is never valid. `.grid(`, `.coordinate(` and
+     * `.blob(` keep their own rules.
+     */
+    private fun bagLiteralAhead(): Boolean {
+        if (!peek().isLowerCase()) return false
+        var k = current
+        while (k < source.length && source[k].isLetter()) k++
+        if (peekAt(k) != '(') return false
+        if (source.substring(current, k) in KS_DOT_NAMES) return false
+        return !afterOperand()
+    }
+
+    private fun afterOperand(): Boolean {
+        val last = tokens.lastOrNull() ?: return false
+        val wordAgainstDot = last.type != TokenType.NEWLINE && last.location.offset + last.value.length == start &&
+                last.value.lastOrNull()?.let { it.isLetterOrDigit() || it == '_' } == true
+        return wordAgainstDot || endsOperand(last.type)
+    }
+
+    private fun endsOperand(type: TokenType): Boolean = when (type) {
+        TokenType.IDENTIFIER, TokenType.RPAREN, TokenType.RBRACKET, TokenType.RBRACE,
+        TokenType.INT_LITERAL, TokenType.LONG_LITERAL, TokenType.FLOAT_LITERAL, TokenType.DOUBLE_LITERAL, TokenType.DEC_LITERAL,
+        TokenType.QUANTITY_LITERAL, TokenType.CURRENCY_QUANTITY_LITERAL, TokenType.VERSION_LITERAL,
+        TokenType.STRING_LITERAL, TokenType.VERBATIM_STRING, TokenType.MULTILINE_STRING, TokenType.VERBATIM_MULTILINE,
+        TokenType.BACKTICK_STRING, TokenType.CHAR_LITERAL, TokenType.TRUE, TokenType.FALSE, TokenType.NIL,
+        TokenType.URL_LITERAL, TokenType.EXT_LITERAL, TokenType.BANG_BANG, TokenType.PLUS_PLUS, TokenType.MINUS_MINUS -> true
+        else -> false
+    }
+
+    /**
+     * Scans `.name(…)` as KD reads a dot literal: to the matching `)`, skipping strings
+     * and quoted characters, on one line. The token's literal is the text; the bag reads
+     * it when the expression is evaluated.
+     */
+    private fun scanBagLiteral() {
+        while (peek().isLetter()) advance()
+        val name = source.substring(start + 1, current)
+        advance() // (
+        var depth = 1
+        while (depth > 0) {
+            // Not "unterminated": the REPL continues a line on that word, and a literal cannot span lines.
+            if (isAtEnd() || peek() == '\n') literalError("The .$name literal must close on its line (missing ')')")
+            when (val c = advance()) {
+                '(' -> depth++
+                ')' -> depth--
+                '"' -> skipQuoted('"', escapes = true, name)
+                '\'' -> skipQuoted('\'', escapes = true, name)
+                '`' -> skipQuoted('`', escapes = false, name)
+                '@' -> if (peek() == '"') { advance(); skipQuoted('"', escapes = false, name) }
+                else -> {}
+            }
+        }
+        addToken(TokenType.EXT_LITERAL, currentText())
+    }
+
+    /** Skips to the closing [quote] (just after the opening one), on the same line. */
+    private fun skipQuoted(quote: Char, escapes: Boolean, name: String) {
+        while (true) {
+            if (isAtEnd() || peek() == '\n') literalError("A string in the .$name literal must close on its line")
+            val c = advance()
+            if (escapes && c == '\\') { if (!isAtEnd() && peek() != '\n') advance(); continue }
+            if (c == quote) return
+        }
+    }
+
+    private fun literalError(message: String): Nothing =
+        throw LexerException(message, SourceLocation(line = startLine, column = startColumn, offset = start))
+
+    // ========================================================================
     // Identifier / keyword scanning
     // ========================================================================
 
@@ -1603,3 +1687,6 @@ class Lexer(private val source: String) {
         throw LexerException(message, SourceLocation(line = line, column = column, offset = current))
     }
 }
+
+/** Dot names with rules of their own (the lexer's `.blob(`, the parser's `.grid` and `.coordinate`). */
+private val KS_DOT_NAMES = setOf("blob", "grid", "coordinate")

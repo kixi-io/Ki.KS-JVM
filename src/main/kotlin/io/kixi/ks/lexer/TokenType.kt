@@ -50,6 +50,7 @@ enum class TokenType {
     FALSE,                  // false
     NIL,                    // nil
     URL_LITERAL,            // <https://...>
+    EXT_LITERAL,            // .dna("ATG"): a type bag's literal (io.kixi.types); the token's literal is its text
 
     // --- Arithmetic Operators ---
     PLUS,                   // +

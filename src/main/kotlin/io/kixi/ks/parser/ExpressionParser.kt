@@ -340,7 +340,7 @@ class ExpressionParser(internal val p: Parser) {
             // String literals
         STRING_LITERAL, VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE, BACKTICK_STRING,
             // Other literals
-        CHAR_LITERAL, TRUE, FALSE, NIL, URL_LITERAL -> true
+        CHAR_LITERAL, TRUE, FALSE, NIL, URL_LITERAL, EXT_LITERAL -> true
         else -> false
     }
 
@@ -696,6 +696,12 @@ class ExpressionParser(internal val p: Parser) {
             VERSION_LITERAL -> {
                 val t = p.advance()
                 LiteralExpr(t.literal, LiteralKind.VERSION, t.location)
+            }
+
+            // A type bag's literal, .dna("ATG"): its text here, read by its bag when evaluated
+            EXT_LITERAL -> {
+                val t = p.advance()
+                LiteralExpr(t.literal, LiteralKind.EXT, t.location)
             }
 
             // --- String literals ---

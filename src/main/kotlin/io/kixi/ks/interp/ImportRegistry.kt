@@ -599,6 +599,15 @@ class ImportRegistry(private val runtime: KSRuntime) {
     ) {
         val packagePath = decl.packagePath.joinToString(".")
 
+        // `use ki.<bag>…`: a type bag (io.kixi.types), in every hostLang mode.
+        if (decl.packagePath.isEmpty() && decl.imports.singleOrNull()?.name == "ki") {
+            throw ImportError("ki", decl.location, suggestion = "Use ki.<bag>, ki.<bag>.* or ki.<bag>.<name>" + loadedBags())
+        }
+        if (decl.packagePath.firstOrNull() == "ki") {
+            processBagUse(decl)
+            return
+        }
+
         when (decl.wildcard) {
             UseWildcard.FLAT -> {
                 flatWildcards.add(packagePath)
@@ -647,6 +656,46 @@ class ImportRegistry(private val runtime: KSRuntime) {
                 }
             }
         }
+    }
+
+    /**
+     * `use ki.bio` binds the bag `bio` as an object (`bio.revcomp(s)`, `bio.avogadro`);
+     * `use ki.bio.*` binds each of its functions and constants; `use ki.bio.revcomp`
+     * (or several, comma-separated) binds those; `as` renames; `use ki.*` binds every
+     * loaded bag as an object. Bags are curated, so this needs no hostLang. Names are
+     * bound when the `use` runs (a bag loaded later needs another `use`), and a name the
+     * script defines itself shadows an imported one, as in Kotlin.
+     */
+    private fun processBagUse(decl: UseDecl) {
+        val path = decl.packagePath
+        val shown = (path + decl.imports.map { it.name }).joinToString(".") + if (decl.wildcard == UseWildcard.NONE) "" else ".*"
+        fun bag(name: String) = io.kixi.types.TypeBags.byName(name) ?: throw ImportError("ki.$name", decl.location,
+            suggestion = "No type bag '$name' is loaded" + loadedBags())
+        when {
+            decl.wildcard == UseWildcard.TREE ->
+                throw ImportError("${path.joinToString(".")}.**", decl.location, suggestion = "Use ki.<bag> or ki.<bag>.*")
+            decl.wildcard == UseWildcard.FLAT && path.size == 1 ->
+                for (b in io.kixi.types.TypeBags.all) directImports[b.name] = ResolvedImport.KsStaticMember(BagObject(b))
+            decl.wildcard == UseWildcard.FLAT && path.size == 2 ->
+                for ((k, v) in bagValues(bag(path[1]))) directImports[k] = ResolvedImport.KsStaticMember(v)
+            decl.wildcard == UseWildcard.NONE && path.size == 1 ->
+                for (i in decl.imports) directImports[i.alias ?: i.name] = ResolvedImport.KsStaticMember(BagObject(bag(i.name)))
+            decl.wildcard == UseWildcard.NONE && path.size == 2 -> {
+                val b = bag(path[1])
+                for (i in decl.imports) {
+                    val v = bagValue(b, i.name) ?: throw ImportError("ki.${b.name}.${i.name}", decl.location,
+                        suggestion = "Bag '${b.name}' has no function or constant '${i.name}'" +
+                                bagValues(b).keys.sorted().let { if (it.isEmpty()) "" else it.joinToString(prefix = " (it has: ", postfix = ")") })
+                    directImports[i.alias ?: i.name] = ResolvedImport.KsStaticMember(v)
+                }
+            }
+            else -> throw ImportError(shown, decl.location, suggestion = "Use ki.<bag>, ki.<bag>.* or ki.<bag>.<name>")
+        }
+    }
+
+    private fun loadedBags(): String {
+        val names = io.kixi.types.TypeBags.all.map { it.name }
+        return if (names.isEmpty()) " (no bags are loaded)" else " (loaded: ${names.joinToString()})"
     }
 
     // ========================================================================

@@ -638,6 +638,7 @@ object MembersFormatter {
             LiteralKind.VERBATIM_STRING -> "@\"${expr.value}\""
             LiteralKind.MULTILINE_STRING, LiteralKind.VERBATIM_MULTILINE -> "..."
             LiteralKind.BACKTICK_STRING -> "`${expr.value}`"
+            LiteralKind.EXT -> expr.value.toString()
         }
     }
 }

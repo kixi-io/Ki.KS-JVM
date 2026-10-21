@@ -362,7 +362,9 @@ enum class LiteralKind {
     INT, LONG, FLOAT, DOUBLE, DEC,
     QUANTITY, CURRENCY_QUANTITY,
     STRING, CHAR, BOOL, NIL, URL, VERSION,
-    VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE, BACKTICK_STRING
+    VERBATIM_STRING, MULTILINE_STRING, VERBATIM_MULTILINE, BACKTICK_STRING,
+    /** A type bag's literal (`.dna("ATG")`): the value is its text, read by the bag when evaluated. */
+    EXT
 }
 
 /**
