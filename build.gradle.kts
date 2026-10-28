@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.kixi"
-version = providers.gradleProperty("ksVersion").getOrElse("2.3.3")
+version = providers.gradleProperty("ksVersion").getOrElse("2.4.0")
 description = "ki-ks"
 
 // Application config goes HERE - outside plugins block
@@ -24,8 +24,8 @@ repositories {
 
 dependencies {
     // === Ki Dependencies (resolved via composite builds — see settings.gradle.kts) ===
-    api("io.kixi:Ki.Core-JVM:2.4.0")
-    api("io.kixi:Ki.KD-JVM:2.3.2")
+    api("io.kixi:Ki.Core-JVM:2.5.0")
+    api("io.kixi:Ki.KD-JVM:2.4.0")
 
     // === JLine (REPL terminal handling) ===
     implementation("org.jline:jline:3.26.3")
@@ -337,7 +337,7 @@ publishing {
                 licenses {
                     license {
                         name.set("MIT License")
-                        url.set("https://raw.githubusercontent.com/kixi-io/Ki.KS-JVM/master/LICENSE")
+                        url.set("https://raw.githubusercontent.com/kixi-io/Ki.KS-JVM/master/LICENSE.txt")
                         distribution.set("repo")
                     }
                 }
