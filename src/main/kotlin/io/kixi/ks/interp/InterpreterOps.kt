@@ -61,19 +61,34 @@ class InterpreterOps(internal val interp: Interpreter) {
     // Arithmetic Operations (type-preserving)
     // ========================================================================
 
+    /**
+     * Runs Ki.Core's measure or vector work, turning its exceptions into the errors a
+     * script can catch: division by zero, overflow, and a TypeError for values that do
+     * not go together (units of different dimensions, vectors of different sizes).
+     */
+    private inline fun <T> tb7(what: String, block: () -> T): T = try {
+        block()
+    } catch (e: RuntimeError) {
+        throw e
+    } catch (e: ArithmeticException) {
+        val m = e.message ?: ""
+        if (m.contains("zero", ignoreCase = true) || m.contains("undefined", ignoreCase = true)) throw DivisionByZeroError()
+        throw OverflowError(if (m.isBlank()) "Arithmetic overflow" else m)
+    } catch (e: io.kixi.uom.IncompatibleUnitsException) {
+        throw TypeError(e.message ?: what, null)
+    } catch (e: IllegalArgumentException) {
+        throw TypeError(e.message ?: what, null)
+    }
+
     /** A measure or vector on either side (design TB7); null when neither side is one. */
     private fun measureOrVectorOp(left: Any?, right: Any?, op: Char): Any? {
         if (left is io.kixi.Measure || right is io.kixi.Measure) {
             val other = if (left is io.kixi.Measure) right else left
             if (other !is Number && other !is Quantity<*> && other !is io.kixi.Measure) return null
-            return try {
-                io.kixi.Measure.combine(op, left!!, right!!)
-            } catch (e: IllegalArgumentException) {
-                throw TypeError(e.message ?: "Invalid measure arithmetic", null)
-            }
+            return tb7("Invalid measure arithmetic") { io.kixi.Measure.combine(op, left!!, right!!) }
         }
         if (left is io.kixi.Vector<*> || right is io.kixi.Vector<*>) {
-            return try {
+            return tb7("Invalid vector arithmetic") {
                 when {
                     left is io.kixi.Vector<*> && right is io.kixi.Vector<*> -> when (op) {
                         '+' -> left + right
@@ -88,8 +103,6 @@ class InterpreterOps(internal val interp: Interpreter) {
                     left is Number && right is io.kixi.Vector<*> && op == '*' -> right * left
                     else -> null
                 }
-            } catch (e: IllegalArgumentException) {
-                throw TypeError(e.message ?: "Invalid vector arithmetic", null)
             }
         }
         return null
@@ -221,8 +234,8 @@ class InterpreterOps(internal val interp: Interpreter) {
     internal fun negate(value: Any?): Any {
         return when (value) {
             is Quantity<*> -> -value
-            is io.kixi.Measure -> -value
-            is io.kixi.Vector<*> -> -value
+            is io.kixi.Measure -> tb7("Invalid measure") { -value }
+            is io.kixi.Vector<*> -> tb7("Invalid vector") { -value }
             is Int -> -value
             is Long -> -value
             is Float -> -value
@@ -452,7 +465,7 @@ class InterpreterOps(internal val interp: Interpreter) {
             if (left !is io.kixi.Measure || right !is io.kixi.Measure) {
                 throw TypeError("A measure compares with a measure; compare its value (m.value < 5µM)", null)
             }
-            return try { left.compareTo(right) } catch (e: IllegalArgumentException) { throw TypeError(e.message ?: "Incomparable measures", null) }
+            return tb7("Incomparable measures") { left.compareTo(right) }
         }
         if (left is io.kixi.Vector<*> && right is io.kixi.Vector<*>) return left.compareTo(right)
         // Type bag values order by their type's sort key, as KQ and RevDB's indexes order them.
@@ -475,7 +488,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         }
         // Measures and vectors as quantities and numbers are: by amount (1±0.1cm == 10±1mm, .vec<Int> { 1 } == .vec<Double> { 1.0 })
         if (left is io.kixi.Measure && right is io.kixi.Measure) {
-            return try { left.compareTo(right) == 0 } catch (e: IllegalArgumentException) { false }
+            return try { left.compareTo(right) == 0 } catch (e: IllegalArgumentException) { false } catch (e: io.kixi.uom.IncompatibleUnitsException) { false }
         }
         if (left is io.kixi.Vector<*> && right is io.kixi.Vector<*>) return left.compareTo(right) == 0
 
@@ -2176,8 +2189,8 @@ class InterpreterOps(internal val interp: Interpreter) {
         "isEmpty" -> v.isEmpty()
         "isNotEmpty" -> !v.isEmpty()
         "type" -> v.elementType.name
-        "sum" -> NativeCallable("sum") { _, _ -> v.sum() }
-        "mean" -> NativeCallable("mean") { _, _ -> v.mean() }
+        "sum" -> NativeCallable("sum") { _, _ -> tb7("sum") { v.sum() } }
+        "mean" -> NativeCallable("mean") { _, _ -> tb7("mean") { v.mean() } }
         "min" -> NativeCallable("min") { _, _ -> v.min() }
         "max" -> NativeCallable("max") { _, _ -> v.max() }
         "norm" -> NativeCallable("norm") { _, _ -> v.norm() }
@@ -2185,7 +2198,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         "dot" -> NativeCallable("dot") { args, loc ->
             val other = args.singleOrNull() as? io.kixi.Vector<*>
                 ?: throw TypeError("dot() takes one vector", loc)
-            try { v.dot(other) } catch (e: IllegalArgumentException) { throw RuntimeError(e.message ?: "dot", loc) }
+            tb7("dot") { v.dot(other) }
         }
         else -> throw MemberNotFoundError(member, "Vector", location)
     }

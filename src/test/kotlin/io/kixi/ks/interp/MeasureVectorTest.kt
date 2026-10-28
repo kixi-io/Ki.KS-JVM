@@ -107,4 +107,14 @@ class MeasureVectorTest : FunSpec({
             error(".vec<Int> { 1 } + .vec<Int> { 1 2 }") shouldContain "combined"
         }
     }
+
+    // The review of 2026-10-28: Ki.Core's exceptions reach a script as errors it can catch, as 1.0/0 does.
+    test("try/catch catches measure and vector errors; == of measures in two dimensions is false") {
+        eval("try { 1.0/0 } catch (e) { \"caught\" }") shouldBe "caught"
+        for (expr in listOf("(5±1) / 0", ".vec<Int> { 1 } / 0", ".vec<Int> { 2147483647 } + .vec<Int> { 1 }", "(5±1cm) + (5±1g)", "(5±1cm) < (5±1g)")) {
+            eval("try { $expr } catch (e) { \"caught\" }") shouldBe "caught"
+        }
+        eval("(5±1cm) == (5±1g)") shouldBe false
+        error("(5±1) / 0") shouldContain "Division by zero"
+    }
 })
