@@ -443,7 +443,8 @@ assignmentOperator
 //   6. Named checks:      in  !in  is  !is  matches
 //   7. Range:             ..  ..<  <..  <..<
 //   8. Addition:          +  -
-//   9. Multiplication:    *  /  %
+//   9. Multiplication:    *  /  %  ⚭
+//  9b. Measure:           ±
 //  10. Unary prefix:      -  !  ++  --
 //  11. Unary postfix:     ++  --
 //  12. Member/call/index: .  ?.  ()  []  !!
@@ -496,7 +497,11 @@ addition
     ;
 
 multiplication
-    = unaryPrefix { ( '*' | '/' | '%' ) unaryPrefix }
+    = measure { ( '*' | '/' | '%' | '⚭' ) measure }
+    ;
+
+measure                                           (* a value and its uncertainty: 0.512±0.008, mean ± sd *)
+    = unaryPrefix [ '±' unaryPrefix ]
     ;
 
 unaryPrefix

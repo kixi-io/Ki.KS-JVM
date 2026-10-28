@@ -1212,6 +1212,41 @@ let converted = dist.convertTo("mm")  // 230mm
 say dist.toSuffixString()        // "23cm:i"
 ```
 
+### Measures: values with uncertainty (`±`)
+
+A measurement and its standard uncertainty (one standard deviation) make a
+`Measure` (Ki.Core). Write them with `±`, as a lab notebook does:
+
+```
+let ic50 = 0.0042±0.0006µM        // the unit, written once, is for both numbers
+let abs = 0.512±0.008
+let length = 5cm±1mm              // each side may have its own unit: 5±0.1cm
+let m = mean ± sd                 // from values
+let n = 10.0 ± (sd / 2)           // ± binds tighter than * and /: use parentheses
+```
+
+`±` binds tighter than `*` and `/`, so `2 * 5±1` is `2 * (5±1)` and a measure
+written as a literal reads as one value. `+-` is not a measure in KS: `5+-3` is
+`5 + (-3)`, which is 2 (KD files may write `0.512+-0.008`).
+
+Arithmetic carries the uncertainty, treating measurements as independent:
+`+` and `-` add uncertainties in quadrature, `*` and `/` combine their relative
+uncertainties, and a plain number counts as exact.
+
+```
+(10±3) + (20±4)                   // 30.0±5.0
+(4±0.3) * 2                       // 8.0±0.6
+(20±0.5°C).value                  // 20
+(20±0.5°C).uncertainty            // 0.5°C
+(10±0.5).relative                 // 0.05
+(5±1cm).unit                      // "cm"
+(1±0.1cm) == (10±1mm)             // true: the same amount
+(5±1) < (5±2)                     // true: central value, then uncertainty
+```
+
+A measure compares only with a measure; compare a plain value with its
+`value` (`m.value < 5µM`). `x is Measure` tests for one.
+
 ### Scientific Notation
 
 KS supports two forms for scientific notation in quantities:
@@ -1412,6 +1447,40 @@ g.forEachIndexed { x, y, v -> say "$x,$y = $v" }
 // 0,1 = 3
 // 1,1 = 4
 ```
+
+### Vectors
+
+A `Vector` (Ki.Core) is one row of numbers of one type, stored packed: a
+spectrum's absorbances, a time course. It uses the grid's braces and names its
+number type, `Int`, `Long`, `Float`, `Double` or `Dec`:
+
+```
+let spectrum = .vec<Double> { 0.12 0.48 0.31 }
+let counts = .vec<Int> {
+    3 1 4
+    1 5                           // newlines and commas separate numbers too
+}
+let v = .vec<Long> { x, (x * 2) } // each number is a unary expression: parenthesize a sum
+```
+
+Each element is a number, a name, a call or a parenthesized expression, so
+`{ 1 -2 }` is two numbers; after a name, put a comma before a parenthesized
+element (`x (y)` would be a call). A number must fit the type exactly
+(`.vec<Int> { 1.5 }` is an error).
+
+```
+spectrum.size                     // 3
+spectrum[1]                       // 0.48
+spectrum.sum()  spectrum.mean()  spectrum.min()  spectrum.max()  spectrum.norm()
+spectrum.dot(other)               // the dot product
+spectrum * 2                      // element by element; + and - take two vectors
+for x in spectrum { say x }
+spectrum.toList()                 // [0.12, 0.48, 0.31]
+```
+
+A vector is a value, not a list: `==` compares the numbers (`.vec<Int> { 1 }
+== .vec<Double> { 1.0 }`), `<` compares element by element, and `x is Vector`
+tests for one.
 
 ---
 
@@ -2528,9 +2597,10 @@ From lowest to highest precedence:
 | 10 | `..` `..<` `<..` `<..<` | Left |
 | 11 | `+` `-` | Left |
 | 12 | `*` `/` `%` `⚭` | Left |
-| 13 | `**` | Right |
-| 14 | `-` `!` `++` `--` (prefix) | Right |
-| 15 | `.` `?.` `()` `[]` `!!` `++` `--` `::class` | Left |
+| 13 | `±` (a measure; one per value) | None |
+| 14 | `**` | Right |
+| 15 | `-` `!` `++` `--` (prefix) | Right |
+| 16 | `.` `?.` `()` `[]` `!!` `++` `--` `::class` | Left |
 
 ---
 
