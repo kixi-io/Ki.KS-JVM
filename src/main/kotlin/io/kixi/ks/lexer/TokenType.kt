@@ -63,6 +63,9 @@ enum class TokenType {
     // --- Unit Composition ---
     COMBINE,                // \u26ad (unit combine: 4cm \u26ad 3cm \u2192 12cm\u00b2)
 
+    // --- Measure ---
+    PLUS_MINUS,             // \u00b1 (a value and its uncertainty: 0.512\u00b10.008, 5\u00b10.1cm)
+
     // --- Increment / Decrement ---
     PLUS_PLUS,              // ++
     MINUS_MINUS,            // --

@@ -61,7 +61,52 @@ class InterpreterOps(internal val interp: Interpreter) {
     // Arithmetic Operations (type-preserving)
     // ========================================================================
 
+    /** A measure or vector on either side (design TB7); null when neither side is one. */
+    private fun measureOrVectorOp(left: Any?, right: Any?, op: Char): Any? {
+        if (left is io.kixi.Measure || right is io.kixi.Measure) {
+            val other = if (left is io.kixi.Measure) right else left
+            if (other !is Number && other !is Quantity<*> && other !is io.kixi.Measure) return null
+            return try {
+                io.kixi.Measure.combine(op, left!!, right!!)
+            } catch (e: IllegalArgumentException) {
+                throw TypeError(e.message ?: "Invalid measure arithmetic", null)
+            }
+        }
+        if (left is io.kixi.Vector<*> || right is io.kixi.Vector<*>) {
+            return try {
+                when {
+                    left is io.kixi.Vector<*> && right is io.kixi.Vector<*> -> when (op) {
+                        '+' -> left + right
+                        '-' -> left - right
+                        else -> null
+                    }
+                    left is io.kixi.Vector<*> && right is Number -> when (op) {
+                        '*' -> left * right
+                        '/' -> left / right
+                        else -> null
+                    }
+                    left is Number && right is io.kixi.Vector<*> && op == '*' -> right * left
+                    else -> null
+                }
+            } catch (e: IllegalArgumentException) {
+                throw TypeError(e.message ?: "Invalid vector arithmetic", null)
+            }
+        }
+        return null
+    }
+
+    /** `value ± uncertainty`: a [io.kixi.Measure] (numbers or quantities; the unit may be written once, after the uncertainty). */
+    internal fun plusMinus(left: Any?, right: Any?, location: SourceLocation?): io.kixi.Measure {
+        if (left == null || right == null) throw NullPointerError("A measure's value and uncertainty cannot be nil", location)
+        return try {
+            io.kixi.Measure.of(left, right)
+        } catch (e: IllegalArgumentException) {
+            throw RuntimeError(e.message ?: "Invalid measure", location)
+        }
+    }
+
     internal fun add(left: Any?, right: Any?): Any {
+        measureOrVectorOp(left, right, '+')?.let { return it }
         // Quantity + Quantity (with unit conversion)
         if (left is Quantity<*> && right is Quantity<*>) {
             @Suppress("UNCHECKED_CAST")
@@ -89,6 +134,7 @@ class InterpreterOps(internal val interp: Interpreter) {
     }
 
     internal fun subtract(left: Any?, right: Any?): Any {
+        measureOrVectorOp(left, right, '-')?.let { return it }
         // Quantity - Quantity (with unit conversion)
         if (left is Quantity<*> && right is Quantity<*>) {
             @Suppress("UNCHECKED_CAST")
@@ -114,6 +160,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         if (left is Int && right is String) {
             return right.repeat(left)
         }
+        measureOrVectorOp(left, right, '*')?.let { return it }
         // Quantity * Quantity (cross-dimension: 150mM * 1\u2113 \u2192 150mmol).
         // Delegates to UnitAlgebra; an undefined dimension pair throws
         // UndefinedUnitArithmeticException with a dimensional message.
@@ -132,6 +179,7 @@ class InterpreterOps(internal val interp: Interpreter) {
     }
 
     internal fun divide(left: Any?, right: Any?): Any {
+        measureOrVectorOp(left, right, '/')?.let { return it }
         // Quantity / Quantity. Same dimension yields a plain number
         // (300mm / 1m \u2192 0.3) \u2014 UnitAlgebra returns it as a
         // dimensionless ratio quantity, unwrapped here so KS sees a Number.
@@ -173,6 +221,8 @@ class InterpreterOps(internal val interp: Interpreter) {
     internal fun negate(value: Any?): Any {
         return when (value) {
             is Quantity<*> -> -value
+            is io.kixi.Measure -> -value
+            is io.kixi.Vector<*> -> -value
             is Int -> -value
             is Long -> -value
             is Float -> -value
@@ -397,6 +447,14 @@ class InterpreterOps(internal val interp: Interpreter) {
             @Suppress("UNCHECKED_CAST")
             return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>)
         }
+        // Measures: the central values, then the uncertainties; vectors: element by element
+        if (left is io.kixi.Measure || right is io.kixi.Measure) {
+            if (left !is io.kixi.Measure || right !is io.kixi.Measure) {
+                throw TypeError("A measure compares with a measure; compare its value (m.value < 5µM)", null)
+            }
+            return try { left.compareTo(right) } catch (e: IllegalArgumentException) { throw TypeError(e.message ?: "Incomparable measures", null) }
+        }
+        if (left is io.kixi.Vector<*> && right is io.kixi.Vector<*>) return left.compareTo(right)
         // Type bag values order by their type's sort key, as KQ and RevDB's indexes order them.
         if (left !is Number || right !is Number) bagCompare(left, right)?.let { return it }
         return toDouble(left).compareTo(toDouble(right))
@@ -415,6 +473,11 @@ class InterpreterOps(internal val interp: Interpreter) {
             @Suppress("UNCHECKED_CAST")
             return (left as Quantity<KiUnit>).compareTo(right as Quantity<KiUnit>) == 0
         }
+        // Measures and vectors as quantities and numbers are: by amount (1±0.1cm == 10±1mm, .vec<Int> { 1 } == .vec<Double> { 1.0 })
+        if (left is io.kixi.Measure && right is io.kixi.Measure) {
+            return try { left.compareTo(right) == 0 } catch (e: IllegalArgumentException) { false }
+        }
+        if (left is io.kixi.Vector<*> && right is io.kixi.Vector<*>) return left.compareTo(right) == 0
 
         if (left is KSEnumConstant && right is KSEnumConstant) {
             return left.enum == right.enum && left.name == right.name
@@ -457,6 +520,8 @@ class InterpreterOps(internal val interp: Interpreter) {
         return when (value) {
             null -> "nil"
             is Quantity<*> -> value.toString()
+            is io.kixi.Measure -> value.toString()
+            is io.kixi.Vector<*> -> value.toString()
             is Double -> {
                 val text = value.toString()
                 if (text.endsWith(".0")) text.substring(0, text.length - 2) else text
@@ -748,6 +813,8 @@ class InterpreterOps(internal val interp: Interpreter) {
             is Double -> KSType("Double")
             is Dec -> KSType("Dec")
             is Quantity<*> -> KSType("Quantity", value.unit.symbol)
+            is io.kixi.Measure -> KSType("Measure")
+            is io.kixi.Vector<*> -> KSType("Vector", value.elementType.name)
             is String -> KSType("String")
             is Char -> KSType("Char")
             is Boolean -> KSType("Bool")
@@ -971,6 +1038,8 @@ class InterpreterOps(internal val interp: Interpreter) {
             "Double" -> value is Double || value is Float
             "Dec" -> value is Dec
             "Quantity" -> value is Quantity<*>
+            "Measure" -> value is io.kixi.Measure
+            "Vector" -> value is io.kixi.Vector<*>
             "String" -> value is String
             "Char" -> value is Char
             "Bool" -> value is Boolean
@@ -1134,6 +1203,8 @@ class InterpreterOps(internal val interp: Interpreter) {
         is KSStructInstance -> value.struct.name
         is KSEnumConstant -> value.enum.name
         is io.kixi.uom.Quantity<*> -> "Quantity"
+        is io.kixi.Measure -> "Measure"
+        is io.kixi.Vector<*> -> "Vector"
         is Version -> "Version"
         is Range<*> -> "Range"
         is Grid<*> -> "Grid"
@@ -1217,6 +1288,7 @@ class InterpreterOps(internal val interp: Interpreter) {
             is String -> value.toList()
             is Map<*, *> -> value.entries.toList()
             is Range<*> -> rangeToIterable(value, location)
+            is io.kixi.Vector<*> -> value.toList()
             is KSEnum -> value.constants.values
             else -> throw TypeError("Cannot iterate over ${value?.let { it::class.simpleName } ?: "nil"}", location)
         }
@@ -2089,6 +2161,35 @@ class InterpreterOps(internal val interp: Interpreter) {
      * - `value` -> the numeric value (Int, Long, Float, Double, or Dec)
      * - `unit` -> the unit symbol as a String (e.g., "cm", "kg", "USD")
      */
+    /** A measure's parts: `value`, `uncertainty`, `relative` (uncertainty / |value|, nil at 0), `unit` (its symbol, nil for a plain number). */
+    internal fun getMeasureMember(m: io.kixi.Measure, member: String, location: SourceLocation?): Any? = when (member) {
+        "value" -> m.value
+        "uncertainty" -> m.uncertainty
+        "relative" -> m.relative
+        "unit" -> m.unit?.symbol
+        else -> throw MemberNotFoundError(member, "Measure", location)
+    }
+
+    /** A vector's members: `size`, `isEmpty`, `type`, and `sum()`, `mean()`, `min()`, `max()`, `norm()`, `dot(v)`, `toList()`. */
+    internal fun getVectorMember(v: io.kixi.Vector<*>, member: String, location: SourceLocation?): Any? = when (member) {
+        "size", "length" -> v.size
+        "isEmpty" -> v.isEmpty()
+        "isNotEmpty" -> !v.isEmpty()
+        "type" -> v.elementType.name
+        "sum" -> NativeCallable("sum") { _, _ -> v.sum() }
+        "mean" -> NativeCallable("mean") { _, _ -> v.mean() }
+        "min" -> NativeCallable("min") { _, _ -> v.min() }
+        "max" -> NativeCallable("max") { _, _ -> v.max() }
+        "norm" -> NativeCallable("norm") { _, _ -> v.norm() }
+        "toList" -> NativeCallable("toList") { _, _ -> v.toList() }
+        "dot" -> NativeCallable("dot") { args, loc ->
+            val other = args.singleOrNull() as? io.kixi.Vector<*>
+                ?: throw TypeError("dot() takes one vector", loc)
+            try { v.dot(other) } catch (e: IllegalArgumentException) { throw RuntimeError(e.message ?: "dot", loc) }
+        }
+        else -> throw MemberNotFoundError(member, "Vector", location)
+    }
+
     internal fun getQuantityMember(quantity: Quantity<*>, member: String, location: SourceLocation?): Any? {
         return when (member) {
             // Properties

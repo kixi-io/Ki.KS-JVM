@@ -326,6 +326,7 @@ class Lexer(private val source: String) {
 
             // --- Unit Composition ---
             '⚭' -> addToken(TokenType.COMBINE)
+            '±' -> addToken(TokenType.PLUS_MINUS)
 
             // --- Identifiers and Keywords ---
             else -> {
@@ -1534,7 +1535,7 @@ class Lexer(private val source: String) {
         return when (lastType) {
             // These tokens indicate the line continues
             TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.STAR_STAR,
-            TokenType.SLASH, TokenType.PERCENT, TokenType.COMBINE,
+            TokenType.SLASH, TokenType.PERCENT, TokenType.COMBINE, TokenType.PLUS_MINUS,
             TokenType.EQUAL, TokenType.PLUS_EQUAL, TokenType.MINUS_EQUAL,
             TokenType.STAR_EQUAL, TokenType.STAR_STAR_EQUAL,
             TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL,

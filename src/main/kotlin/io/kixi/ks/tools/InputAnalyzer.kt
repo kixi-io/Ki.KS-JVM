@@ -177,7 +177,7 @@ class InputAnalyzer {
     private fun isContinuationToken(type: TokenType): Boolean = when (type) {
         // Arithmetic & assignment operators
         TokenType.PLUS, TokenType.MINUS, TokenType.STAR, TokenType.STAR_STAR,
-        TokenType.SLASH, TokenType.PERCENT, TokenType.COMBINE,
+        TokenType.SLASH, TokenType.PERCENT, TokenType.COMBINE, TokenType.PLUS_MINUS,
         TokenType.EQUAL, TokenType.PLUS_EQUAL, TokenType.MINUS_EQUAL,
         TokenType.STAR_EQUAL, TokenType.STAR_STAR_EQUAL,
         TokenType.SLASH_EQUAL, TokenType.PERCENT_EQUAL,

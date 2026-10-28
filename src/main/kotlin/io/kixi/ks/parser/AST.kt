@@ -441,6 +441,8 @@ enum class BinaryOp {
     ADD, SUBTRACT, MULTIPLY, DIVIDE, MODULO, POWER,
     // Unit composition
     COMBINE,
+    // A measure: a value and its standard uncertainty (`0.512±0.008`, `mean ± sd`)
+    PLUS_MINUS,
     // Comparison
     EQUAL, NOT_EQUAL, LESS, GREATER, LESS_EQUAL, GREATER_EQUAL,
     // Logical
@@ -753,6 +755,17 @@ data class GridLiteralExpr(
     val rows: List<List<Expr>>,     // data form: each inner list is one row of values
     override val location: SourceLocation,
     val arguments: List<Argument> = emptyList()  // dimension form: width, height, optional default
+) : Expr
+
+/**
+ * Vector literal: `.vec<Float> { 1.0 2.5 3.1 }`, a packed row of numbers of one type
+ * (Ki.Core's [io.kixi.Vector]). Each element is a unary expression (a number, `-2`,
+ * a name, a call, or a parenthesized expression), so `{ 1 -2 }` is two numbers.
+ */
+data class VectorLiteralExpr(
+    val typeParam: TypeRef,
+    val elements: List<Expr>,
+    override val location: SourceLocation
 ) : Expr
 
 /**

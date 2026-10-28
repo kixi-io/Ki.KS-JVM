@@ -577,6 +577,7 @@ object MembersFormatter {
                     BinaryOp.OR -> "||"
                     BinaryOp.ELVIS -> "?:"
                     BinaryOp.COMBINE -> "\u26AD"
+                    BinaryOp.PLUS_MINUS -> "\u00B1"
                 }
                 "${formatExpr(expr.left)} $op ${formatExpr(expr.right)}"
             }

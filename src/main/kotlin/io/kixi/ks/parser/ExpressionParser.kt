@@ -429,7 +429,7 @@ class ExpressionParser(internal val p: Parser) {
     // ====================================================================
 
     private fun parseMultiplication(): Expr {
-        var expr = parsePower()
+        var expr = parsePlusMinus()
         while (true) {
             val loc = p.currentLocation()
             val op = when {
@@ -439,10 +439,25 @@ class ExpressionParser(internal val p: Parser) {
                 p.match(COMBINE) -> BinaryOp.COMBINE
                 else -> break
             }
-            val right = parsePower()
+            val right = parsePlusMinus()
             expr = BinaryExpr(expr, op, right, loc)
         }
         return expr
+    }
+
+    // ====================================================================
+    // 12b. Measure: ± (binds tighter than * and /, so 2 * 5±1 is 2 * (5±1)
+    //      and a measure written as a literal reads as one value)
+    // ====================================================================
+
+    private fun parsePlusMinus(): Expr {
+        val expr = parsePower()
+        if (!p.check(PLUS_MINUS)) return expr
+        val loc = p.currentLocation()
+        p.advance()
+        val right = parsePower()
+        if (p.check(PLUS_MINUS)) p.errorAt(p.peek(), "A measure has one uncertainty: write (a ± b) ± c to combine two")
+        return BinaryExpr(expr, BinaryOp.PLUS_MINUS, right, loc)
     }
 
     // ====================================================================
@@ -761,6 +776,7 @@ class ExpressionParser(internal val p: Parser) {
                 val name = p.expectIdentifier("Expected name after '.'")
                 when (name) {
                     "grid" -> parseGridLiteral(loc)
+                    "vec" -> parseVectorLiteral(loc)
                     "coordinate" -> parseCoordinateLiteral(loc)
                     else -> DPECExpr(name, loc)
                 }
@@ -1651,6 +1667,33 @@ class ExpressionParser(internal val p: Parser) {
         }
 
         p.errorAt(p.peek(), "Expected '{' (data) or '(' (dimensions) after .grid$typeLabel")
+    }
+
+    /**
+     * Parse a vector literal after `.vec` has been consumed: `.vec<Float> { 1.0 2.5 }`.
+     * The type is Int, Long, Float, Double or Dec. Numbers are separated by spaces,
+     * commas or newlines; each is a unary expression, so `{ 1 -2 }` holds 1 and -2
+     * (write `(a + b)` for a sum).
+     */
+    private fun parseVectorLiteral(loc: io.kixi.ks.SourceLocation): VectorLiteralExpr {
+        if (!p.check(LESS)) p.errorAt(p.peek(), "Expected '<' after .vec: a vector names its number type (.vec<Float> { 1.0 2.5 })")
+        p.advance() // consume <
+        val typeRef = p.types.parseTypeRef()
+        p.expect(GREATER, "Expected '>' after the vector's number type")
+        if (typeRef.nullable || typeRef.name !in setOf("Int", "Long", "Float", "Double", "Dec")) {
+            p.errorAt(p.previous(), "A vector holds Int, Long, Float, Double or Dec numbers, not ${typeRef.name}${if (typeRef.nullable) "?" else ""}")
+        }
+        p.expect(LBRACE, "Expected '{' after .vec<${typeRef.name}>")
+        val elements = mutableListOf<Expr>()
+        p.skipSeparators()
+        while (!p.check(RBRACE) && !p.isAtEnd()) {
+            if (!p.canStartExpression()) p.errorAt(p.peek(), "Expected a number in .vec<${typeRef.name}>")
+            elements.add(parsePower())
+            p.match(COMMA)
+            p.skipSeparators()
+        }
+        p.expect(RBRACE, "Expected '}' to close the vector")
+        return VectorLiteralExpr(typeRef, elements, loc)
     }
 
     /**

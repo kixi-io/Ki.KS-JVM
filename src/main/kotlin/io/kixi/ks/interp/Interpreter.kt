@@ -99,6 +99,8 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         "Quantity"   to KSBuiltinType("Quantity"),
         "Version"    to KSBuiltinType("Version"),
         "Grid"       to KSBuiltinType("Grid"),
+        "Measure"    to KSBuiltinType("Measure"),
+        "Vector"     to KSBuiltinType("Vector"),
         "Coordinate" to KSBuiltinType("Coordinate"),
         "Blob"       to KSBuiltinType("Blob"),
         "NSID"       to KSBuiltinType("NSID"),
@@ -319,6 +321,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
 
             // --- Expressions: Ki Literals (expr) ---
             is GridLiteralExpr -> expr.evaluateGridLiteral(node)
+            is VectorLiteralExpr -> expr.evaluateVectorLiteral(node)
             is CoordinateLiteralExpr -> expr.evaluateCoordinateLiteral(node)
 
             // --- Expressions: Lambda ---

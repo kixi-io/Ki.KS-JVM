@@ -309,6 +309,24 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         return Grid<Any?>(width, height, data, storedType, nullable)
     }
 
+    /** `.vec<T> { … }`: each element a number, converted exactly to T (Ki.Core's [io.kixi.Vector.of]). */
+    internal fun evaluateVectorLiteral(expr: VectorLiteralExpr): Any {
+        val type = io.kixi.Type.forName(expr.typeParam.name)
+            ?: throw RuntimeError("Unknown vector type ${expr.typeParam.name}", expr.location)
+        val numbers = expr.elements.map { e ->
+            when (val v = interp.evaluate(e)) {
+                is Number -> v
+                null -> throw RuntimeError(".vec<${type.name}> cannot contain nil", e.location)
+                else -> throw RuntimeError(".vec<${type.name}> holds numbers, not ${ops.runtimeTypeName(v) ?: v.javaClass.simpleName}", e.location)
+            }
+        }
+        return try {
+            io.kixi.Vector.of(type, numbers)
+        } catch (x: IllegalArgumentException) {
+            throw RuntimeError(x.message ?: "Invalid vector", expr.location)
+        }
+    }
+
     /**
      * Evaluate the dimension form of a .grid literal:
      *
@@ -640,6 +658,8 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 is Map<*, *> -> ops.getMapMember(obj, member, location)
                 is Range<*> -> ops.getRangeMember(obj, member, location)
                 is Quantity<*> -> ops.getQuantityMember(obj, member, location)
+                is io.kixi.Measure -> ops.getMeasureMember(obj, member, location)
+                is io.kixi.Vector<*> -> ops.getVectorMember(obj, member, location)
                 is Version -> ops.getVersionMember(obj, member, location)
                 is Grid<*> -> ops.getGridMember(obj, member, location)
                 is Coordinate -> ops.getCoordinateMember(obj, member, location)
@@ -1021,6 +1041,13 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 }
                 obj[i]
             }
+            is io.kixi.Vector<*> -> {
+                val i = ops.toInt(index, expr.indices[0].location)
+                if (i < 0 || i >= obj.size) {
+                    throw IndexOutOfBoundsError(i, obj.size, expr.location)
+                }
+                obj[i]
+            }
             is Grid<*> -> {
                 // Grid single-index access with Coordinate or sheet notation string
                 when (index) {
@@ -1382,6 +1409,7 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
             BinaryOp.ELVIS -> left ?: right
 
             BinaryOp.COMBINE -> ops.evaluateCombine(left, right, expr.location)
+            BinaryOp.PLUS_MINUS -> ops.plusMinus(left, right, expr.location)
         }
     }
 
