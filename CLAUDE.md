@@ -1,9 +1,9 @@
 # Ki.KS-JVM — CLAUDE.md
 
-**Ki.KS (Ki Script)** — a JVM scripting language. Published as `io.kixi:Ki.KS-JVM` (currently `2.3.3`). Consumed by LabNexus as a live composite dependency. JDK 21.
+**Ki.KS (Ki Script)** — a JVM scripting language. Published as `io.kixi:Ki.KS-JVM` (version `2.4.0` in the build since 2026-10-28, `2.3.3` before). Consumed by LabNexus as a live composite dependency. JDK 21.
 
 ## Composite build
-This build includes `../Ki.Core-JVM` and `../Ki.KD-JVM` via `settings.gradle.kts`, so edits to them are live when building from here. It depends on them at `2.3.2` (`api`) — keep those versions published as the fallback for consumers without local checkouts.
+This build includes `../Ki.Core-JVM` and `../Ki.KD-JVM` via `settings.gradle.kts`, so edits to them are live when building from here. It depends on them as `api`, Ki.Core `2.5.0` and Ki.KD `2.4.0` (2026-10-28): publish those before or with this version, since they are the fallback for consumers without local checkouts.
 
 ## Build & run
 - App entry point is `AppKt`: `./gradlew run`
