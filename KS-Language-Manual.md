@@ -1236,10 +1236,11 @@ uncertainties, and a plain number counts as exact.
 ```
 (10±3) + (20±4)                   // 30.0±5.0
 (4±0.3) * 2                       // 8.0±0.6
-(20±0.5°C).value                  // 20
+(20±0.5°C).value                  // 20°C (a quantity)
 (20±0.5°C).uncertainty            // 0.5°C
 (10±0.5).relative                 // 0.05
 (5±1cm).unit                      // "cm"
+(20±0.5°C).to("°F")               // 68±0.9°F: the value as a reading, the uncertainty as a difference
 (1±0.1cm) == (10±1mm)             // true: the same amount
 (5±1) < (5±2)                     // true: central value, then uncertainty
 ```
@@ -1472,6 +1473,7 @@ element (`x (y)` would be a call). A number must fit the type exactly
 spectrum.size                     // 3
 spectrum[1]                       // 0.48
 spectrum.sum()  spectrum.mean()  spectrum.min()  spectrum.max()  spectrum.norm()
+                                  // sum and mean as Kotlin's and KQ's: Int sums are Long, Double sums round
 spectrum.dot(other)               // the dot product
 spectrum * 2                      // element by element; + and - take two vectors
 for x in spectrum { say x }
