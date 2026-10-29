@@ -182,7 +182,7 @@ class TypeBagTest : FunSpec({
 
         test("errors name what exists") {
             withSampleBags {
-                error("use ki.nope") shouldContain "No type bag 'nope' is loaded (loaded: "
+                error("use ki.nope") shouldContain "No type bag 'nope' is available (available: "
                 error("use ki.tb.nope") shouldContain "Bag 'tb' has no function or constant 'nope' (it has: answer, concat, revcomp)"
                 error("use ki.**") shouldContain "Use ki.<bag> or ki.<bag>.*"
                 error("use ki") shouldContain "Use ki.<bag>, ki.<bag>.* or ki.<bag>.<name>"
@@ -190,7 +190,7 @@ class TypeBagTest : FunSpec({
                 error("use ki.tb.*\nsay revcomp()") shouldContain "revcomp(...) takes 1 argument, not 0"
                 error("use ki.tb.revcomp\nsay answer") shouldContain "answer"
             }
-            error("use ki.tb") shouldContain "(no bags are loaded)"
+            error("use ki.tb") shouldContain "(no bags are available)"
         }
 
         test("bag functions report their own failures as KS errors") {
