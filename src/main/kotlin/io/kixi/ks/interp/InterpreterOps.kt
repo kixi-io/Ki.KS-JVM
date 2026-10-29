@@ -76,8 +76,17 @@ class InterpreterOps(internal val interp: Interpreter) {
         throw OverflowError(if (m.isBlank()) "Arithmetic overflow" else m)
     } catch (e: io.kixi.uom.IncompatibleUnitsException) {
         throw TypeError(e.message ?: what, null)
+    } catch (e: UndefinedUnitArithmeticException) {
+        throw TypeError(e.message ?: what, null)
     } catch (e: IllegalArgumentException) {
         throw TypeError(e.message ?: what, null)
+    }
+
+    /** Quantity × or ÷ quantity: a pair of dimensions with no product rule (`5mM * 2mM`) is a TypeError a script can catch. */
+    private inline fun <T> unitAlgebra(block: () -> T): T = try {
+        block()
+    } catch (e: UndefinedUnitArithmeticException) {
+        throw TypeError(e.message ?: "No defined result for these units", null)
     }
 
     /** A measure or vector on either side (design TB7); null when neither side is one. */
@@ -178,7 +187,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         // Delegates to UnitAlgebra; an undefined dimension pair throws
         // UndefinedUnitArithmeticException with a dimensional message.
         if (left is Quantity<*> && right is Quantity<*>) {
-            return UnitAlgebra.multiply(left, right)
+            return unitAlgebra { UnitAlgebra.multiply(left, right) }
         }
         // Quantity * Number (scalar multiplication)
         if (left is Quantity<*> && right is Number) {
@@ -199,7 +208,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         // Across dimensions a UnitAlgebra rule applies
         // (150mmol / 1\u2113 \u2192 150mM).
         if (left is Quantity<*> && right is Quantity<*>) {
-            val result = UnitAlgebra.divide(left, right)
+            val result = unitAlgebra { UnitAlgebra.divide(left, right) }
             return if (result.unit == KiUnit.ratio) result.value else result
         }
         // Quantity / Number (scalar division)
@@ -2174,12 +2183,28 @@ class InterpreterOps(internal val interp: Interpreter) {
      * - `value` -> the numeric value (Int, Long, Float, Double, or Dec)
      * - `unit` -> the unit symbol as a String (e.g., "cm", "kg", "USD")
      */
-    /** A measure's parts: `value`, `uncertainty`, `relative` (uncertainty / |value|, nil at 0), `unit` (its symbol, nil for a plain number). */
+    /**
+     * A measure's parts: `value`, `uncertainty`, `relative` (uncertainty / |value|, nil at 0),
+     * `unit` (its symbol, nil for a plain number), and `to("unit")` (also `convertTo`, as a
+     * quantity has it): the value converted as a reading, the uncertainty as a difference.
+     */
     internal fun getMeasureMember(m: io.kixi.Measure, member: String, location: SourceLocation?): Any? = when (member) {
         "value" -> m.value
         "uncertainty" -> m.uncertainty
         "relative" -> m.relative
         "unit" -> m.unit?.symbol
+        "to", "convertTo" -> NativeCallable(member) { args, loc ->
+            val target = when (val a = args.singleOrNull()) {
+                is String -> try {
+                    KiUnit.parse(a)
+                } catch (e: Exception) {
+                    throw RuntimeError("Unknown unit: '$a'", loc)
+                }
+                is KiUnit -> a
+                else -> throw TypeError("$member() takes one unit symbol, such as \"mm\"", loc)
+            }
+            tb7("Invalid measure conversion") { m.to(target) }
+        }
         else -> throw MemberNotFoundError(member, "Measure", location)
     }
 
