@@ -459,12 +459,22 @@ class Lexer(private val source: String) {
      * Disambiguation: If the suffix is exactly a bare number type marker
      * (L, f, F, d, D, BD, bd) with nothing following, it's a typed number.
      * Otherwise, the suffix is treated as a unit symbol (quantity literal).
-     * Examples: `42L` → Long, `42LT` → liters quantity, `23d` → Double,
-     * `23dC` → degrees Celsius quantity.
+     * Examples: `42L` → Long, `42.L` and `42LT` → liters quantity, `23d` →
+     * Double, `23dC` → degrees Celsius quantity.
      */
     private fun finishNumberWithSuffix(hasDecimalPoint: Boolean) {
         // --- Phase 1: Try to consume scientific notation ---
         val hasSciNotation = tryConsumeScientificNotation()
+
+        // `1.L`, `2.5.L`, `1e3.L`: a liter. `L` after a number is a Long (`42L`),
+        // so the liter's ASCII form puts a dot before the L; Ki.Core reads it as ℓ.
+        if (peek() == '.' && peekNext() == 'L' && !isAlphaNumeric(peekAt(current + 2))) {
+            advance() // .
+            advance() // L
+            tryConsumeQuantityTypeSpec()
+            addToken(TokenType.QUANTITY_LITERAL, currentText())
+            return
+        }
 
         // --- Phase 2: Check for unit suffix vs number type suffix ---
         val suffix = peekFullSuffix()
