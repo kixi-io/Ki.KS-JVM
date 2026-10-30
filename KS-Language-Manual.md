@@ -1142,6 +1142,7 @@ let area = 51.4m²
 let weight = 1000kg
 let temp = 25°C
 let volume = 97ℓ
+let flask = 1.L        // also a liter: 1L would be the Long 1, so a dot comes first
 ```
 
 ### Currency Quantities
@@ -1270,7 +1271,7 @@ let avogadro = 6.022ep23mol      // 6.022 × 10²³ mol
 
 **Area:** `nm²`, `mm²`, `cm²`, `m²`, `km²`
 
-**Volume:** `nm³`, `mm³`, `cm³`, `m³`, `km³`, `mℓ`, `ℓ`
+**Volume:** `nm³`, `mm³`, `cm³`, `m³`, `km³`, `mℓ`, `ℓ` (a liter is also written `1.L`, with a dot, or `1LT`; `mL` and `µL` work as typed)
 
 **Temperature:** `K`, `°C` (alias: `dC`)
 
