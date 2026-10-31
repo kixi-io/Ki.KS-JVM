@@ -45,6 +45,17 @@ sealed class ResolvedImport {
 
     /** A KS static member (function or variable from a static block). */
     data class KsStaticMember(val value: Any?) : ResolvedImport()
+
+    /**
+     * A declaration of a crate (`use lab.assays.proteinConc`). Its value is read
+     * on every use, so an imported crate `var` shows the crate's current state.
+     */
+    class CrateMember internal constructor(internal val declaration: CrateDeclaration) : ResolvedImport() {
+        /** The declaration's current value. */
+        val value: Any? get() = declaration.read()
+
+        override fun toString(): String = "CrateMember(${declaration.file.crate.name}.${declaration.name})"
+    }
 }
 
 // ============================================================================
@@ -555,9 +566,30 @@ private fun coerceNumeric(value: Any, target: Class<*>): Any? {
  *
  * Not thread-safe. Designed for single-threaded interpreter use.
  *
+ * ## Crates
+ *
+ * Where today's resolution finds nothing, a `use` path is looked up as a crate
+ * (see [Crate]): `use lab.assays.proteinConc` (one declaration, or several with
+ * commas, each with an optional `as`), `use lab.assays.*` (the crate's public
+ * names), `use lab.**` (the public names of crate `lab`, if there is one, and of
+ * every crate below it) and `use lab.assays` (the crate as a namespace,
+ * `assays.proteinConc(...)`). Everything that resolved before resolves the same
+ * way. A crate file has a registry of its own ([owner]), so its imports are
+ * visible only in that file.
+ *
  * @property runtime The runtime configuration (checked for hostLang flag)
+ * @property owner The crate file whose imports this registry holds, or null for
+ *     the interpreter's own (script) imports
  */
-class ImportRegistry(private val runtime: KSRuntime) {
+class ImportRegistry internal constructor(
+    private val runtime: KSRuntime,
+    internal val owner: CrateFileScope?
+) {
+    /** A registry for a script's imports. */
+    constructor(runtime: KSRuntime) : this(runtime, null)
+
+    /** Where crates are found; set by the interpreter (null: crates are not looked up). */
+    internal var crates: CrateRegistry? = null
 
     /** Direct imports: local name (or alias) → resolved target. */
     private val directImports = mutableMapOf<String, ResolvedImport>()
@@ -581,8 +613,11 @@ class ImportRegistry(private val runtime: KSRuntime) {
     /**
      * Process a [UseDecl] and register the import(s).
      *
-     * For direct imports, resolution is eager — failures throw [ImportError].
+     * For direct imports, resolution is eager: failures throw [ImportError].
      * For wildcard imports, the package path is stored for lazy resolution.
+     * Crates (see the class notes) are looked up where today's resolution finds
+     * nothing; a crate's names are bound when the `use` runs, and loading the
+     * crate may throw [CrateError].
      *
      * @param decl The parsed use declaration
      * @param ksClasses KS class registry (for KS type resolution)
@@ -611,6 +646,13 @@ class ImportRegistry(private val runtime: KSRuntime) {
         when (decl.wildcard) {
             UseWildcard.FLAT -> {
                 flatWildcards.add(packagePath)
+                crates?.find(packagePath, decl.location, owner)?.let { crate ->
+                    for (d in crate.declarations.values) {
+                        if (d.visibility == io.kixi.ks.parser.Visibility.PUBLIC) {
+                            directImports[d.name] = ResolvedImport.CrateMember(d)
+                        }
+                    }
+                }
                 if (runtime.debugMode) {
                     runtime.outputWriter.println("[DEBUG] use $packagePath.*")
                 }
@@ -621,6 +663,7 @@ class ImportRegistry(private val runtime: KSRuntime) {
                 if (runtime.hostLang) {
                     discoverSubpackages(packagePath)
                 }
+                crates?.let { bindCrateTree(it, packagePath, decl.location) }
                 if (runtime.debugMode) {
                     runtime.outputWriter.println("[DEBUG] use $packagePath.**")
                 }
@@ -634,7 +677,7 @@ class ImportRegistry(private val runtime: KSRuntime) {
                         packagePath, import.name,
                         ksClasses, ksStructs, ksTraits, ksEnums,
                         decl.location
-                    )
+                    ) ?: resolveCrateImport(decl.packagePath, import.name, decl.location)
 
                     if (resolved != null) {
                         directImports[localName] = resolved
@@ -693,6 +736,64 @@ class ImportRegistry(private val runtime: KSRuntime) {
             }
             else -> throw ImportError(shown, decl.location, suggestion = "Use ki.<bag>, ki.<bag>.* or ki.<bag>.<name>")
         }
+    }
+
+    /**
+     * Resolves `use <path>.<name>` against crates, after today's resolution found
+     * nothing: the declaration [name] of crate [path], or else crate `<path>.<name>`
+     * itself as a namespace. Returns null when neither crate exists, so the caller
+     * reports the import as before.
+     *
+     * @throws CrateError when the declaration is `internal` to another crate or
+     *     `private` to another file
+     * @throws ImportError when crate [path] exists but declares no [name]
+     */
+    private fun resolveCrateImport(path: List<String>, name: String, location: SourceLocation?): ResolvedImport? {
+        val crates = crates ?: return null
+        val crate = if (path.isEmpty()) null else crates.find(path.joinToString("."), location, owner)
+        if (crate != null) {
+            crate.declarations[name]?.let { d ->
+                if (d.visibility == io.kixi.ks.parser.Visibility.INTERNAL && owner?.crate !== crate) {
+                    throw CrateError("$name is internal to crate ${crate.name}", location, crate.name,
+                        suggestion = "Only files of crate ${crate.name} can use it")
+                }
+                return ResolvedImport.CrateMember(d)
+            }
+            crate.privates[name]?.let { ds ->
+                ds.firstOrNull { it.file === owner }?.let { return ResolvedImport.CrateMember(it) }
+                throw CrateError("$name is private to file ${ds.first().file.display}", location, crate.name,
+                    suggestion = "Only that file can use it")
+            }
+        }
+        crates.find((path + name).joinToString("."), location, owner)?.let { namespace ->
+            return ResolvedImport.KsStaticMember(CrateNamespace(namespace, owner?.crate))
+        }
+        if (crate == null) return null
+        throw ImportError("${crate.name}.$name", location,
+            suggestion = "Crate ${crate.name} has no public declaration '$name'" +
+                    crate.publicNames.let { if (it.isEmpty()) "" else it.joinToString(prefix = " (it has: ", postfix = ")") })
+    }
+
+    /**
+     * `use lab.**`: binds the public names of crate [base] (if there is one) and of
+     * every crate below it. One name declared by two crates is an error naming both.
+     */
+    private fun bindCrateTree(crates: CrateRegistry, base: String, location: SourceLocation?) {
+        val bound = LinkedHashMap<String, CrateDeclaration>()
+        for (crate in crates.under(base, location, owner)) {
+            for (d in crate.declarations.values) {
+                if (d.visibility != io.kixi.ks.parser.Visibility.PUBLIC) continue
+                bound[d.name]?.let { other ->
+                    throw CrateError(
+                        "use $base.**: ${d.name} is declared by both crate ${other.file.crate.name} and crate ${crate.name}",
+                        location, crate.name,
+                        suggestion = "Use the crates one at a time, or rename one with use ${crate.name}.${d.name} as ..."
+                    )
+                }
+                bound[d.name] = d
+            }
+        }
+        for ((name, d) in bound) directImports[name] = ResolvedImport.CrateMember(d)
     }
 
     /** The bags a script can use, active or not; naming them creates none. */

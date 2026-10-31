@@ -79,8 +79,22 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /** Native Ki.Core type registry — lazy-loaded constructors and static methods. */
     internal val nativeTypes = NativeTypeRegistry()
 
-    /** Import registry for `use` statement resolution. */
+    /** Import registry for `use` statement resolution (the script's; each crate file has its own). */
     internal val importRegistry = ImportRegistry(runtime)
+
+    /**
+     * The values the host bound with [define] before running anything, in a scope
+     * of their own: the outermost scope of crate code, which sees them but never
+     * the using script's declarations.
+     */
+    internal val hostScope = Environment(null, "host")
+
+    /** The crates this interpreter has loaded, and their loader. */
+    internal val crates = CrateRegistry(this)
+
+    init {
+        importRegistry.crates = crates
+    }
 
     /** Built-in type sentinels for reflective access (e.g. String.type). */
     internal val builtinTypes = mapOf(
@@ -169,10 +183,15 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     /**
      * Execute a parsed program.
      *
+     * A program that starts with a crate line (`crate lab.assays`) is a crate
+     * file: it holds declarations for scripts to `use` and is never run itself.
+     *
      * @param program The AST program to execute
      * @return The result of the last evaluated node
+     * @throws CrateError when [program] is a crate file
      */
     fun executeProgram(program: Program): Any? {
+        (program.body.firstOrNull() as? CrateDecl)?.let { throw crateFileRunError(it) }
         var result: Any? = null
         for (node in program.body) {
             result = evaluate(node)
@@ -206,6 +225,10 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * [io.kixi.ks.NativeFunction] is not enforced by the call evaluator;
      * the function validates its own arguments.
      *
+     * A value bound before anything runs (at the top level) is visible to
+     * crate code as well, so a crate can use what the host provides (a
+     * database, say) without the script passing it in.
+     *
      * ```kotlin
      * val interp = Interpreter(KSRuntime.PORTABLE)
      * interp.define("mw", NativeFunction("mw", 1) { args -> molarMass(args[0]) })
@@ -219,7 +242,28 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      */
     fun define(name: String, value: Any?) {
         environment.define(name, value, mutable = false)
+        // Bound at the top level: crate code sees it too (see hostScope).
+        if (environment.parent() == null) hostScope.define(name, value, mutable = false)
     }
+
+    /**
+     * The crate called [name] (`"lab.assays"`), loaded from [KSRuntime.crateRoots]
+     * on first use and cached, or null when no crate root holds it. For hosts and
+     * tools: a crate's [Crate.description], files and public names.
+     *
+     * @throws CrateError when the crate's files cannot be loaded
+     */
+    fun crate(name: String): Crate? = crates.find(name, null, null)
+
+    /** The crates this interpreter has loaded so far, in load order. */
+    val loadedCrates: List<Crate> get() = crates.all.toList()
+
+    /** The error for running a crate file as a script, whose first item is [line]. */
+    private fun crateFileRunError(line: CrateDecl) = CrateError(
+        "This file belongs to crate ${line.name}: a crate file holds declarations and is used from a script, not run",
+        line.location, line.name,
+        suggestion = "Run a script that says use ${line.name}.<name> (or use ${line.name}.*)"
+    )
 
     /**
      * Reset all import state. Called by REPL on `:reset`.
@@ -250,6 +294,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is UseDecl -> typeDecls.evaluateUseDecl(node)
             is ExtendDecl -> typeDecls.evaluateExtendDecl(node)
             is StaticBlock -> typeDecls.evaluateStaticBlock(node)
+            is CrateDecl -> throw crateFileRunError(node)
 
             // --- Statements (core) ---
             is SayStmt -> evaluateSay(node)
@@ -396,7 +441,9 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      *
      * This method is called by [KSFunctionCallable] and handles:
      * - Creating a new scope with the function's closure as parent
-     * - Binding parameters to arguments (positional and default values)
+     * - Binding parameters to arguments (positional and default values; defaults
+     *   are evaluated in the function's own scope, so a crate function's default
+     *   may name its crate's declarations)
      * - Executing the function body
      * - Handling return values
      *
@@ -429,7 +476,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         val functionEnv = function.closure.child("function:${function.name}")
 
         // Resolve arguments (named + positional + defaults), then bind
-        val resolved = resolveArguments(params, argNodes, arguments, function.name, location)
+        val resolved = resolveArguments(params, argNodes, arguments, function.name, location, function.closure)
         for (i in params.indices) {
             val param = params[i]
             val value = ops.copyIfStruct(resolved[i])
@@ -563,7 +610,8 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     /**
-     * Call a method on an object with proper `this` binding.
+     * Call a method on an object with proper `this` binding. Default values of
+     * its parameters are evaluated in the method's own scope.
      *
      * @param receiver The object the method is being called on
      * @param method The method to call
@@ -599,7 +647,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         methodEnv.define("this", receiver, mutable = false, location = location)
 
         // Resolve arguments (named + positional + defaults), then bind
-        val resolved = resolveArguments(params, argNodes, arguments, method.name, location)
+        val resolved = resolveArguments(params, argNodes, arguments, method.name, location, method.closure)
         for (i in params.indices) {
             val param = params[i]
             val value = resolved[i]
@@ -677,6 +725,10 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      *                 when [argNodes] is non-empty.
      * @param argNodes The argument AST nodes (carrying names); empty for
      *                 synthetic callers that only ever pass positional values.
+     * @param defaultScope The scope the callee was declared in, where default
+     *                 values are evaluated (so a crate function's default may
+     *                 name the crate's own declarations); null evaluates them
+     *                 in the caller's scope.
      * @return One resolved value per parameter, in declaration order.
      */
     internal fun resolveArguments(
@@ -684,14 +736,26 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         argNodes: List<Argument>,
         args: List<Any?>,
         calleeName: String,
-        location: SourceLocation?
+        location: SourceLocation?,
+        defaultScope: Environment? = null
     ): List<Any?> {
+        fun evaluateDefault(expr: Expr): Any? {
+            if (defaultScope == null) return evaluate(expr)
+            val previousEnv = environment
+            environment = defaultScope.child("defaults:$calleeName")
+            try {
+                return evaluate(expr)
+            } finally {
+                environment = previousEnv
+            }
+        }
+
         // Fast path: no named arguments — positional fill with defaults.
         if (argNodes.none { it.name != null }) {
             var idx = 0
             return params.map { param ->
                 if (idx < args.size) args[idx++]
-                else param.defaultValue?.let { evaluate(it) }
+                else param.defaultValue?.let { evaluateDefault(it) }
             }
         }
 
@@ -714,7 +778,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             when {
                 namedArgs.containsKey(param.name) -> namedArgs[param.name]
                 positionalIndex < positionalArgs.size -> positionalArgs[positionalIndex++]
-                param.defaultValue != null -> evaluate(param.defaultValue)
+                param.defaultValue != null -> evaluateDefault(param.defaultValue)
                 else -> throw ArityError(calleeName, params.size, args.size, location)
             }
         }
@@ -1029,7 +1093,12 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     /**
-     * Look up an identifier — could be a variable, function, class, enum, or trait.
+     * Look up an identifier: a variable, function, class, enum or trait, then an
+     * imported name.
+     *
+     * In crate code the script's type registries are skipped (crate code sees only
+     * its own scopes, the host's bindings and its file's imports), and a name that
+     * is private to another file of the crate is reported as such.
      */
     private fun lookupIdentifier(expr: IdentifierExpr): Any? {
         val name = expr.name
@@ -1044,17 +1113,21 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             return environment.getFunction(name, expr.location)
         }
 
-        // Try as a class
-        classes[name]?.let { return it }
+        // The script's type registries; crate code sees only its own scopes and imports
+        val fileScope = environment.fileScope
+        if (fileScope == null) {
+            // Try as a class
+            classes[name]?.let { return it }
 
-        // Try as a struct
-        structs[name]?.let { return it }
+            // Try as a struct
+            structs[name]?.let { return it }
 
-        // Try as an enum
-        enums[name]?.let { return it }
+            // Try as an enum
+            enums[name]?.let { return it }
 
-        // Try as a trait
-        traits[name]?.let { return it }
+            // Try as a trait
+            traits[name]?.let { return it }
+        }
 
         // If in a method context, try implicit 'this' property access
         if (environment.isDefined("this")) {
@@ -1089,14 +1162,52 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
         builtinTypes[name]?.let { return it }
 
         // Try imports (from `use` declarations)
-        if (importRegistry.hasImports()) {
-            val resolved = importRegistry.resolve(name)
+        val imports = currentImports()
+        if (imports.hasImports()) {
+            val resolved = imports.resolve(name)
             if (resolved != null) {
                 return resolvedImportToValue(resolved, expr.location)
             }
         }
 
+        if (fileScope != null) crates.checkPrivateElsewhere(fileScope, name, expr.location)
         throw UndefinedNameError(name, NameKind.VARIABLE, expr.location)
+    }
+
+    /**
+     * The imports in force where code is running: the crate file's own when
+     * crate code runs, else the script's.
+     */
+    internal fun currentImports(): ImportRegistry = environment.fileScope?.imports ?: importRegistry
+
+    /**
+     * The KS type ([KSClass], [KSTrait], [KSStruct] or [KSEnum]) that [name] names
+     * where code is running, or null: a type in scope, then (in a script) the type
+     * registries, then the imports, so an alias (`use lab.assays.Bradford as B`)
+     * names its type too. Supertypes, `extend` targets and `is` checks resolve
+     * through here, so crate types work without being registered globally.
+     *
+     * @throws CrateError when crate code names a type private to another file
+     */
+    internal fun lookupType(name: String): Any? {
+        if (environment.isDefined(name)) {
+            val value = environment.get(name)
+            if (value is KSClass || value is KSTrait || value is KSStruct || value is KSEnum) return value
+        }
+        val fileScope = environment.fileScope
+        if (fileScope == null) {
+            classes[name]?.let { return it }
+            traits[name]?.let { return it }
+            structs[name]?.let { return it }
+            enums[name]?.let { return it }
+        }
+        val imports = currentImports()
+        if (imports.hasImports()) {
+            val value = imports.resolve(name)?.let { resolvedImportToValue(it, null) }
+            if (value is KSClass || value is KSTrait || value is KSStruct || value is KSEnum) return value
+        }
+        if (fileScope != null) crates.checkPrivateElsewhere(fileScope, name, null)
+        return null
     }
 
     /**
@@ -1108,6 +1219,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * - JVM callables -> [JVMMethodProxy] (implements [Callable])
      * - KS types -> the existing KS type object (KSClass, KSStruct, etc.)
      * - KS static members -> the raw value
+     * - Crate declarations -> their current value (read on every use)
      */
     private fun resolvedImportToValue(resolved: ResolvedImport, location: SourceLocation?): Any? {
         return when (resolved) {
@@ -1119,6 +1231,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is ResolvedImport.KsTrait -> resolved.ksTrait
             is ResolvedImport.KsEnum -> resolved.ksEnum
             is ResolvedImport.KsStaticMember -> resolved.value
+            is ResolvedImport.CrateMember -> resolved.value
         }
     }
 

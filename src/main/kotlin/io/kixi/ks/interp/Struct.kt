@@ -79,6 +79,10 @@ class KSStruct(
         return traits.any { it.extendsTrait(trait) }
     }
 
+    /** True when this struct, or a trait it implements (transitively), is called [typeName]. */
+    fun hasTypeNamed(typeName: String): Boolean =
+        name == typeName || traits.any { it.isOrExtendsNamed(typeName) }
+
     override fun toString(): String = "struct $name"
 }
 

@@ -176,6 +176,21 @@ class KSClass(
     }
 
     /**
+     * True when this class, one of its superclasses, or a trait any of them
+     * implements (directly or through super-traits) is called [typeName]. Type
+     * checks match KS types by name, as `x is Dog` always has.
+     */
+    fun hasTypeNamed(typeName: String): Boolean {
+        var current: KSClass? = this
+        while (current != null) {
+            if (current.name == typeName) return true
+            if (current.traits.any { it.isOrExtendsNamed(typeName) }) return true
+            current = current.superclass
+        }
+        return false
+    }
+
+    /**
      * Check if this class implements a trait.
      */
     fun implementsTrait(trait: KSTrait): Boolean {
@@ -292,6 +307,10 @@ class KSTrait(
         }
         return false
     }
+
+    /** True when this trait or one of its super-traits (transitively) is called [typeName]. */
+    fun isOrExtendsNamed(typeName: String): Boolean =
+        name == typeName || superTraits.any { it.isOrExtendsNamed(typeName) }
 
     override fun toString(): String = "trait $name"
 }

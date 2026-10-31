@@ -60,6 +60,51 @@ data class Program(
 sealed interface Decl : Node
 
 /**
+ * Who may see a top-level declaration, written as a soft modifier before it
+ * (`private fun helper()`, `internal let LIMIT = 10`), with Kotlin's meaning:
+ *
+ * - [PUBLIC] (the default, no modifier): visible everywhere, and exported from a crate
+ *   by `use`.
+ * - [INTERNAL]: visible in every file of its crate, never from outside it.
+ * - [PRIVATE]: visible only in the file that declares it.
+ *
+ * The modifiers are enforced in crate files only. In an ordinary script they are
+ * accepted and have no effect, as in a Kotlin script. They apply to top-level
+ * declarations only (member visibility inside classes is not supported).
+ */
+enum class Visibility {
+    /** Visible everywhere; the default. */
+    PUBLIC,
+
+    /** Visible in every file of the declaring crate, never from outside it. */
+    INTERNAL,
+
+    /** Visible only in the declaring file. */
+    PRIVATE;
+
+    /** The modifier as written in source (`public` is never written). */
+    val keyword: String get() = name.lowercase()
+}
+
+/**
+ * The crate line, `crate lab.assays`, which makes a file part of a crate (a
+ * Kotlin-package-like namespace made of the `.ks` files in one folder under a
+ * crate root). It must be the file's first declaration; comments may precede it.
+ * `crate` is a soft keyword: only a statement-initial `crate` followed by a dotted
+ * name and the end of the statement is a crate line, so `crate` stays usable as an
+ * ordinary identifier.
+ *
+ * @property path The crate name's segments (`["lab", "assays"]`)
+ */
+data class CrateDecl(
+    val path: List<String>,
+    override val location: SourceLocation
+) : Decl {
+    /** The dotted crate name (`lab.assays`). */
+    val name: String get() = path.joinToString(".")
+}
+
+/**
  * Variable declaration.
  *
  *     var name = "Akiko"           // mutable, inferred type
@@ -67,6 +112,7 @@ sealed interface Decl : Node
  *     var height: Double = 68.0    // explicit type
  *     let score: Int > 0 = 100     // with constraint
  *     var item: String?            // nullable, no initializer
+ *     internal let LIMIT = 10      // visibility (top level only)
  */
 data class VarDecl(
     val name: String,
@@ -74,7 +120,9 @@ data class VarDecl(
     val typeAnnotation: TypeRef?,
     val constraint: Constraint?,
     val initializer: Expr?,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 /**
@@ -93,7 +141,9 @@ data class FunDecl(
     val body: Node?,                // null for abstract trait methods
     val isSingleExpr: Boolean,      // true for `= expr` form
     override val location: SourceLocation,
-    val isInfix: Boolean = false    // true for `infix fun` declarations
+    val isInfix: Boolean = false,   // true for `infix fun` declarations
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 /**
@@ -108,7 +158,9 @@ data class ClassDecl(
     val constructorParams: List<ConstructorParam>,
     val superTypes: List<TypeRef>,
     val members: List<Node>,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 /**
@@ -127,7 +179,9 @@ data class StructDecl(
     val constructorParams: List<ConstructorParam>,
     val traits: List<TypeRef>,          // traits only, no superclass
     val members: List<Node>,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 /**
@@ -142,7 +196,9 @@ data class TraitDecl(
     val name: String,
     val superTraits: List<TypeRef>,
     val members: List<Node>,
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 /**
@@ -159,7 +215,9 @@ data class EnumDecl(
     val constructorParams: List<ConstructorParam>,  // e.g. (code: Int, msg: String)
     val constants: List<EnumConstant>,
     val members: List<Node>,                 // methods, properties, static blocks
-    override val location: SourceLocation
+    override val location: SourceLocation,
+    /** The declaration's [Visibility]; enforced only in crate files. */
+    val visibility: Visibility = Visibility.PUBLIC
 ) : Decl
 
 // --- Use (Import) Declaration -----------------------------------------------

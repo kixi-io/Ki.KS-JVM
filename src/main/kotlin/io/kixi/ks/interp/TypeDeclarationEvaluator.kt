@@ -36,23 +36,33 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // Class Declarations & Instantiation
     // ========================================================================
 
+    /**
+     * True while crate code runs: its types stay in its crate's scopes and are
+     * not entered in the interpreter's (script) type registries, so crates never
+     * leak names into scripts or clash with each other.
+     */
+    private val inCrate: Boolean get() = interp.environment.fileScope != null
+
+    /**
+     * Declares a class: resolves its supertypes where it is declared
+     * ([Interpreter.lookupType]: scope, then registries, then imports), checks trait
+     * conformance, initializes its static members and binds it in the current
+     * scope. A script's class is also entered in the type registries; a crate's is
+     * not (see [inCrate]).
+     */
     internal fun evaluateClassDecl(decl: ClassDecl): Any? {
-        // Resolve superclass if specified
-        val superclass: KSClass? = if (decl.superTypes.isNotEmpty()) {
-            val superTypeName = decl.superTypes.first().name
-            interp.classes[superTypeName] ?: interp.traits[superTypeName]?.let { null }
-        } else {
-            null
-        }
+        // Resolve the supertypes where the class is declared (scope, registries, imports)
+        val superTypes = decl.superTypes.map { interp.lookupType(it.name) }
+
+        // The superclass, if the first supertype is a class
+        val superclass: KSClass? = superTypes.firstOrNull() as? KSClass
 
         // Resolve traits
-        val implementedTraits = decl.superTypes.mapNotNull { typeRef ->
-            interp.traits[typeRef.name]
-        }
+        val implementedTraits = superTypes.filterIsInstance<KSTrait>()
 
         // Create class
         val ksClass = KSClass(decl, superclass, implementedTraits, interp.environment)
-        interp.classes[decl.name] = ksClass
+        if (!inCrate) interp.classes[decl.name] = ksClass
 
         // Warn if class declares members that shadow reserved reflection properties
         ops.warnReservedMemberNames(decl.name, decl.members, decl.constructorParams, decl.location)
@@ -129,7 +139,10 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     }
 
     /**
-     * Create a new instance of a class.
+     * Create a new instance of a class. Constructor defaults and body property
+     * initializers are evaluated in the scope each class was declared in (with
+     * `this` bound), not the caller's, so a crate class built from a script still
+     * sees its crate's declarations.
      */
     internal fun instantiateClass(
         ksClass: KSClass,
@@ -148,7 +161,7 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         // to Parameter for the resolution (only name + default are consulted).
         val resolved = interp.resolveArguments(
             params.map { Parameter(it.name, it.type, it.defaultValue, it.constraint, it.location) },
-            argNodes, args, ksClass.name, location
+            argNodes, args, ksClass.name, location, ksClass.closure
         )
 
         for ((i, param) in params.withIndex()) {
@@ -169,15 +182,17 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
             }
         }
 
-        // Initialize instance properties from class body (including superclasses)
+        // Initialize instance properties from class body (including superclasses).
+        // Each class's initializers run in the scope it was declared in, with
+        // `this` bound, so a crate class constructed from a script still sees its
+        // crate's declarations.
         val previousEnv = interp.environment
-        val instanceEnv = interp.environment.child("instance:${ksClass.name}")
-        instanceEnv.define("this", obj, mutable = false, location = location)
-        interp.environment = instanceEnv
 
         try {
             // Initialize superclass body properties first (walk up chain)
-            initSuperclassBodyProperties(ksClass.superclass, obj)
+            initSuperclassBodyProperties(ksClass.superclass, obj, location)
+
+            interp.environment = instanceScope(ksClass.closure, ksClass.name, obj, location)
 
             // Then current class body properties
             for (property in ksClass.getInstanceProperties()) {
@@ -211,16 +226,21 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
      * during constructor argument processing. This method only handles properties
      * declared in the class body (e.g., `var greeting = "Hello"`).
      *
+     * Each superclass's initializers run in the scope that superclass was declared
+     * in; the caller restores the interpreter's scope.
+     *
      * @param superclass The superclass to process, or null to stop recursion
      * @param obj The instance being constructed
+     * @param location The construction site, for the `this` binding
      */
-    private fun initSuperclassBodyProperties(superclass: KSClass?, obj: KSObject) {
+    private fun initSuperclassBodyProperties(superclass: KSClass?, obj: KSObject, location: SourceLocation?) {
         if (superclass == null) return
 
         // Process grandparent first (so properties initialize top-down)
-        initSuperclassBodyProperties(superclass.superclass, obj)
+        initSuperclassBodyProperties(superclass.superclass, obj, location)
 
-        // Initialize this superclass's body-declared properties
+        // Initialize this superclass's body-declared properties, in its own scope
+        interp.environment = instanceScope(superclass.closure, superclass.name, obj, location)
         for (property in superclass.getInstanceProperties()) {
             if (!obj.hasProperty(property.name)) {
                 val value = property.initializer?.let { interp.evaluate(it) }
@@ -235,18 +255,32 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         }
     }
 
+    /**
+     * The scope a type's instance property initializers run in: below [closure],
+     * where the type was declared, with `this` bound to [instance].
+     */
+    private fun instanceScope(closure: Environment, typeName: String, instance: Any, location: SourceLocation?): Environment {
+        val scope = closure.child("instance:$typeName")
+        scope.define("this", instance, mutable = false, location = location)
+        return scope
+    }
+
     // ========================================================================
     // Trait Declarations
     // ========================================================================
 
+    /**
+     * Declares a trait, resolving its super-traits where it is declared, and binds
+     * it in the current scope (and, for a script, the trait registry).
+     */
     internal fun evaluateTraitDecl(decl: TraitDecl): Any? {
         // Resolve super traits
         val superTraits = decl.superTraits.mapNotNull { typeRef ->
-            interp.traits[typeRef.name]
+            interp.lookupType(typeRef.name) as? KSTrait
         }
 
         val ksTrait = KSTrait(decl, superTraits, interp.environment)
-        interp.traits[decl.name] = ksTrait
+        if (!inCrate) interp.traits[decl.name] = ksTrait
 
         // Make trait available in environment
         interp.environment.define(decl.name, ksTrait, mutable = false, location = decl.location)
@@ -258,23 +292,27 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // Struct Declarations & Instantiation
     // ========================================================================
 
+    /**
+     * Declares a struct, resolving its traits where it is declared (a class among
+     * them is an error), and binds it in the current scope (and, for a script, the
+     * struct registry).
+     */
     internal fun evaluateStructDecl(decl: StructDecl): Any? {
         // Resolve traits (structs can only implement traits, no superclass)
         val implementedTraits = decl.traits.mapNotNull { typeRef ->
-            interp.traits[typeRef.name] ?: run {
-                // Check if it's a class -- structs can't extend classes
-                if (interp.classes.containsKey(typeRef.name)) {
-                    throw RuntimeError(
-                        "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
-                        decl.location
-                    )
-                }
-                null
+            when (val type = interp.lookupType(typeRef.name)) {
+                is KSTrait -> type
+                // Structs can't extend classes
+                is KSClass -> throw RuntimeError(
+                    "Struct '${decl.name}' cannot extend class '${typeRef.name}'. Structs can only implement traits.",
+                    decl.location
+                )
+                else -> null
             }
         }
 
         val ksStruct = KSStruct(decl, implementedTraits, interp.environment)
-        interp.structs[decl.name] = ksStruct
+        if (!inCrate) interp.structs[decl.name] = ksStruct
 
         // Warn if struct declares members that shadow reserved reflection properties
         ops.warnReservedMemberNames(decl.name, decl.members, decl.constructorParams, decl.location)
@@ -330,7 +368,8 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     }
 
     /**
-     * Create a new instance of a struct.
+     * Create a new instance of a struct. Constructor defaults and body property
+     * initializers are evaluated in the scope the struct was declared in.
      */
     internal fun instantiateStruct(
         ksStruct: KSStruct,
@@ -348,7 +387,7 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         // to Parameter for the resolution (only name + default are consulted).
         val resolved = interp.resolveArguments(
             params.map { Parameter(it.name, it.type, it.defaultValue, it.constraint, it.location) },
-            argNodes, args, ksStruct.name, location
+            argNodes, args, ksStruct.name, location, ksStruct.closure
         )
 
         for ((i, param) in params.withIndex()) {
@@ -369,11 +408,9 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
             }
         }
 
-        // Initialize instance properties from struct body
+        // Initialize instance properties from struct body, in the scope the struct was declared in
         val previousEnv = interp.environment
-        val instanceEnv = interp.environment.child("instance:${ksStruct.name}")
-        instanceEnv.define("this", instance, mutable = false, location = location)
-        interp.environment = instanceEnv
+        interp.environment = instanceScope(ksStruct.closure, ksStruct.name, instance, location)
 
         try {
             for (property in ksStruct.getInstanceProperties()) {
@@ -394,7 +431,8 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     }
 
     /**
-     * Call a method on a struct instance with proper `this` binding.
+     * Call a method on a struct instance with proper `this` binding. Default values
+     * of its parameters are evaluated in the method's own scope.
      */
     internal fun callStructMethod(
         receiver: KSStructInstance,
@@ -418,7 +456,7 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         val methodEnv = method.closure.child("method:${method.name}")
         methodEnv.define("this", receiver, mutable = false, location = location)
 
-        val resolved = interp.resolveArguments(params, argNodes, arguments, method.name, location)
+        val resolved = interp.resolveArguments(params, argNodes, arguments, method.name, location, method.closure)
         for (i in params.indices) {
             val param = params[i]
             val value = ops.copyIfStruct(resolved[i])
@@ -525,9 +563,16 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // Enum Declarations
     // ========================================================================
 
+    /**
+     * Declares an enum: its constants and members, bound in the current scope. A
+     * script's enum is entered in the enum registry; a crate's is recorded with its
+     * crate, for `.CONSTANT` resolution.
+     */
     internal fun evaluateEnumDecl(decl: EnumDecl): Any? {
         val ksEnum = KSEnum(decl, interp.environment)
-        interp.enums[decl.name] = ksEnum
+        val fileScope = interp.environment.fileScope
+        if (fileScope == null) interp.enums[decl.name] = ksEnum
+        else interp.crates.registerEnum(fileScope.crate, ksEnum)
 
         // Initialize enum constants
         for ((index, constant) in decl.constants.withIndex()) {
@@ -599,7 +644,8 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
      * Resolution order:
      * 1. Current enum context (from when expression subject)
      * 2. Infer from assignment target type annotation
-     * 3. Search all enums for a matching constant
+     * 3. Search all enums for a matching constant: the script's (not from crate
+     *    code), then those of loaded crates, the running crate's first
      */
     internal fun evaluateDPEC(expr: DPECExpr): Any? {
         val constantName = expr.name
@@ -610,9 +656,13 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         }
 
         // Search all enums for the constant
-        for ((_, enum) in interp.enums) {
-            enum.getConstant(constantName)?.let { return it }
+        val fileScope = interp.environment.fileScope
+        if (fileScope == null) {
+            for ((_, enum) in interp.enums) {
+                enum.getConstant(constantName)?.let { return it }
+            }
         }
+        interp.crates.enumConstant(constantName, fileScope?.crate)?.let { return it }
 
         throw UndefinedNameError(constantName, NameKind.ENUM_CONSTANT, expr.location)
     }
@@ -631,16 +681,22 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
      * - Static member imports (e.g. `use Version.parse`)
      * - KS type imports (class, struct, trait, enum)
      * - JVM class imports (when hostLang=true)
+     * - Crate declarations and namespaces (see [Crate])
+     *
+     * In crate code the `use` goes into the crate file's own imports, and the
+     * script's type registries are not consulted (crate code never sees them).
      *
      * @throws ImportError if a direct import cannot be resolved
      */
     internal fun evaluateUseDecl(decl: UseDecl): Any? {
-        interp.importRegistry.processUseDecl(
+        val registry = interp.currentImports()
+        val script = registry.owner == null
+        registry.processUseDecl(
             decl,
-            ksClasses = interp.classes,
-            ksStructs = interp.structs,
-            ksTraits = interp.traits,
-            ksEnums = interp.enums
+            ksClasses = if (script) interp.classes else emptyMap(),
+            ksStructs = if (script) interp.structs else emptyMap(),
+            ksTraits = if (script) interp.traits else emptyMap(),
+            ksEnums = if (script) interp.enums else emptyMap()
         )
         return null
     }
@@ -649,12 +705,20 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // Extend Declarations
     // ========================================================================
 
+    /**
+     * Applies `extend Type { ... }` (or `extend trait Name { ... }`): adds the
+     * methods to the class, struct or trait the name stands for where the `extend`
+     * is written ([Interpreter.lookupType]), so a crate type imported by a script
+     * can be extended too.
+     */
     internal fun evaluateExtendDecl(decl: ExtendDecl): Any? {
         val targetName = decl.target.name
 
+        val target = interp.lookupType(targetName)
+
         if (decl.isTraitExtension) {
             // extend trait Foo { fun bar() = ... }
-            val trait = interp.traits[targetName]
+            val trait = target as? KSTrait
                 ?: throw RuntimeError("Cannot extend unknown trait '$targetName'", decl.location)
 
             for (member in decl.members) {
@@ -672,8 +736,8 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
         } else {
             // extend Point { fun distance() = ... }
             // Resolve target: class, struct, or trait
-            val ksClass = interp.classes[targetName]
-            val ksStruct = interp.structs[targetName]
+            val ksClass = target as? KSClass
+            val ksStruct = target as? KSStruct
 
             if (ksClass == null && ksStruct == null) {
                 throw RuntimeError("Cannot extend unknown type '$targetName'", decl.location)

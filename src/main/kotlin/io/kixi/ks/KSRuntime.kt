@@ -129,7 +129,22 @@ data class KSRuntime(
      * - Include more detailed stack traces
      * - Perform additional validation checks
      */
-    val debugMode: Boolean = false
+    val debugMode: Boolean = false,
+
+    /**
+     * The folders crates are found under, searched in order.
+     *
+     * Crate `lab.assays` is the `.ks` files directly in `<root>/lab/assays/` whose
+     * first line is `crate lab.assays`; the first root whose folder holds such a
+     * file (or a `crate-info.ks`) provides the crate. The default is the JVM's
+     * current directory. A host sets its own folders here, e.g. LabNexus its KS
+     * scripts folder:
+     *
+     * ```kotlin
+     * val runtime = KSRuntime(crateRoots = listOf(scriptsFolder))
+     * ```
+     */
+    val crateRoots: List<java.nio.file.Path> = listOf(java.nio.file.Path.of(""))
 ) {
     companion object {
         /**
@@ -270,6 +285,9 @@ data class KSRuntime(
     fun withColorOutput(enabled: Boolean) = copy(colorOutput = enabled)
     fun withMaxRecursion(depth: Int) = copy(maxRecursionDepth = depth)
     fun withMaxIterations(iterations: Long) = copy(maxLoopIterations = iterations)
+
+    /** This runtime with [roots] as its [crateRoots]. */
+    fun withCrateRoots(vararg roots: java.nio.file.Path) = copy(crateRoots = roots.toList())
 }
 
 // ============================================================================

@@ -987,6 +987,9 @@ class InterpreterOps(internal val interp: Interpreter) {
      *   - Value is null (handled separately by [checkNullSafety])
      *   - Type is `Any` or `Any?` (accepts all values)
      *
+     * A KS class, struct or enum value is accepted when [checkType] accepts it
+     * (its own type, a supertype or trait, or an alias of one).
+     *
      * @param name Variable/parameter name for error messages
      * @param value The value being assigned
      * @param type The declared type annotation (null = no annotation)
@@ -1000,6 +1003,17 @@ class InterpreterOps(internal val interp: Interpreter) {
 
         val actualType = runtimeTypeName(value)
         if (actualType == null) return        // unknown type -- skip check
+
+        // A KS type's instance is checked by checkType: accepted when it is of the
+        // type the name stands for here, and refused, without the name comparison
+        // below, when the name does stand for a type here (another crate's type of
+        // the same name is not this one)
+        if (value is KSObject || value is KSStructInstance || value is KSEnumConstant) {
+            if (checkType(value, type)) return
+            if (interp.lookupType(type.name) != null) throw TypeError(
+                "Cannot assign ${actualType} value to '${name}' of type '${type.name}'", location
+            )
+        }
 
         if (!isTypeCompatible(actualType, type.name)) {
             throw TypeError(
@@ -1050,8 +1064,55 @@ class InterpreterOps(internal val interp: Interpreter) {
     // Type Operations
     // ========================================================================
 
+    /**
+     * True when [value], a KS class, struct or enum value, is of the KS type
+     * called [typeName] where the check runs: the type that name stands for
+     * there ([Interpreter.lookupType], an import alias such as
+     * `use lab.assays.Bradford as B` included), compared by identity, so two
+     * crates' types of one name stay apart; a subclass or an implemented trait
+     * counts. Only a name that stands for no type there falls back to matching
+     * by name along the value's own hierarchy, as type checks did before crates.
+     */
+    private fun isOfKsType(value: Any, typeName: String): Boolean {
+        val named = interp.lookupType(typeName)
+        return when (value) {
+            is KSObject -> when (named) {
+                is KSClass -> value.klass.isSubclassOf(named)
+                is KSTrait -> value.klass.implementsTrait(named)
+                null -> value.klass.hasTypeNamed(typeName)
+                else -> false
+            }
+            is KSStructInstance -> when (named) {
+                is KSStruct -> value.struct === named
+                is KSTrait -> value.struct.implementsTrait(named)
+                null -> value.struct.hasTypeNamed(typeName)
+                else -> false
+            }
+            is KSEnumConstant -> when (named) {
+                is KSEnum -> value.enum === named
+                null -> value.enum.name == typeName
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * True when [value] is of [type] (`value is Type`). Built-in and type bag types
+     * match by their runtime class; a KS class, struct or enum value matches by name
+     * along its own hierarchy (its class, superclasses and traits), then by the type
+     * the name stands for where the check runs ([Interpreter.lookupType]), so crate
+     * types and import aliases are recognized.
+     */
     internal fun checkType(value: Any?, type: TypeRef): Boolean {
         if (value == null) return type.nullable
+
+        // A KS class, struct or enum value is only ever of a KS type (or Any), so it
+        // is checked as one before the built-in names: a user class may be called
+        // Tag or Version without the built-in type of that name answering for it.
+        if (value is KSObject || value is KSStructInstance || value is KSEnumConstant) {
+            return type.name == "Any" || isOfKsType(value, type.name)
+        }
 
         return when (type.name) {
             "Int" -> value is Int
@@ -1085,24 +1146,6 @@ class InterpreterOps(internal val interp: Interpreter) {
                 // Check user-defined types
                 when (value) {
                     is Throwable -> throwableIs(value, type.name)
-                    is KSObject -> {
-                        // Direct class name match or subclass
-                        if (value.klass.name == type.name) return true
-                        interp.classes[type.name]?.let { return value.klass.isSubclassOf(it) }
-                        // Trait conformance check
-                        val trait = interp.traits[type.name]
-                        if (trait != null) return value.klass.implementsTrait(trait)
-                        false
-                    }
-                    is KSStructInstance -> {
-                        // Direct struct name match
-                        if (value.struct.name == type.name) return true
-                        // Trait conformance check
-                        val trait = interp.traits[type.name]
-                        if (trait != null) return value.struct.implementsTrait(trait)
-                        false
-                    }
-                    is KSEnumConstant -> value.enum.name == type.name
                     // A literal kept without its type bag (from KD or RevDB): `x is ExtLiteral`.
                     is io.kixi.types.ExtLiteral -> type.name == "ExtLiteral"
                     // A type bag's type (io.kixi.types): `x is DNA`, `let s: DNA`.

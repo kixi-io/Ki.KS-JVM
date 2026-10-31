@@ -48,6 +48,25 @@ class Environment(
     val name: String = "scope"
 ) {
     /**
+     * The crate file this scope belongs to, or null outside crate code. Set on a
+     * crate file's own scope by the crate loader and inherited by every scope
+     * created below it (function bodies, blocks, class statics), so code from a
+     * crate file finds its file's imports and crate in O(1) wherever it runs.
+     */
+    internal var fileScope: CrateFileScope? = parent?.fileScope
+
+    /**
+     * A binding's value that is computed when first read: a crate's `let`, `var`
+     * and type declarations while the crate loads, so files may refer to each other
+     * in any order. [force] computes the value, stores it with [initialize] and
+     * returns it; it reports an initialization cycle itself.
+     */
+    internal interface Deferred {
+        /** Computes, stores and returns the binding's value. */
+        fun force(): Any?
+    }
+
+    /**
      * Metadata for a variable binding.
      */
     private data class Binding(
@@ -96,7 +115,8 @@ class Environment(
     /**
      * Get the value of a variable.
      *
-     * Searches this scope and all ancestor scopes.
+     * Searches this scope and all ancestor scopes. A [Deferred] value (a crate
+     * declaration not computed yet) is computed first.
      *
      * @param name Variable name
      * @param location Source location for error reporting
@@ -105,8 +125,20 @@ class Environment(
      */
     fun get(name: String, location: SourceLocation? = null): Any? {
         val binding = resolve(name)
-        if (binding != null) return binding.value
+        if (binding != null) {
+            val value = binding.value
+            return if (value is Deferred) value.force() else value
+        }
         throw UndefinedNameError(name, NameKind.VARIABLE, location)
+    }
+
+    /**
+     * Sets the value of [name], which this scope itself defines, regardless of
+     * mutability: the crate loader stores a declaration's value here once its
+     * [Deferred] placeholder has been computed.
+     */
+    internal fun initialize(name: String, value: Any?) {
+        bindings[name]?.value = value
     }
 
     /**
@@ -129,7 +161,8 @@ class Environment(
      * Assign a new value to an existing variable.
      *
      * Searches this scope and all ancestor scopes. The assignment happens
-     * in the scope where the variable was defined.
+     * in the scope where the variable was defined. A [Deferred] value is
+     * computed before it is replaced, so its initializer still runs.
      *
      * @param name Variable name
      * @param value New value
@@ -148,6 +181,9 @@ class Environment(
             throw ImmutableAssignmentError(name, location)
         }
 
+        // A crate `var` assigned before its initializer ran: run it first, so its
+        // effects and any initialization cycle are not skipped.
+        (binding.value as? Deferred)?.force()
         binding.value = value
     }
 

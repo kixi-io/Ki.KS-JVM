@@ -483,6 +483,25 @@ class ImportError(
     suggestion = suggestion
 )
 
+/**
+ * Thrown when a crate cannot be loaded or used as written: a crate file holding
+ * a statement, a crate line that disagrees with its folder, two crates using each
+ * other, an initialization cycle, a name `use` may not reach because it is
+ * `internal` or `private`, or a crate file run as a script.
+ *
+ * The message names the file (and the [location] its line) where one is involved,
+ * since a crate's errors surface while running the script that uses it.
+ *
+ * @param crate The crate involved (`lab.assays`), when one is known
+ */
+class CrateError(
+    message: String,
+    location: SourceLocation? = null,
+    val crate: String? = null,
+    suggestion: String? = null,
+    cause: Throwable? = null
+) : RuntimeError(message, location, cause, suggestion)
+
 // ============================================================================
 // Utility
 // ============================================================================

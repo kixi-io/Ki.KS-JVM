@@ -528,6 +528,12 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
     // Member & Index Access
     // ========================================================================
 
+    /**
+     * Evaluates `obj.member`: KS types and instances through the KS runtime, a crate
+     * namespace (`use lab.assays`, then `assays.proteinConc`) through its crate's
+     * visible declarations, and everything else through curated dispatch with the
+     * JVM reflection backstop.
+     */
     internal fun evaluateMemberAccess(expr: MemberAccessExpr): Any? {
         val obj = interp.evaluate(expr.obj)
 
@@ -616,6 +622,9 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
             is JVMMethodProxy -> throw MemberNotFoundError(
                 expr.member, "JVM method ${obj.name}", expr.location
             )
+
+            // A crate bound as a namespace (`use lab.assays`): its declarations, never reflection
+            is CrateNamespace -> obj.member(expr.member, expr.location)
 
             // Built-in, native, and any JVM types — curated dispatch with
             // universal JVM reflection backstop (hostLang=true only)

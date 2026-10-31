@@ -84,7 +84,7 @@ class Parser(private val tokens: List<Token>) {
         skipSeparators()
 
         while (!isAtEnd()) {
-            body.add(parseItem())
+            body.add(parseItem(topLevel = true, first = body.isEmpty()))
             skipSeparators()
         }
 
@@ -102,8 +102,29 @@ class Parser(private val tokens: List<Token>) {
      * block bodies. The same constructs are syntactically valid everywhere;
      * semantic analysis (a later phase) enforces scoping rules (e.g. `use`
      * only at top level, `return` only inside functions).
+     *
+     * Two soft keywords are recognized here, since they are identifiers
+     * everywhere else: the crate line (`crate lab.assays`, see [CrateDecl]) and
+     * the visibility modifiers `private` and `internal` before a declaration
+     * keyword (see [Visibility]). Both are allowed only at the top level, and the
+     * crate line only as the file's first item.
+     *
+     * @param topLevel True for an item of the file itself, false inside a block
+     * @param first True for the file's first item (where a crate line may stand)
      */
-    internal fun parseItem(): Node {
+    internal fun parseItem(topLevel: Boolean = false, first: Boolean = false): Node {
+        if (peek().type == IDENTIFIER) {
+            when (peek().value) {
+                "crate" -> if (isCrateLine()) return parseCrateDecl(topLevel, first)
+                "private", "internal" -> {
+                    val next = peekNext().type
+                    if (next in MODIFIABLE_DECLARATIONS) return parseModifiedDecl(topLevel)
+                    if (next == EXTEND || next == USE || next == STATIC) {
+                        throw errorAt(peek(), "'${peek().value}' applies to fun, class, struct, trait, enum, let and var, not ${peekNext().value}")
+                    }
+                }
+            }
+        }
         return when (peek().type) {
             // --- Declarations ---
             VAR, LET  -> decl.parseVarDecl()
@@ -141,6 +162,83 @@ class Parser(private val tokens: List<Token>) {
                 val expression = expr.parseExpression()
                 ExprStmt(expression, expression.location)
             }
+        }
+    }
+
+    // ====================================================================
+    // Crate Line and Visibility Modifiers (soft keywords)
+    // ====================================================================
+
+    /**
+     * True when the current `crate` identifier starts a crate line: `crate`, then
+     * a dotted name written without spaces around its dots (`lab.assays`), then
+     * the end of the statement (a newline, `;` or the end of the file). Anything
+     * else (`crate.size`, `crate = 5`, an infix call such as `crate add other`) is
+     * an ordinary expression. [io.kixi.ks.interp.CrateLine.detect] reads the same
+     * shape from a file's text.
+     */
+    private fun isCrateLine(): Boolean {
+        if (peekAt(1).type != IDENTIFIER) return false
+        var i = 2
+        while (peekAt(i).type == DOT) {
+            val dot = peekAt(i)
+            val segment = peekAt(i + 1)
+            if (!adjacent(peekAt(i - 1), dot) || !adjacent(dot, segment)) return false
+            if (segment.type != IDENTIFIER && segment.type !in TokenType.KEYWORDS.values) return false
+            i += 2
+        }
+        val end = peekAt(i).type
+        return end == NEWLINE || end == SEMICOLON || end == EOF
+    }
+
+    /** True when [b] starts right where [a] ends in the source (no space between them). */
+    private fun adjacent(a: Token, b: Token): Boolean =
+        a.location.offset + a.value.length == b.location.offset
+
+    /**
+     * Parses the crate line `crate a.b.c` (see [CrateDecl]). It must be the
+     * file's first item: anywhere else is an error.
+     */
+    private fun parseCrateDecl(topLevel: Boolean, first: Boolean): CrateDecl {
+        val start = peek()
+        if (!topLevel || !first) {
+            throw ParseException(
+                "The crate line must be the first declaration of the file (only comments may precede it)",
+                start.location
+            )
+        }
+        advance() // crate
+        val path = mutableListOf(advance().value)
+        while (check(DOT)) {
+            advance()
+            path.add(advance().value)
+        }
+        return CrateDecl(path, start.location)
+    }
+
+    /**
+     * Parses `private` or `internal` and the declaration it modifies, returning
+     * the declaration with its [Visibility] set. Only top-level declarations take
+     * a modifier; member visibility inside classes is not supported.
+     */
+    private fun parseModifiedDecl(topLevel: Boolean): Node {
+        val modifier = advance()
+        if (!topLevel) {
+            throw ParseException(
+                "'${modifier.value}' applies to top-level declarations only (member visibility is not supported)",
+                modifier.location
+            )
+        }
+        val visibility = if (modifier.value == "private") Visibility.PRIVATE else Visibility.INTERNAL
+        return when (peek().type) {
+            VAR, LET -> decl.parseVarDecl().copy(visibility = visibility)
+            FUN      -> decl.parseFunDecl().copy(visibility = visibility)
+            INFIX    -> decl.parseInfixFunDecl().copy(visibility = visibility)
+            CLASS    -> decl.parseClassDecl().copy(visibility = visibility)
+            STRUCT   -> decl.parseStructDecl().copy(visibility = visibility)
+            TRAIT    -> decl.parseTraitDecl().copy(visibility = visibility)
+            ENUM     -> decl.parseEnumDecl().copy(visibility = visibility)
+            else     -> error("Expected a declaration after '${modifier.value}'")
         }
     }
 
@@ -319,6 +417,10 @@ class Parser(private val tokens: List<Token>) {
             // Literal keywords (e.g. obj.true — rare but legal)
             TRUE, FALSE, NIL,
         )
+
+        /** Declaration keywords a `private` or `internal` modifier may precede. */
+        private val MODIFIABLE_DECLARATIONS: Set<TokenType> =
+            setOf(VAR, LET, FUN, INFIX, CLASS, STRUCT, TRAIT, ENUM)
     }
 
     // ====================================================================
