@@ -1133,7 +1133,7 @@ class InterpreterOps(internal val interp: Interpreter) {
         // IncompatibleUnitsException propagates naturally for mismatched
         // dimensions (e.g. 5cm as kg)
         if (value is Quantity<*>) {
-            val targetUnit = KiUnit.getUnit(type.name)
+            val targetUnit = KiUnit.getStandaloneUnit(type.name)
             if (targetUnit != null) {
                 @Suppress("UNCHECKED_CAST")
                 return (value as Quantity<KiUnit>).convertTo(targetUnit)

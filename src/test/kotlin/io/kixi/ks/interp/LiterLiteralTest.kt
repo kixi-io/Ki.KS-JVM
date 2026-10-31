@@ -49,6 +49,15 @@ class LiterLiteralTest : FunSpec({
         eval("1.5M * 2.L").toString() shouldBe "3mol"
     }
 
+    test("a conversion target may be a plain L, since no number precedes it") {
+        eval("2500mL as L").toString() shouldBe "2.5ℓ"
+        eval("(1.L + 500mL) as L").toString() shouldBe "1.5ℓ"
+        eval("2.L as mL").toString() shouldBe "2000mℓ"
+        eval("(750mL).convertTo(\"L\")").toString() shouldBe "0.75ℓ"
+        eval("Quantity(5, \"L\") == 5.L") shouldBe true
+        eval("(500±5mL).to(\"L\")") shouldBe Measure.parse("0.5±0.005ℓ")
+    }
+
     test("1L stays a Long and 1..L a range") {
         eval("1L") shouldBe 1L
         eval("let L = 3\n(1..L).toList()") shouldBe listOf(1, 2, 3)
