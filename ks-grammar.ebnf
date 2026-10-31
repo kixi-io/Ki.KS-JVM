@@ -55,9 +55,11 @@ program
     ;
 
 (* A crate file starts with its crate line (comments may precede it) and holds
-   declarations only. `crate` is a soft keyword: an identifier everywhere else.
-   The dots are written without spaces around them, and a segment after the
-   first may be a keyword, as in a `use` path. *)
+   declarations only. A file without one is a script when run and a script module
+   when used (its code runs once; isMain, an identifier, tells the two apart).
+   `crate` is a soft keyword: an identifier everywhere else. The dots are written
+   without spaces around them, and a segment after the first may be a keyword, as
+   in a `use` path. *)
 crateLine
     = 'crate' IDENTIFIER { '.' IDENTIFIER }
     ;
@@ -92,11 +94,27 @@ statementSeparator
 // traits, properties, and host language when useHostLanguage=true.
 
 useDeclaration
-    = 'use' usePath [ 'as' IDENTIFIER ]
+    = 'use' ( usePath | relativePath ) [ 'as' IDENTIFIER ]
+      { ',' IDENTIFIER [ 'as' IDENTIFIER ] }
     ;
 
+(* A full name, found under the crate roots. *)
 usePath
-    = IDENTIFIER { '.' IDENTIFIER } [ '.' '*' ]
+    = IDENTIFIER { '.' IDENTIFIER } [ '.' ( '*' | '**' ) ]
+    ;
+
+(* A relative path, found from the folder of the file the use is in: './' is that
+   folder, each '../' one folder up (never above its crate root). The lexer takes
+   the path as one token, USE_PATH, so its '..' is not a range and its '/' not
+   division; it is written without spaces and never mixes '/' with '.'. Its parts
+   are modules (crate folders, script module files, plain folders), then a name. *)
+relativePath
+    = ( './' | '../' { '../' } ) relativeParts
+    ;
+
+relativeParts
+    = IDENTIFIER { '/' IDENTIFIER } [ '/' ( '*' | '**' ) ]
+    | ( '*' | '**' )
     ;
 
 

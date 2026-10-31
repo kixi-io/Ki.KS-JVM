@@ -2360,6 +2360,46 @@ crate lab.assays
 
 **Loading.** A crate loads the first time a script uses it, once per interpreter; the next run reads its files again, so edits are seen. Crate code sees its crate, its own file's imports and what the host provides (`Interpreter.define`), never the using script's names. Two crates whose files use each other are an error naming the loop (`lab.assays -> lab.units -> lab.assays`).
 
+### Relative Paths, Script Modules and `isMain`
+
+A project's files can use each other by where they are, as files in a folder: `./` is the folder of the file you are in, `../` the folder above it. Any `.ks` file without a crate line is a module you can use. Here is an ELISA project in the scripts folder:
+
+```
+lab/units/units.ks            crate lab.units
+projects/shared/plate.ks      crate projects.shared: class Plate, fun readPlate
+projects/elisa/run.ks         the script you run
+projects/elisa/helpers.ks     a script module
+projects/elisa/plates/        crate projects.elisa.plates: class PlateMap
+```
+
+```
+// projects/elisa/run.ks
+use ./plates/PlateMap               // the crate in plates/, beside this file
+use ../shared/Plate, readPlate      // the crate in shared/, one folder up
+use ./helpers/dilute                // a name from helpers.ks, beside this file
+use lab.units.ML                    // a full name, found from the scripts folder
+
+let map = PlateMap(8, 12)
+say dilute(2.0, 4)                  // 0.5
+```
+
+```
+// projects/elisa/helpers.ks
+fun dilute(stock: Double, factor: Int): Double = stock / factor
+
+if isMain {
+    say "quick check: ${dilute(10.0, 4)}"     // only when helpers.ks itself is run
+}
+```
+
+**Relative paths.** Each `../` goes one folder up, and the parts are separated by `/`. They take the forms full names take: `use ../shared/Plate as P`, several names (`use ../shared/Plate, readPlate`), a star for a crate's or module's public names (`use ./helpers/*`), two stars for the crates in a folder and below it (`use ../**`). A path is read as a dotted one is: the longest part that is a module (a crate folder, a script module file, or a plain folder that holds them), then a name in it; `use ./helpers` binds the module itself (`helpers.dilute(2.0, 4)`). Full names keep their dots (`use lab.units.ML`), and one `use` never mixes the two: `use ../shared.Plate` is an error.
+
+**Where a path starts.** Every file counts from its own folder: a crate file from its crate's folder, a module from its own, the script being run from its folder (the host says where it is, `KSRuntime.scriptPath`; an unsaved script or the REPL counts from the first crate root). `../` may not go above the crate root that holds the file (`../ goes above the scripts folder`); a script outside every crate root counts from its own folder as if it were one. Full names are always found under the crate roots.
+
+**Script modules.** A `.ks` file without a crate line is a module, as in Python: the first `use` of it in an interpreter runs it once, in its own scope (it sees the host's bindings and its own imports, never the using script's names). Its top-level `fun`, `class`, `struct`, `trait`, `enum`, `let` and `var` are its names; `private` and `internal` ones are not exported. Its file name must be a name (`plate_tools.ks`, not `plate-tools.ks`). A full name reaches it from a crate root (`use helpers.dilute`; `use tools.stats.mean` for `tools/stats.ks`), and a crate's folder may hold modules (`use lab.assays.notes`), though not one named like a declaration of the crate. Whatever a `use` found before modules existed is found first. Modules that use each other, or a module and a crate, are an error naming the loop.
+
+**`isMain`** is true in the script being run (and at the REPL's top level) and false in a module's or crate's code. It goes by where the code is written: a function a module defines sees `false` even when the running script calls it. So `if isMain { ... }` at the end of a module is a self-check that runs only when the file itself is run. It cannot be assigned; a variable of your own called `isMain` hides it, as any built-in can be hidden.
+
 ### Indexing Host Objects
 
 As in Kotlin, `obj[index]` on a host (JVM) object calls its public `get(index)` method, choosing the overload that matches the index. So a RevDB `Row` is read as `row["name"]` or `row[0]`. This needs host interop (`hostLang`); in portable mode only KS's own types can be indexed.
