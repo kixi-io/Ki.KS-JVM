@@ -144,7 +144,24 @@ data class KSRuntime(
      * val runtime = KSRuntime(crateRoots = listOf(scriptsFolder))
      * ```
      */
-    val crateRoots: List<java.nio.file.Path> = listOf(java.nio.file.Path.of(""))
+    val crateRoots: List<java.nio.file.Path> = listOf(java.nio.file.Path.of("")),
+
+    /**
+     * The file of the script being run, or null when it has none (an unsaved
+     * script, the REPL).
+     *
+     * A relative `use` (`use ./plates/PlateMap`, `use ../shared/Plate`) counts from
+     * the folder of the file it is written in: for the script being run, this
+     * file's folder; with no file, the first of [crateRoots]. `../` may not go above
+     * the crate root that holds the script; a script outside every crate root
+     * counts from its own folder as if it were a root. A host that runs a saved
+     * script sets it, e.g. LabNexus's Scripts app:
+     *
+     * ```kotlin
+     * val runtime = KSRuntime(crateRoots = listOf(scriptsFolder), scriptPath = scriptFile)
+     * ```
+     */
+    val scriptPath: java.nio.file.Path? = null
 ) {
     companion object {
         /**
@@ -288,6 +305,9 @@ data class KSRuntime(
 
     /** This runtime with [roots] as its [crateRoots]. */
     fun withCrateRoots(vararg roots: java.nio.file.Path) = copy(crateRoots = roots.toList())
+
+    /** This runtime with [path] (the file of the script being run, or null) as its [scriptPath]. */
+    fun withScriptPath(path: java.nio.file.Path?) = copy(scriptPath = path)
 }
 
 // ============================================================================

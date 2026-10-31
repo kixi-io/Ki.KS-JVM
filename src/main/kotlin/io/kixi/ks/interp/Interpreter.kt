@@ -1093,12 +1093,17 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
     }
 
     /**
-     * Look up an identifier: a variable, function, class, enum or trait, then an
-     * imported name.
+     * Look up an identifier: a variable, function, the built-in `isMain`, a class,
+     * enum or trait, then an imported name.
      *
-     * In crate code the script's type registries are skipped (crate code sees only
-     * its own scopes, the host's bindings and its file's imports), and a name that
-     * is private to another file of the crate is reported as such.
+     * In crate and module code the script's type registries are skipped (that code
+     * sees only its own scopes, the host's bindings and its file's imports), and a
+     * name that is private to another file of the crate is reported as such.
+     *
+     * `isMain` is true in the script being run (and at the REPL's top level) and
+     * false in a script module's or crate file's code. It is decided by where the
+     * code was written (its scope), not by who calls it: a function a module
+     * defines sees false even when the script being run calls it.
      */
     private fun lookupIdentifier(expr: IdentifierExpr): Any? {
         val name = expr.name
@@ -1113,8 +1118,9 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             return environment.getFunction(name, expr.location)
         }
 
-        // The script's type registries; crate code sees only its own scopes and imports
+        // The script's type registries; crate and module code sees only its own scopes and imports
         val fileScope = environment.fileScope
+
         if (fileScope == null) {
             // Try as a class
             classes[name]?.let { return it }
@@ -1154,6 +1160,10 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
                 }
             }
         }
+
+        // The built-in isMain: true in the script being run, false in a module's or
+        // crate's code (a class's own property of that name, above, comes first)
+        if (name == IS_MAIN) return fileScope == null
 
         // Try as a built-in type (String, Int, Bool, etc.)
         // Native type constructors take precedence over plain sentinels —
@@ -1219,7 +1229,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
      * - JVM callables -> [JVMMethodProxy] (implements [Callable])
      * - KS types -> the existing KS type object (KSClass, KSStruct, etc.)
      * - KS static members -> the raw value
-     * - Crate declarations -> their current value (read on every use)
+     * - Crate declarations and script module names -> their current value (read on every use)
      */
     private fun resolvedImportToValue(resolved: ResolvedImport, location: SourceLocation?): Any? {
         return when (resolved) {
@@ -1232,6 +1242,7 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             is ResolvedImport.KsEnum -> resolved.ksEnum
             is ResolvedImport.KsStaticMember -> resolved.value
             is ResolvedImport.CrateMember -> resolved.value
+            is ResolvedImport.ModuleMember -> resolved.value
         }
     }
 
@@ -1506,5 +1517,25 @@ class Interpreter(internal val runtime: KSRuntime = KSRuntime.DEFAULT) {
             else -> runtime.outputWriter.println(output)
         }
         return null
+    }
+
+    companion object {
+        /** The built-in name that says whether code is in the script being run. */
+        internal const val IS_MAIN = "isMain"
+
+        /**
+         * The error for assigning the built-in `isMain` (`isMain = x`, `isMain++`)
+         * where no variable of the script's own has that name. Defining one
+         * (`let isMain = ...`, a parameter, a host binding) is allowed and
+         * hides the built-in, as for any KS built-in.
+         *
+         * @param what What was tried: "assigned"
+         */
+        internal fun isMainError(what: String, location: SourceLocation?): RuntimeError = RuntimeError(
+            "isMain is built in and cannot be $what",
+            location,
+            suggestion = "isMain is true in the script being run and false in a script module or crate; " +
+                    "use another name for your own value"
+        )
     }
 }

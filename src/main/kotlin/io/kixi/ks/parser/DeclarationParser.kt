@@ -427,6 +427,8 @@ class DeclarationParser(internal val p: Parser) {
      *     use SomeClass.staticFun                 static member import
      *     use io.kixi.kd.Tag as T                aliased import
      *     use io.kixi.kd.Tag as T, Annotation as Ann   multi with aliases
+     *     use ./plates/PlateMap                  relative to this file's folder
+     *     use ../shared/Plate, readPlate         relative to its parent folder
      *
      * ## Parsing Strategy
      *
@@ -437,9 +439,19 @@ class DeclarationParser(internal val p: Parser) {
      * 3. For non-wildcards, pop the last path segment as the first import name
      * 4. Check for `AS alias` on the first import
      * 5. Check for `COMMA` to parse additional imports (each with optional alias)
+     *
+     * A relative path is one [USE_PATH] token from the lexer, read by
+     * [parseRelativeUse]. A path that mixes `.` and `/`, or starts with `..`
+     * without its slash, is a parse error that says how to write it.
      */
     fun parseUseDecl(): UseDecl {
         val loc = p.advance().location // consume USE
+
+        // A relative path (`use ./plates/PlateMap`), one token from the lexer
+        if (p.check(USE_PATH)) return parseRelativeUse(loc)
+        if (p.check(DOT_DOT) || p.check(DOT) || p.check(SLASH)) {
+            p.error("A relative use starts with ./ or ../ and separates its parts with / (use ./plates/PlateMap, use ../shared/Plate)")
+        }
 
         // Collect the full dot-separated path
         val path = mutableListOf<String>()
@@ -470,6 +482,12 @@ class DeclarationParser(internal val p: Parser) {
             }
         }
 
+        // One use never mixes a dotted name with a slash path
+        if (p.check(SLASH)) {
+            p.error("use ${path.joinToString(".")}/... mixes . and /: a full name separates its parts with dots " +
+                    "(use lab.assays.Plate), and a relative path starts with ./ or ../ (use ./plates/PlateMap)")
+        }
+
         // Wildcard imports — path is the package, no specific imports
         if (wildcard != UseWildcard.NONE) {
             return UseDecl(path, wildcard, emptyList(), loc)
@@ -481,7 +499,14 @@ class DeclarationParser(internal val p: Parser) {
         }
 
         val firstName = path.removeAt(path.lastIndex)
+        return UseDecl(path, UseWildcard.NONE, parseImportNames(firstName), loc)
+    }
 
+    /**
+     * After a use path's last name, its optional `as Alias`, then further names
+     * of the same container (`, Name, Name as Alias, ...`).
+     */
+    private fun parseImportNames(firstName: String): List<UseImport> {
         // Check for alias on first import: `as Name`
         val firstAlias = if (p.match(AS)) {
             p.expectIdentifier("Expected alias name after 'as'")
@@ -503,9 +528,74 @@ class DeclarationParser(internal val p: Parser) {
             }
             imports.add(UseImport(name, alias))
         }
-
-        return UseDecl(path, UseWildcard.NONE, imports, loc)
+        return imports
     }
+
+    /**
+     * Parses a relative use, whose path the lexer captured as one [USE_PATH]
+     * token: `./` (this file's folder) or one or more `../` (its parent folders),
+     * then names separated by `/`, the last of which may be a star (a module's
+     * public names) or two stars (the crates in a folder and below it):
+     *
+     *     use ./plates/PlateMap              one name
+     *     use ../shared/Plate as P           renamed
+     *     use ../shared/Plate, readPlate     several names of one container
+     *
+     * The parts are read as a dotted use's are (see [UseDecl]). A path that mixes
+     * `/` and `.`, puts `..` anywhere but its start, or has a part that is not a
+     * name is a parse error.
+     */
+    private fun parseRelativeUse(loc: io.kixi.ks.SourceLocation): UseDecl {
+        val token = p.advance()
+        val text = token.value
+        var parents = 0
+        var rest = text
+        if (rest.startsWith("./")) {
+            rest = rest.substring(2)
+        } else {
+            while (rest.startsWith("../")) {
+                parents++
+                rest = rest.substring(3)
+            }
+        }
+        if (rest.isEmpty()) {
+            p.errorAt(token, "use $text names no module: add one after the slash (use ${text}helpers)")
+        }
+        val parts = rest.split('/')
+        for ((i, part) in parts.withIndex()) {
+            val last = i == parts.lastIndex
+            when {
+                part.isEmpty() -> p.errorAt(token, "use $text has an empty part: separate the names with a single /")
+                part == "." || part == ".." ->
+                    p.errorAt(token, "use $text: ./ and ../ may only start a path")
+                last && (part == "*" || part == "**") -> {}
+                '.' in part -> p.errorAt(token,
+                    "use $text mixes / and .: a relative path separates its parts with / (use ${fixed(text)})")
+                !isName(part) -> p.errorAt(token,
+                    "use $text: '$part' is not a name. Each part names a folder, a module or a declaration, " +
+                            "so a module's file name must be a name too (my_helpers.ks, not my-helpers.ks)")
+            }
+        }
+        val wildcard = when (parts.last()) {
+            "*" -> UseWildcard.FLAT
+            "**" -> UseWildcard.TREE
+            else -> UseWildcard.NONE
+        }
+        if (wildcard != UseWildcard.NONE) {
+            return UseDecl(parts.dropLast(1), wildcard, emptyList(), loc, parents)
+        }
+        return UseDecl(parts.dropLast(1), UseWildcard.NONE, parseImportNames(parts.last()), loc, parents)
+    }
+
+    /** [text] with the dots of its names turned into slashes (`../shared.Plate` to `../shared/Plate`). */
+    private fun fixed(text: String): String {
+        val prefixEnd = if (text.startsWith("./")) 2 else generateSequence(0) { it + 3 }.first { !text.startsWith("../", it) }
+        return text.substring(0, prefixEnd) + text.substring(prefixEnd).replace('.', '/')
+    }
+
+    /** True when [s] is a KS name: a letter or `_`, then letters, digits or `_`. */
+    private fun isName(s: String): Boolean =
+        s.isNotEmpty() && (s[0] == '_' || s[0].isLetter()) && s.all { it == '_' || it.isLetterOrDigit() }
 
     // ====================================================================
     // Extend Declaration

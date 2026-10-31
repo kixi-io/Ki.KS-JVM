@@ -529,10 +529,10 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
     // ========================================================================
 
     /**
-     * Evaluates `obj.member`: KS types and instances through the KS runtime, a crate
-     * namespace (`use lab.assays`, then `assays.proteinConc`) through its crate's
-     * visible declarations, and everything else through curated dispatch with the
-     * JVM reflection backstop.
+     * Evaluates `obj.member`: KS types and instances through the KS runtime, a
+     * namespace bound by `use` (`use lab.assays`, then `assays.proteinConc`; a
+     * script module or folder likewise) through its visible members, and
+     * everything else through curated dispatch with the JVM reflection backstop.
      */
     internal fun evaluateMemberAccess(expr: MemberAccessExpr): Any? {
         val obj = interp.evaluate(expr.obj)
@@ -623,8 +623,9 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
                 expr.member, "JVM method ${obj.name}", expr.location
             )
 
-            // A crate bound as a namespace (`use lab.assays`): its declarations, never reflection
-            is CrateNamespace -> obj.member(expr.member, expr.location)
+            // A crate, script module or folder bound by `use` (`use lab.assays`, `use ./helpers`):
+            // its members, never reflection
+            is Namespace -> obj.member(expr.member, expr.location)
 
             // Built-in, native, and any JVM types — curated dispatch with
             // universal JVM reflection backstop (hostLang=true only)
@@ -1152,11 +1153,22 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
     // Assignment
     // ========================================================================
 
+    /**
+     * Evaluates an assignment (`x = v`, `x += v`, `obj.p = v`, `grid[i] = v`): to a
+     * variable in scope (checking its type and constraint), an implicit `this`
+     * property, a member or an indexed element. The built-in `isMain` cannot be
+     * assigned (a script's own variable of that name can).
+     */
     internal fun evaluateAssign(expr: AssignExpr): Any? {
         val value = interp.evaluate(expr.value)
 
         when (val target = expr.target) {
             is IdentifierExpr -> {
+                // The built-in isMain is never assigned; a script's own variable
+                // called isMain, which shadows it, is an ordinary variable
+                if (target.name == Interpreter.IS_MAIN && !interp.environment.isDefined(target.name))
+                    throw Interpreter.isMainError("assigned", expr.location)
+
                 // Check if this is a variable in scope
                 if (interp.environment.isDefined(target.name)) {
                     val newValue = ops.copyIfStruct(ops.computeAssignment(
@@ -1449,10 +1461,17 @@ class ExpressionEvaluator(internal val interp: Interpreter) {
         }
     }
 
+    /**
+     * Evaluates `++` or `--` on a variable, member or indexed element, returning the
+     * new value (prefix) or the old one (postfix). The built-in `isMain` cannot be
+     * changed (a script's own variable of that name can).
+     */
     private fun evaluateIncDec(expr: UnaryExpr, isIncrement: Boolean): Any? {
         when (val operand = expr.operand) {
             is IdentifierExpr -> {
                 val name = operand.name
+                if (name == Interpreter.IS_MAIN && !interp.environment.isDefined(name))
+                    throw Interpreter.isMainError("assigned", expr.location)
                 val current = interp.environment.get(name, expr.location)
                 val newVal = if (isIncrement) ops.add(current, 1) else ops.subtract(current, 1)
                 interp.environment.assign(name, newVal, expr.location)

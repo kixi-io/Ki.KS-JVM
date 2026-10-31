@@ -56,6 +56,18 @@ sealed class ResolvedImport {
 
         override fun toString(): String = "CrateMember(${declaration.file.crate.name}.${declaration.name})"
     }
+
+    /**
+     * A public top-level name of a script module (`use ./helpers/dilute`). Its
+     * value is read on every use, so an imported module `var` shows its current
+     * value.
+     */
+    class ModuleMember internal constructor(internal val module: ScriptModule, internal val name: String) : ResolvedImport() {
+        /** The name's current value. */
+        val value: Any? get() = module.read(name)
+
+        override fun toString(): String = "ModuleMember(${module.name}.$name)"
+    }
 }
 
 // ============================================================================
@@ -566,24 +578,28 @@ private fun coerceNumeric(value: Any, target: Class<*>): Any? {
  *
  * Not thread-safe. Designed for single-threaded interpreter use.
  *
- * ## Crates
+ * ## Crates and script modules
  *
- * Where today's resolution finds nothing, a `use` path is looked up as a crate
- * (see [Crate]): `use lab.assays.proteinConc` (one declaration, or several with
- * commas, each with an optional `as`), `use lab.assays.*` (the crate's public
- * names), `use lab.**` (the public names of crate `lab`, if there is one, and of
- * every crate below it) and `use lab.assays` (the crate as a namespace,
- * `assays.proteinConc(...)`). Everything that resolved before resolves the same
- * way. A crate file has a registry of its own ([owner]), so its imports are
- * visible only in that file.
+ * Where today's resolution finds nothing, a `use` path is looked up as a module
+ * (see Modules.kt): a crate ([Crate]), a script module (a `.ks` file without a
+ * crate line) or a plain folder. The path is read as the longest prefix that is a
+ * module, then a member of it: `use lab.assays.proteinConc` (one name, or several
+ * with commas, each with an optional `as`), `use lab.assays.*` (a crate's or
+ * module's public names), `use lab.**` (the public names of crate `lab`, if there
+ * is one, and of every crate below it) and `use lab.assays` (the module itself as
+ * a namespace, `assays.proteinConc(...)`). Dotted names are looked up under the
+ * crate roots; a relative path (`use ./plates/PlateMap`, `use ../shared/Plate`)
+ * from the folder of the file it is written in. Everything that resolved before
+ * resolves the same way. A crate file or module has a registry of its own
+ * ([owner]), so its imports are visible only in that file.
  *
  * @property runtime The runtime configuration (checked for hostLang flag)
- * @property owner The crate file whose imports this registry holds, or null for
- *     the interpreter's own (script) imports
+ * @property owner The crate file or script module whose imports this registry
+ *     holds, or null for the interpreter's own (script) imports
  */
 class ImportRegistry internal constructor(
     private val runtime: KSRuntime,
-    internal val owner: CrateFileScope?
+    internal val owner: FileScope?
 ) {
     /** A registry for a script's imports. */
     constructor(runtime: KSRuntime) : this(runtime, null)
@@ -632,6 +648,12 @@ class ImportRegistry internal constructor(
         ksTraits: Map<String, KSTrait>,
         ksEnums: Map<String, KSEnum>
     ) {
+        // `use ./plates/PlateMap`, `use ../shared/Plate`: a path from this file's folder
+        if (decl.isRelative) {
+            processRelativeUse(decl)
+            return
+        }
+
         val packagePath = decl.packagePath.joinToString(".")
 
         // `use ki.<bag>…`: a type bag (io.kixi.types), in every hostLang mode.
@@ -646,11 +668,12 @@ class ImportRegistry internal constructor(
         when (decl.wildcard) {
             UseWildcard.FLAT -> {
                 flatWildcards.add(packagePath)
-                crates?.find(packagePath, decl.location, owner)?.let { crate ->
-                    for (d in crate.declarations.values) {
-                        if (d.visibility == io.kixi.ks.parser.Visibility.PUBLIC) {
-                            directImports[d.name] = ResolvedImport.CrateMember(d)
-                        }
+                crates?.let { crates ->
+                    // A crate's public names, else a script module's (a plain folder has none)
+                    when (val module = crates.moduleAt(decl.packagePath, decl.location, owner)) {
+                        is Module.OfCrate -> bindPublicNames(module)
+                        is Module.Script -> bindPublicNames(module)
+                        else -> {}
                     }
                 }
                 if (runtime.debugMode) {
@@ -663,7 +686,7 @@ class ImportRegistry internal constructor(
                 if (runtime.hostLang) {
                     discoverSubpackages(packagePath)
                 }
-                crates?.let { bindCrateTree(it, packagePath, decl.location) }
+                crates?.let { bindCrates(it.under(packagePath, decl.location, owner), "use $packagePath.**", decl.location) }
                 if (runtime.debugMode) {
                     runtime.outputWriter.println("[DEBUG] use $packagePath.**")
                 }
@@ -677,7 +700,12 @@ class ImportRegistry internal constructor(
                         packagePath, import.name,
                         ksClasses, ksStructs, ksTraits, ksEnums,
                         decl.location
-                    ) ?: resolveCrateImport(decl.packagePath, import.name, decl.location)
+                    ) ?: crates?.let { crates ->
+                        val shown = if (packagePath.isEmpty()) import.name else "$packagePath.${import.name}"
+                        resolveModuleImport(crates, decl.packagePath, import.name, decl.location, shown, relative = false) {
+                            crates.moduleAt(it, decl.location, owner)
+                        }
+                    }
 
                     if (resolved != null) {
                         directImports[localName] = resolved
@@ -739,53 +767,153 @@ class ImportRegistry internal constructor(
     }
 
     /**
-     * Resolves `use <path>.<name>` against crates, after today's resolution found
-     * nothing: the declaration [name] of crate [path], or else crate `<path>.<name>`
-     * itself as a namespace. Returns null when neither crate exists, so the caller
-     * reports the import as before.
+     * Resolves `use <path>.<name>` against modules, after today's resolution found
+     * nothing (for a dotted name; a relative path has no earlier resolution). The
+     * path is read as the longest prefix that is a module, then a member:
      *
-     * @throws CrateError when the declaration is `internal` to another crate or
-     *     `private` to another file
-     * @throws ImportError when crate [path] exists but declares no [name]
+     * 1. [name] in the module [path] names: a crate's declaration (unless it is
+     *    `internal` to another crate or `private` to another file), or a script
+     *    module's public top-level name;
+     * 2. else the module `<path>.<name>` itself, bound as a namespace (a crate, a
+     *    script module, or a plain folder);
+     * 3. else an error when [path] is a crate or module that lacks [name].
+     *
+     * Returns null when neither exists, so the caller reports the import.
+     *
+     * @param relative True for a relative path, whose empty [path] is the folder it
+     *     starts in; a dotted use of one name (`use helpers`) has no container
+     * @param locate Finds the module a path names (under the crate roots for a
+     *     dotted name, below a folder for a relative path)
+     * @param shown The import as messages show it (`lab.assays.x`, `../shared/x`)
+     * @throws CrateError when the name is not visible from here, or when a crate's
+     *     declaration and a module beside it share the name
+     * @throws ImportError when the module [path] exists but lacks [name]
      */
-    private fun resolveCrateImport(path: List<String>, name: String, location: SourceLocation?): ResolvedImport? {
-        val crates = crates ?: return null
-        val crate = if (path.isEmpty()) null else crates.find(path.joinToString("."), location, owner)
-        if (crate != null) {
-            crate.declarations[name]?.let { d ->
-                if (d.visibility == io.kixi.ks.parser.Visibility.INTERNAL && owner?.crate !== crate) {
-                    throw CrateError("$name is internal to crate ${crate.name}", location, crate.name,
-                        suggestion = "Only files of crate ${crate.name} can use it")
+    private fun resolveModuleImport(
+        crates: CrateRegistry,
+        path: List<String>,
+        name: String,
+        location: SourceLocation?,
+        shown: String,
+        relative: Boolean,
+        locate: (List<String>) -> Module?
+    ): ResolvedImport? {
+        val container = if (path.isEmpty() && !relative) null else locate(path)
+        when (container) {
+            is Module.OfCrate -> {
+                val crate = container.crate
+                crate.declarations[name]?.let { d ->
+                    crates.checkModuleClash(crate, name, location)
+                    if (d.visibility == io.kixi.ks.parser.Visibility.INTERNAL && owner?.crate !== crate) {
+                        throw CrateError("$name is internal to crate ${crate.name}", location, crate.name,
+                            suggestion = "Only files of crate ${crate.name} can use it")
+                    }
+                    return ResolvedImport.CrateMember(d)
                 }
-                return ResolvedImport.CrateMember(d)
+                crate.privates[name]?.let { ds ->
+                    crates.checkModuleClash(crate, name, location)
+                    ds.firstOrNull { it.file === owner }?.let { return ResolvedImport.CrateMember(it) }
+                    throw CrateError("$name is private to file ${ds.first().file.display}", location, crate.name,
+                        suggestion = "Only that file can use it")
+                }
             }
-            crate.privates[name]?.let { ds ->
-                ds.firstOrNull { it.file === owner }?.let { return ResolvedImport.CrateMember(it) }
-                throw CrateError("$name is private to file ${ds.first().file.display}", location, crate.name,
-                    suggestion = "Only that file can use it")
+            is Module.Script -> {
+                val module = container.module
+                if (name in module.exported) return ResolvedImport.ModuleMember(module, name)
+                module.notExported(name, location)?.let { throw it }
             }
+            else -> {}
         }
-        crates.find((path + name).joinToString("."), location, owner)?.let { namespace ->
-            return ResolvedImport.KsStaticMember(CrateNamespace(namespace, owner?.crate))
+        locate(path + name)?.let { return ResolvedImport.KsStaticMember(crates.namespace(it, owner)) }
+        when (container) {
+            is Module.OfCrate -> throw ImportError(shown, location,
+                suggestion = "Crate ${container.crate.name} has no public declaration '$name'" +
+                        container.crate.publicNames.let { if (it.isEmpty()) "" else it.joinToString(prefix = " (it has: ", postfix = ")") })
+            is Module.Script -> throw ImportError(shown, location,
+                suggestion = "Module ${container.module.name} has no public name '$name'" +
+                        container.module.publicNames.let { if (it.isEmpty()) "" else it.joinToString(prefix = " (it has: ", postfix = ")") })
+            else -> return null
         }
-        if (crate == null) return null
-        throw ImportError("${crate.name}.$name", location,
-            suggestion = "Crate ${crate.name} has no public declaration '$name'" +
-                    crate.publicNames.let { if (it.isEmpty()) "" else it.joinToString(prefix = " (it has: ", postfix = ")") })
     }
 
     /**
-     * `use lab.**`: binds the public names of crate [base] (if there is one) and of
-     * every crate below it. One name declared by two crates is an error naming both.
+     * A relative use (`use ./plates/PlateMap`, `use ../shared/Plate, readPlate`,
+     * `use ./plates/` then a star, `use ../` then two stars): resolved from the
+     * folder of the file it is written in, `../` going up from there but never
+     * above its root. One name binds a member or a module (as a dotted use does); a
+     * star binds a crate's or module's public names; two stars the public names of
+     * the crates in that folder and below it.
+     *
+     * @throws CrateError when `../` leaves the root, and as resolving a module may
+     * @throws ImportError when nothing is found, or a star names a plain folder
      */
-    private fun bindCrateTree(crates: CrateRegistry, base: String, location: SourceLocation?) {
+    private fun processRelativeUse(decl: UseDecl) {
+        val crates = crates ?: throw ImportError(decl.pathText, decl.location)
+        val (base, root) = crates.baseOf(owner)
+        val start = crates.startFolder(decl, base, root)
+        val locate = { parts: List<String> -> crates.moduleIn(start, root, parts, decl.location, owner) }
+        val prefix = if (decl.parents == 0) "./" else "../".repeat(decl.parents ?: 0)
+        when (decl.wildcard) {
+            UseWildcard.FLAT -> when (val module = locate(decl.packagePath)) {
+                is Module.OfCrate -> bindPublicNames(module)
+                is Module.Script -> bindPublicNames(module)
+                is Module.Folder -> throw ImportError(decl.pathText, decl.location,
+                    suggestion = "${module.display} is a plain folder, which has no names of its own: use one of its " +
+                            "modules (${prefix}${(decl.packagePath + "name").joinToString("/")}), or make it a crate")
+                null -> throw ImportError(decl.pathText, decl.location, suggestion = nothingThere(start, decl.packagePath))
+            }
+            UseWildcard.TREE -> {
+                val folder = decl.packagePath.fold(start) { path, segment -> path.resolve(segment) }
+                if (!java.nio.file.Files.isDirectory(folder)) {
+                    throw ImportError(decl.pathText, decl.location, suggestion = "There is no folder $folder")
+                }
+                bindCrates(crates.underFolder(folder, root, decl.location, owner), "use ${decl.pathText}", decl.location)
+            }
+            UseWildcard.NONE -> for (import in decl.imports) {
+                val shown = prefix + (decl.packagePath + import.name).joinToString("/")
+                val resolved = resolveModuleImport(crates, decl.packagePath, import.name, decl.location, shown, relative = true, locate)
+                    ?: throw ImportError(shown, decl.location, suggestion = nothingThere(start, decl.packagePath + import.name))
+                directImports[import.alias ?: import.name] = resolved
+                if (runtime.debugMode) {
+                    runtime.outputWriter.println("[DEBUG] use $shown${import.alias?.let { " as $it" } ?: ""}")
+                }
+            }
+        }
+    }
+
+    /** Why a relative path found nothing: what was looked for, and where. */
+    private fun nothingThere(start: java.nio.file.Path, parts: List<String>): String {
+        val target = parts.fold(start) { path, segment -> path.resolve(segment) }
+        return "There is no crate or folder $target, and no module ${target.resolveSibling(target.fileName.toString() + ".ks")}"
+    }
+
+    /** Binds the public names of a crate or script module (`use lab.assays.*`, `use ./helpers/` and a star). */
+    private fun bindPublicNames(module: Module) {
+        when (module) {
+            is Module.OfCrate -> for (d in module.crate.declarations.values) {
+                if (d.visibility == io.kixi.ks.parser.Visibility.PUBLIC) directImports[d.name] = ResolvedImport.CrateMember(d)
+            }
+            is Module.Script -> for (name in module.module.exported.keys) {
+                directImports[name] = ResolvedImport.ModuleMember(module.module, name)
+            }
+            is Module.Folder -> {}
+        }
+    }
+
+    /**
+     * Two stars: binds the public names of [found] crates. One name declared by two
+     * crates is an error naming both.
+     *
+     * @param shown The use as messages show it (`use lab.**`)
+     */
+    private fun bindCrates(found: List<Crate>, shown: String, location: SourceLocation?) {
         val bound = LinkedHashMap<String, CrateDeclaration>()
-        for (crate in crates.under(base, location, owner)) {
+        for (crate in found) {
             for (d in crate.declarations.values) {
                 if (d.visibility != io.kixi.ks.parser.Visibility.PUBLIC) continue
                 bound[d.name]?.let { other ->
                     throw CrateError(
-                        "use $base.**: ${d.name} is declared by both crate ${other.file.crate.name} and crate ${crate.name}",
+                        "$shown: ${d.name} is declared by both crate ${other.file.crate.name} and crate ${crate.name}",
                         location, crate.name,
                         suggestion = "Use the crates one at a time, or rename one with use ${crate.name}.${d.name} as ..."
                     )

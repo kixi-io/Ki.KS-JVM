@@ -1424,6 +1424,11 @@ class Lexer(private val source: String) {
                 TokenType.TRUE -> addToken(TokenType.TRUE, true)
                 TokenType.FALSE -> addToken(TokenType.FALSE, false)
                 TokenType.NIL -> addToken(TokenType.NIL, null)
+                TokenType.USE -> {
+                    val member = tokens.lastOrNull()?.type.let { it == TokenType.DOT || it == TokenType.QUESTION_DOT }
+                    addToken(keywordType)
+                    if (!member) scanUsePath()
+                }
                 else -> addToken(keywordType)
             }
         } else {
@@ -1432,6 +1437,34 @@ class Lexer(private val source: String) {
                 scanLangBody(text)
             }
         }
+    }
+
+    /**
+     * After `use`, captures a relative path (`./plates/PlateMap`, `../../shared/Plate`,
+     * or one ending in a star wildcard) unchanged as one [TokenType.USE_PATH] token,
+     * so its `..` is not the range operator, its slash not division, and a slash
+     * before a star does not open a comment. Only a path that starts with `./` or
+     * `../` is captured; it runs to the next space, comma, semicolon or comment. The
+     * parser checks its parts. Anything else after `use` (a dotted name) is lexed as
+     * usual.
+     */
+    private fun scanUsePath() {
+        var j = current
+        while (j < source.length && (source[j] == ' ' || source[j] == '\t')) j++
+        if (!source.startsWith("./", j) && !source.startsWith("../", j)) return
+        while (current < j) advance()
+        start = current
+        startLine = line
+        startColumn = column
+        while (!isAtEnd() && !endsUsePath()) advance()
+        addToken(TokenType.USE_PATH, currentText())
+    }
+
+    /** True where a relative use path ends: a space, line end, `,`, `;` or a comment. */
+    private fun endsUsePath(): Boolean {
+        val c = peek()
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',' || c == ';' || c == '#' ||
+                (c == '/' && peekNext() == '/')
     }
 
     /**

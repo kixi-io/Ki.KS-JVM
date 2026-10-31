@@ -37,9 +37,9 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
     // ========================================================================
 
     /**
-     * True while crate code runs: its types stay in its crate's scopes and are
-     * not entered in the interpreter's (script) type registries, so crates never
-     * leak names into scripts or clash with each other.
+     * True while crate or script module code runs: its types stay in its own scopes
+     * and are not entered in the interpreter's (script) type registries, so crates
+     * and modules never leak names into scripts or clash with each other.
      */
     private val inCrate: Boolean get() = interp.environment.fileScope != null
 
@@ -565,14 +565,14 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
 
     /**
      * Declares an enum: its constants and members, bound in the current scope. A
-     * script's enum is entered in the enum registry; a crate's is recorded with its
-     * crate, for `.CONSTANT` resolution.
+     * script's enum is entered in the enum registry; a crate's or module's is
+     * recorded with its crate or module, for `.CONSTANT` resolution.
      */
     internal fun evaluateEnumDecl(decl: EnumDecl): Any? {
         val ksEnum = KSEnum(decl, interp.environment)
         val fileScope = interp.environment.fileScope
         if (fileScope == null) interp.enums[decl.name] = ksEnum
-        else interp.crates.registerEnum(fileScope.crate, ksEnum)
+        else interp.crates.registerEnum(fileScope.owner, ksEnum)
 
         // Initialize enum constants
         for ((index, constant) in decl.constants.withIndex()) {
@@ -644,8 +644,8 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
      * Resolution order:
      * 1. Current enum context (from when expression subject)
      * 2. Infer from assignment target type annotation
-     * 3. Search all enums for a matching constant: the script's (not from crate
-     *    code), then those of loaded crates, the running crate's first
+     * 3. Search all enums for a matching constant: the script's (not from crate or
+     *    module code), then those of loaded crates and modules, the running one's first
      */
     internal fun evaluateDPEC(expr: DPECExpr): Any? {
         val constantName = expr.name
@@ -662,7 +662,7 @@ class TypeDeclarationEvaluator(internal val interp: Interpreter) {
                 enum.getConstant(constantName)?.let { return it }
             }
         }
-        interp.crates.enumConstant(constantName, fileScope?.crate)?.let { return it }
+        interp.crates.enumConstant(constantName, fileScope?.owner)?.let { return it }
 
         throw UndefinedNameError(constantName, NameKind.ENUM_CONSTANT, expr.location)
     }

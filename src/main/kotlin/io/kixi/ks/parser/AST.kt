@@ -278,16 +278,49 @@ data class UseImport(
  * - packagePath = ["SomeClass"]
  * - imports = [UseImport("staticFun", null)]
  *
+ * ## Relative paths
+ *
+ * A path that starts with `./` or `../` is read from the folder of the file the
+ * `use` is in, its parts separated by slashes: `use ./plates/PlateMap`,
+ * `use ../shared/Plate, readPlate`, `use ../../shared/Plate`. It has the same parts as
+ * a dotted use, plus [parents]: for `use ../shared/Plate`, packagePath = ["shared"],
+ * imports = [Plate], parents = 1.
+ *
  * @property packagePath The package/container path segments
  * @property wildcard The wildcard mode (NONE, FLAT, TREE)
  * @property imports The specific items to import (empty for wildcards)
+ * @property parents For a relative path, how many folders up it starts (0 for
+ *     `./`, 1 for `../`, 2 for `../../`); null for a dotted name
  */
 data class UseDecl(
     val packagePath: List<String>,
     val wildcard: UseWildcard,
     val imports: List<UseImport>,
-    override val location: SourceLocation
-) : Decl
+    override val location: SourceLocation,
+    val parents: Int? = null
+) : Decl {
+    /** True for a relative (slash) path. */
+    val isRelative: Boolean get() = parents != null
+
+    /**
+     * The path as written, without aliases or further names (`../shared/Plate`,
+     * `lab.assays.*`), for messages.
+     */
+    val pathText: String
+        get() {
+            val last = when (wildcard) {
+                UseWildcard.NONE -> listOfNotNull(imports.firstOrNull()?.name)
+                UseWildcard.FLAT -> listOf("*")
+                UseWildcard.TREE -> listOf("**")
+            }
+            val parts = packagePath + last
+            return when (val up = parents) {
+                null -> parts.joinToString(".")
+                0 -> "./" + parts.joinToString("/")
+                else -> "../".repeat(up) + parts.joinToString("/")
+            }
+        }
+}
 
 // --- End Use Declaration ----------------------------------------------------
 

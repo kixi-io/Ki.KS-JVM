@@ -48,12 +48,13 @@ class Environment(
     val name: String = "scope"
 ) {
     /**
-     * The crate file this scope belongs to, or null outside crate code. Set on a
-     * crate file's own scope by the crate loader and inherited by every scope
-     * created below it (function bodies, blocks, class statics), so code from a
-     * crate file finds its file's imports and crate in O(1) wherever it runs.
+     * The crate file or script module this scope belongs to, or null in the script
+     * being run (and in the REPL). Set on a crate file's or module's own scope by its
+     * loader and inherited by every scope created below it (function bodies, blocks,
+     * class statics), so its code finds its file's imports, folder and crate in O(1)
+     * wherever it runs. Null is also what makes `isMain` true.
      */
-    internal var fileScope: CrateFileScope? = parent?.fileScope
+    internal var fileScope: FileScope? = parent?.fileScope
 
     /**
      * A binding's value that is computed when first read: a crate's `let`, `var`
@@ -109,6 +110,8 @@ class Environment(
         if (name in bindings) {
             throw RedefinitionError(name, location)
         }
+        // A script may name its own variable isMain: it shadows the built-in, as
+        // any KS built-in can be shadowed, so scripts that did so keep working.
         bindings[name] = Binding(value, mutable, type, constraint, location)
     }
 

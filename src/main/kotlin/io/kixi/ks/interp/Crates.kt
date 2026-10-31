@@ -51,13 +51,19 @@ import java.nio.file.Path
  *     doc comment
  * @property files The crate's source files in load (name) order, `crate-info.ks`
  *     not included
+ * @property root The crate root (or other folder) the crate was found under,
+ *     absolute: its files' relative uses may not go above it
  */
 class Crate internal constructor(
     val name: String,
     val folder: Path,
     val description: String?,
-    val files: List<Path>
+    val files: List<Path>,
+    internal val root: Path
 ) {
+    /** [folder], absolute and normalized: the key a crate is cached by. */
+    internal val key: Path = folder.toAbsolutePath().normalize()
+
     /** The crate scope: the public and internal declarations of every file. */
     internal lateinit var scope: Environment
 
@@ -100,47 +106,54 @@ internal class CrateDeclaration(
 }
 
 /**
- * What code from one crate file runs with: its crate, its path and its own
- * imports. Set on the file's scope ([Environment.fileScope]) and inherited by
- * every scope below it.
+ * What code from one crate file runs with: its crate, its path, its own imports
+ * and the crate's folder, which its relative uses count from. Set on the file's
+ * scope ([Environment.fileScope]) and inherited by every scope below it.
  *
  * @property crate The crate the file belongs to
- * @property path The file
- * @property display The file as error messages name it (its root-relative path
- *     when the root is relative, as the default current directory is)
  */
 internal class CrateFileScope(
-    val crate: Crate,
-    val path: Path,
-    val display: String,
+    override val crate: Crate,
+    path: Path,
+    display: String,
     runtime: KSRuntime,
     crates: CrateRegistry
-) {
-    /** The file's own imports: a `use` in a crate file is visible only in that file. */
-    val imports: ImportRegistry = ImportRegistry(runtime, this).also { it.crates = crates }
+) : FileScope(path, display, crate.key, crate.root, runtime, crates) {
+    override val owner: Any get() = crate
 }
 
 /**
  * A crate bound as a namespace by `use lab.assays` (the analog of `use ki.bio`
- * for a type bag): `assays.proteinConc(0.42)`, `assays.Bradford(...)`.
+ * for a type bag): `assays.proteinConc(0.42)`, `assays.Bradford(...)`. A name the
+ * crate does not declare may be a module in its folder (`assays.notes` for the
+ * script module `notes.ks`, or a crate or folder below it).
  *
  * @property crate The crate
- * @property viewer The crate whose file wrote the `use`, or null for a script;
- *     code of the same crate also reaches internal names through the namespace
+ * @property viewer The file that wrote the `use`, or null for the script being
+ *     run; code of the same crate also reaches internal names through the namespace
+ * @property crates The loader, for the modules in the crate's folder
  */
-internal class CrateNamespace(val crate: Crate, private val viewer: Crate?) {
+internal class CrateNamespace(
+    val crate: Crate,
+    private val viewer: FileScope?,
+    private val crates: CrateRegistry
+) : Namespace {
 
-    /** The public (or, for the crate's own code, internal) declaration [name]. */
-    fun member(name: String, location: SourceLocation?): Any? {
+    /** The public (or, for the crate's own code, internal) declaration [name], or the module [name] in its folder. */
+    override fun member(name: String, location: SourceLocation?): Any? {
         val declaration = crate.declarations[name]
         if (declaration != null) {
-            if (declaration.visibility == Visibility.INTERNAL && viewer !== crate) {
+            crates.checkModuleClash(crate, name, location)
+            if (declaration.visibility == Visibility.INTERNAL && viewer?.crate !== crate) {
                 throw CrateError("$name is internal to crate ${crate.name}", location, crate.name)
             }
             return declaration.read()
         }
         crate.privates[name]?.firstOrNull()?.let {
             throw CrateError("$name is private to file ${it.file.display}", location, crate.name)
+        }
+        crates.moduleIn(crate.key, crate.root, listOf(name), location, viewer)?.let {
+            return crates.namespace(it, viewer)
         }
         throw MemberNotFoundError(name, "crate ${crate.name}", location)
     }
@@ -272,73 +285,91 @@ internal object CrateLine {
 }
 
 /**
- * The crates one interpreter has loaded, and the loader. A crate loads once per
- * interpreter and is cached; a fresh interpreter reads the files again, so edits
- * are seen on the next run.
+ * The crates and script modules one interpreter has loaded, and their loader. Each
+ * loads once per interpreter and is cached; a fresh interpreter reads the files
+ * again, so edits are seen on the next run.
  *
- * @param interp The interpreter crate code runs in
+ * @param interp The interpreter crate and module code runs in
  */
 internal class CrateRegistry(private val interp: Interpreter) {
 
-    /** Crates loaded completely, by name. */
-    private val loaded = LinkedHashMap<String, Crate>()
+    /** Crates loaded completely, by absolute folder, in load order. */
+    private val loadedAt = LinkedHashMap<Path, Crate>()
 
-    /** Crates being loaded, outermost first: a crate used again from here is a loop. */
-    private val loading = ArrayList<Crate>()
+    /** Folders already scanned and found to hold no crate. */
+    private val notCrates = HashSet<Path>()
 
-    /** Names already looked for under every root and not found. */
+    /** Script modules run completely, by absolute file. */
+    private val modules = LinkedHashMap<Path, ScriptModule>()
+
+    /**
+     * The crates and script modules being loaded, outermost first: one reached
+     * again from here is a loop.
+     */
+    private val loading = ArrayList<Any>()
+
+    /** Names already looked for as crates under every root and not found. */
     private val missing = HashSet<String>()
+
+    /** `name.ks` files beside crates already checked by [checkModuleClash] and found not to be modules. */
+    private val clashFree = HashSet<Path>()
 
     /** Declarations whose initializers are running, outermost first: the chain an initialization cycle reports. */
     private val initializing = ArrayList<CrateDeclaration>()
 
-    /** Every enum the loaded crates declare, for `.CONSTANT` resolution. */
-    private val crateEnums = ArrayList<Pair<Crate, KSEnum>>()
+    /** Every enum the loaded crates and modules declare, with its owner, for `.CONSTANT` resolution. */
+    private val ownedEnums = ArrayList<Pair<Any, KSEnum>>()
 
     /** The crates loaded so far, in load order. */
-    val all: Collection<Crate> get() = loaded.values
+    val all: Collection<Crate> get() = loadedAt.values
 
     // ========================================================================
     // Finding crates
     // ========================================================================
 
     /**
-     * The crate called [name], loading it on first use, or null when no crate root
-     * holds one.
+     * The crate called [name] under the crate roots (the first root whose folder
+     * for it holds crate files), loading it on first use, or null when none does.
      *
-     * @param from The crate file whose `use` asks, or null for a script. A crate
-     *     reached again while it loads is a loop and an error, except from its own
-     *     files (which see their crate's declarations anyway).
+     * @param from The file whose `use` asks, or null for the script being run. A
+     *     crate reached again while it loads is a loop and an error, except from
+     *     its own files (which see their crate's declarations anyway).
      * @throws CrateError for a loop, or when the crate cannot be loaded
      */
-    fun find(name: String, location: SourceLocation?, from: CrateFileScope?): Crate? {
-        loaded[name]?.let { return it }
-        val index = loading.indexOfFirst { it.name == name }
-        if (index >= 0) {
-            if (from != null && from.crate === loading[index]) return loading[index]
-            val loop = loading.subList(index, loading.size).map { it.name } + name
-            throw CrateError(
-                "Crates use each other: ${loop.joinToString(" -> ")}",
-                location, name,
-                suggestion = "Move what both need into a third crate that each of them uses"
-            )
-        }
+    fun find(name: String, location: SourceLocation?, from: FileScope?): Crate? {
         if (name in missing) return null
         for (root in interp.runtime.crateRoots) {
             val folder = name.split('.').fold(root) { path, segment -> path.resolve(segment) }
-            if (!Files.isDirectory(folder)) continue
-            val sources = scan(name, folder)
-            if (sources.isNotEmpty()) return load(name, folder, sources)
+            crateAt(name, folder, absolute(root), location, from)?.let { return it }
         }
         missing.add(name)
         return null
     }
 
     /**
+     * The crate in [folder], which the crate line of its files must call [name],
+     * loading it on first use; null when the folder holds no crate files.
+     *
+     * @param root The root it is found under (its files' `../` may not go above it)
+     */
+    fun crateAt(name: String, folder: Path, root: Path, location: SourceLocation?, from: FileScope?): Crate? {
+        val key = absolute(folder)
+        loadedAt[key]?.let { return it }
+        inProgress(key, location, from)?.let { return it as Crate }
+        if (key in notCrates || !Files.isDirectory(key)) return null
+        val sources = scan(name, folder)
+        if (sources.isEmpty()) {
+            notCrates.add(key)
+            return null
+        }
+        return load(name, folder, root, sources)
+    }
+
+    /**
      * Crate [base], if there is one, and every crate in the folders below it, in
      * name order (for `use lab.**`).
      */
-    fun under(base: String, location: SourceLocation?, from: CrateFileScope?): List<Crate> {
+    fun under(base: String, location: SourceLocation?, from: FileScope?): List<Crate> {
         val names = sortedSetOf<String>()
         for (root in interp.runtime.crateRoots) {
             val baseFolder = base.split('.').fold(root) { path, segment -> path.resolve(segment) }
@@ -352,6 +383,56 @@ internal class CrateRegistry(private val interp: Interpreter) {
         }
         return names.mapNotNull { find(it, location, from) }
     }
+
+    /**
+     * The crates in [folder] and the folders below it, in path order (for a
+     * relative use ending in two stars). Each is named by its path below [root].
+     */
+    fun underFolder(folder: Path, root: Path, location: SourceLocation?, from: FileScope?): List<Crate> {
+        val dirs = Files.walk(folder).use { paths -> paths.filter { Files.isDirectory(it) }.sorted().toList() }
+        return dirs.mapNotNull { dir ->
+            val name = crateName(dir, root, strict = true) ?: return@mapNotNull null
+            crateAt(name, dir, root, location, from)
+        }
+    }
+
+    /**
+     * The crate name [dir] has below [root] (`lab/assays` is `lab.assays`), or null
+     * for the root itself. With [strict], also null when a folder's name is not a
+     * name (such a folder cannot hold a crate whose line agrees with it).
+     */
+    private fun crateName(dir: Path, root: Path, strict: Boolean): String? {
+        if (dir == root || !dir.startsWith(root)) return null
+        val segments = root.relativize(dir).map { it.toString() }
+        if (strict && !segments.all { CrateLine.isSegment(it) }) return null
+        return segments.joinToString(".")
+    }
+
+    /**
+     * Checks [key] (a crate's folder or a module's file) against the crates and
+     * modules being loaded. Returns the crate when it is [from]'s own (its files may
+     * use their crate); returns null when it is not being loaded.
+     *
+     * @throws CrateError when it is being loaded: a loop, named in the message
+     */
+    private fun inProgress(key: Path, location: SourceLocation?, from: FileScope?): Crate? {
+        val index = loading.indexOfFirst { keyOf(it) == key }
+        if (index < 0) return null
+        val unit = loading[index]
+        if (unit is Crate && from != null && from.crate === unit) return unit
+        val chain = loading.subList(index, loading.size)
+        val loop = (chain + unit).joinToString(" -> ") { nameOf(it) }
+        throw if (chain.all { it is Crate }) CrateError(
+            "Crates use each other: $loop", location, nameOf(unit),
+            suggestion = "Move what both need into a third crate that each of them uses"
+        ) else CrateError(
+            "Modules use each other in a loop: $loop", location, nameOf(unit),
+            suggestion = "Move what both need into a third module that each of them uses"
+        )
+    }
+
+    private fun keyOf(unit: Any): Path = if (unit is Crate) unit.key else (unit as ScriptModule).file
+    private fun nameOf(unit: Any): String = if (unit is Crate) unit.name else (unit as ScriptModule).name
 
     /** One `.ks` file of a crate folder that belongs to the crate. */
     private class Source(val path: Path, val display: String, val text: String, val line: Int) {
@@ -407,10 +488,10 @@ internal class CrateRegistry(private val interp: Interpreter) {
     }
 
     /** Loads crate [name] from [sources] (see the notes at the top of this file). */
-    private fun load(name: String, folder: Path, sources: List<Source>): Crate {
+    private fun load(name: String, folder: Path, root: Path, sources: List<Source>): Crate {
         val info = sources.firstOrNull { it.isInfo }
         val code = sources.filter { !it.isInfo }
-        val crate = Crate(name, folder, info?.let { readInfo(it, name) }, code.map { it.path })
+        val crate = Crate(name, folder, info?.let { readInfo(it, name) }, code.map { it.path }, root)
 
         val base = interp.hostScope.child("crate-base:$name")
         base.define("cratePath", cratePathFunction(crate), mutable = false)
@@ -439,11 +520,11 @@ internal class CrateRegistry(private val interp: Interpreter) {
             }
             for (unit in units) for (d in unit.declarations) if (d.node is VarDecl) d.env.get(d.name)
 
-            loaded[name] = crate
+            loadedAt[crate.key] = crate
             return crate
         } catch (e: Throwable) {
             // Not cached, so the next use tries again; forget what it registered.
-            crateEnums.removeAll { it.first === crate }
+            ownedEnums.removeAll { it.first === crate }
             throw e
         } finally {
             interp.environment = previous
@@ -618,32 +699,214 @@ internal class CrateRegistry(private val interp: Interpreter) {
     }
 
     // ========================================================================
-    // Questions crate code asks
+    // Script modules
+    // ========================================================================
+
+    /**
+     * The script module in [file] (a `.ks` file without a crate line), run on its
+     * first use in this interpreter: its top-level code runs once, in its own
+     * scope below the host's bindings, and its public top-level declarations
+     * become its names.
+     *
+     * @param root The root it is found under (its own `../` may not go above it)
+     * @param from The file whose `use` asks, or null for the script being run
+     * @throws CrateError for a loop between modules (or a module and a crate), for
+     *     a file that is part of a crate, or when it cannot be parsed
+     */
+    fun scriptModule(file: Path, root: Path, location: SourceLocation?, from: FileScope?): ScriptModule {
+        val key = absolute(file)
+        modules[key]?.let { return it }
+        inProgress(key, location, from)
+        val display = file.toString()
+        val text = String(Files.readAllBytes(key), Charsets.UTF_8)
+        CrateLine.detect(text)?.let { line ->
+            throw CrateError(
+                "$display is a file of crate ${line.name}, not a module of its own",
+                location, line.name,
+                suggestion = "Use the crate's names instead: use ${line.name}.<name>"
+            )
+        }
+        val module = ScriptModule(moduleName(key, root), key, root)
+        val env = interp.hostScope.child("module:${module.name}")
+        env.fileScope = ModuleFileScope(module, display, interp.runtime, this)
+        module.scope = env
+        val program = try {
+            val tokens = Lexer(text).tokenize().map { it.copy(location = it.location.copy(file = display)) }
+            Parser(tokens).parse()
+        } catch (e: io.kixi.text.ParseException) {
+            throw CrateError("$display: ${e.message}", null, module.name, cause = e)
+        }
+
+        loading.add(module)
+        val previous = interp.environment
+        try {
+            interp.environment = env
+            for (node in program.body) interp.evaluate(node)
+            module.record(program)
+            modules[key] = module
+            return module
+        } catch (e: Throwable) {
+            // Not cached, so the next use runs it again; forget what it registered.
+            ownedEnums.removeAll { it.first === module }
+            throw e
+        } finally {
+            interp.environment = previous
+            loading.removeAt(loading.lastIndex)
+        }
+    }
+
+    /**
+     * A module's name: its dotted path below [root] (`tools/stats.ks` is
+     * `tools.stats`), or its file name without `.ks` when that path is not made of
+     * names.
+     */
+    private fun moduleName(file: Path, root: Path): String {
+        val stem = file.fileName.toString().removeSuffix(".ks")
+        if (!file.startsWith(root)) return stem
+        val segments = root.relativize(file.parent).map { it.toString() }.filter { it.isNotEmpty() } + stem
+        return if (segments.all { CrateLine.isSegment(it) }) segments.joinToString(".") else stem
+    }
+
+    // ========================================================================
+    // Module paths
+    // ========================================================================
+
+    /**
+     * The module dotted [parts] name under the crate roots: a crate (as [find]
+     * finds it), else a script module file (`<root>/tools/stats.ks` for
+     * `tools.stats`, the first root that has it), else a plain folder; null if none.
+     */
+    fun moduleAt(parts: List<String>, location: SourceLocation?, from: FileScope?): Module? {
+        if (parts.isEmpty()) return null
+        find(parts.joinToString("."), location, from)?.let { return Module.OfCrate(it) }
+        val roots = interp.runtime.crateRoots
+        for (root in roots) {
+            val file = parts.dropLast(1).fold(root) { path, segment -> path.resolve(segment) }.resolve(parts.last() + ".ks")
+            if (Files.isRegularFile(file)) return Module.Script(scriptModule(file, absolute(root), location, from))
+        }
+        for (root in roots) {
+            val folder = parts.fold(root) { path, segment -> path.resolve(segment) }
+            if (Files.isDirectory(folder)) return Module.Folder(absolute(folder), absolute(root), folder.toString())
+        }
+        return null
+    }
+
+    /**
+     * The module [parts] name below the folder [base] (inside [root]): a crate
+     * folder, else a script module file, else a plain folder; null if none. With
+     * no [parts], the module [base] itself is (a crate or a plain folder).
+     */
+    fun moduleIn(base: Path, root: Path, parts: List<String>, location: SourceLocation?, from: FileScope?): Module? {
+        val target = parts.fold(base) { path, segment -> path.resolve(segment) }
+        if (Files.isDirectory(target)) {
+            crateName(target, root, strict = false)?.let { name ->
+                crateAt(name, target, root, location, from)?.let { return Module.OfCrate(it) }
+            }
+        }
+        if (parts.isNotEmpty()) {
+            val file = target.resolveSibling(parts.last() + ".ks")
+            if (Files.isRegularFile(file)) return Module.Script(scriptModule(file, root, location, from))
+        }
+        if (Files.isDirectory(target)) return Module.Folder(target, root, target.toString())
+        return null
+    }
+
+    /** [module] as a value bound by `use` ([CrateNamespace], [ModuleNamespace] or [FolderNamespace]). */
+    fun namespace(module: Module, from: FileScope?): Namespace = when (module) {
+        is Module.OfCrate -> CrateNamespace(module.crate, from, this)
+        is Module.Script -> ModuleNamespace(module.module)
+        is Module.Folder -> FolderNamespace(module, this, from)
+    }
+
+    /**
+     * Throws when [crate] declares [name] and its folder also holds the script
+     * module `name.ks`: a crate's name and a module below it may not clash.
+     */
+    fun checkModuleClash(crate: Crate, name: String, location: SourceLocation?) {
+        val file = crate.key.resolve("$name.ks")
+        if (file in clashFree) return
+        if (!Files.isRegularFile(file) || CrateLine.detect(String(Files.readAllBytes(file), Charsets.UTF_8)) != null) {
+            clashFree.add(file)
+            return
+        }
+        throw CrateError(
+            "'$name' is both a name in crate ${crate.name} and the module ${crate.name}.$name; rename one",
+            location, crate.name
+        )
+    }
+
+    // ========================================================================
+    // Where relative paths start
+    // ========================================================================
+
+    /**
+     * The folder a relative `use` counts from, and the root its `../` may not go
+     * above, for code of [scope]: a crate file's crate folder, a module's folder,
+     * or (for null, the script being run) the folder of [KSRuntime.scriptPath].
+     * With no script path the first crate root is both. A script outside every
+     * crate root counts from its own folder, as if it were a root.
+     */
+    fun baseOf(scope: FileScope?): Pair<Path, Path> {
+        if (scope != null) return scope.folder to scope.root
+        val roots = interp.runtime.crateRoots.map { absolute(it) }
+        val script = interp.runtime.scriptPath?.let { absolute(it) }
+        val folder = script?.parent ?: roots.firstOrNull() ?: absolute(Path.of(""))
+        val root = roots.firstOrNull { folder.startsWith(it) } ?: folder
+        return folder to root
+    }
+
+    /**
+     * The folder [decl] (a relative use) starts in: [base], then one folder up for
+     * each `../`.
+     *
+     * @throws CrateError when a `../` would leave [root]
+     */
+    fun startFolder(decl: UseDecl, base: Path, root: Path): Path {
+        var folder = base
+        repeat(decl.parents ?: 0) {
+            if (folder == root || folder.parent == null) {
+                throw CrateError(
+                    "use ${decl.pathText}: ../ goes above the scripts folder $root, which a relative use cannot leave",
+                    decl.location,
+                    suggestion = "Count from a file inside $root, or reach a crate at its top with a full name (use lab.units.ML)"
+                )
+            }
+            folder = folder.parent
+        }
+        return folder
+    }
+
+    /** [path], absolute and normalized: how folders and files are compared and cached. */
+    private fun absolute(path: Path): Path = path.toAbsolutePath().normalize()
+
+    // ========================================================================
+    // Questions crate and module code asks
     // ========================================================================
 
     /**
      * Throws when [name], not found from code of [scope]'s file, is private to
      * another file of the same crate: a clearer error than an undefined name.
      */
-    fun checkPrivateElsewhere(scope: CrateFileScope, name: String, location: SourceLocation?) {
-        val other = scope.crate.privates[name]?.firstOrNull { it.file !== scope } ?: return
-        throw CrateError("$name is private to file ${other.file.display}", location, scope.crate.name)
+    fun checkPrivateElsewhere(scope: FileScope, name: String, location: SourceLocation?) {
+        val crateScope = scope as? CrateFileScope ?: return
+        val other = crateScope.crate.privates[name]?.firstOrNull { it.file !== crateScope } ?: return
+        throw CrateError("$name is private to file ${other.file.display}", location, crateScope.crate.name)
     }
 
-    /** Records [enum], declared by code of [crate], for `.CONSTANT` resolution. */
-    fun registerEnum(crate: Crate, enum: KSEnum) {
-        crateEnums.add(crate to enum)
+    /** Records [enum], declared by code of [owner] (a [Crate] or [ScriptModule]), for `.CONSTANT` resolution. */
+    fun registerEnum(owner: Any, enum: KSEnum) {
+        ownedEnums.add(owner to enum)
     }
 
     /**
-     * The constant [name] of a crate enum, preferring [preferred]'s enums, then the
-     * other loaded crates' in load order; null when none has it.
+     * The constant [name] of an enum a crate or module declares, preferring
+     * [preferred]'s enums, then the others in load order; null when none has it.
      */
-    fun enumConstant(name: String, preferred: Crate?): KSEnumConstant? {
+    fun enumConstant(name: String, preferred: Any?): KSEnumConstant? {
         if (preferred != null) {
-            for ((crate, enum) in crateEnums) if (crate === preferred) enum.getConstant(name)?.let { return it }
+            for ((owner, enum) in ownedEnums) if (owner === preferred) enum.getConstant(name)?.let { return it }
         }
-        for ((_, enum) in crateEnums) enum.getConstant(name)?.let { return it }
+        for ((_, enum) in ownedEnums) enum.getConstant(name)?.let { return it }
         return null
     }
 

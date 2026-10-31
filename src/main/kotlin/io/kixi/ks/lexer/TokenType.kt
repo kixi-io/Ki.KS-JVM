@@ -168,6 +168,7 @@ enum class TokenType {
 
     // --- Special ---
     LANG_BODY,              // the raw text of `lang Name { ... }` for an embedded language (KD included); literal is a LangBody
+    USE_PATH,               // a relative use path right after `use` (`./plates/PlateMap`, `../shared/*`), as written; the parser checks it
     NEWLINE,                // significant newline (statement separator)
     EOF;                    // end of file
 
