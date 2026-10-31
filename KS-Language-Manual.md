@@ -1143,6 +1143,7 @@ let weight = 1000kg
 let temp = 25°C
 let volume = 97ℓ
 let flask = 1.L        // also a liter: 1L would be the Long 1, so a dot comes first
+let half = 500mL as L  // 0.5ℓ: after `as` no number comes first, so a plain L is the liter
 ```
 
 ### Currency Quantities
@@ -1271,7 +1272,7 @@ let avogadro = 6.022ep23mol      // 6.022 × 10²³ mol
 
 **Area:** `nm²`, `mm²`, `cm²`, `m²`, `km²`
 
-**Volume:** `nm³`, `mm³`, `cm³`, `m³`, `km³`, `mℓ`, `ℓ` (a liter is also written `1.L`, with a dot, or `1LT`; `mL` and `µL` work as typed)
+**Volume:** `nm³`, `mm³`, `cm³`, `m³`, `km³`, `mℓ`, `ℓ` (a liter is also written `1.L`, with a dot, or `1LT`, and a unit named on its own, as in `500mL as L` or `.convertTo("L")`, may be a plain `L`; `mL` and `µL` work as typed)
 
 **Temperature:** `K`, `°C` (alias: `dC`)
 
