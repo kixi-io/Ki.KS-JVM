@@ -2298,6 +2298,68 @@ use io.kixi.kd.Tag as T, Annotation as Ann
 use SomeClass.staticFun
 ```
 
+### Crates
+
+A crate is a set of KS files that belong together, like a Kotlin package: the functions, classes and constants for one kind of lab work, kept in one folder and used from any script. A lab might keep its protein assays in the folder `lab/assays`:
+
+```
+// lab/assays/conc.ks
+crate lab.assays
+
+/** Protein concentration (mg/mL) from a Bradford absorbance at 595 nm. */
+fun proteinConc(absorbance: Double): Double = (absorbance - BLANK) * SLOPE
+
+internal let SLOPE = 2.0
+private let BLANK = 0.25
+```
+
+Any script can then use it:
+
+```
+use lab.assays.proteinConc
+say proteinConc(0.875)           // 1.25
+```
+
+**Where crates live.** Crate `lab.assays` is the `.ks` files directly in the folder `lab/assays` under a crate root whose first declaration (comments may precede it) is `crate lab.assays`. The crate roots are a host setting (`KSRuntime.crateRoots`): the current directory by default; a host such as LabNexus sets its own. A file in the folder whose crate line names another crate is an error; `.ks` files there without a crate line are ordinary scripts. `crate` is a keyword only at the start of such a line, so it stays usable as a name.
+
+**Using a crate.**
+
+```
+use lab.assays.proteinConc               // one name
+use lab.assays.Bradford as B             // renamed
+use lab.assays.proteinConc, Bradford     // several names
+use lab.assays.*                         // every public name of the crate
+use lab.**                               // every public name of crate lab and of every crate below it
+use lab.assays                           // the crate as a namespace: assays.proteinConc(0.875)
+```
+
+A `use` that resolved before crates existed (a JVM class, a type bag, the script's own type) resolves the same way; crates are looked up only where nothing else matches. With `**`, one name declared by two crates is an error naming both.
+
+**Declarations only.** A crate file holds `fun`, `class`, `struct`, `trait`, `enum`, `extend`, `let`, `var` and `use`. A statement (`say`, an `if`, a loop, an expression) is an error naming the file and line when the crate loads, and running a crate file as a script is an error.
+
+**One crate, many files.** Every file of a crate sees every declaration of the crate without `use`, whatever the file order. Functions are looked up when called; types and `let`/`var` initializers are computed when the crate loads, each the first time something needs it, so a file may use a constant or supertype from another file. Two initializers that need each other are an error naming them (`a -> b -> a`). A `use` in a crate file is visible only in that file and is never passed on.
+
+**Visibility.** Top-level declarations take Kotlin's modifiers:
+
+| Modifier | Visible |
+|----------|---------|
+| (none) | everywhere; what `use` imports |
+| `internal` | in every file of the crate, never outside it |
+| `private` | only in its own file |
+
+`use lab.assays.SLOPE` in a script is an error (`SLOPE is internal to crate lab.assays`), and `*` and `**` skip names that are not public. In an ordinary script the modifiers are accepted and have no effect.
+
+**crate-info.ks.** An optional `crate-info.ks` in the crate's folder holds the crate line and a doc comment describing the crate, nothing else; tools show the description.
+
+```
+/** Protein assays: Bradford and BCA, with their standard curves. */
+crate lab.assays
+```
+
+**Files beside the crate.** In crate code, `cratePath("bsa-standards.csv")` is the full path (a String) of a file in the crate's folder, whatever folder the script runs in: `IO.read(cratePath("bsa-standards.csv"))`.
+
+**Loading.** A crate loads the first time a script uses it, once per interpreter; the next run reads its files again, so edits are seen. Crate code sees its crate, its own file's imports and what the host provides (`Interpreter.define`), never the using script's names. Two crates whose files use each other are an error naming the loop (`lab.assays -> lab.units -> lab.assays`).
+
 ### Indexing Host Objects
 
 As in Kotlin, `obj[index]` on a host (JVM) object calls its public `get(index)` method, choosing the overload that matches the index. So a RevDB `Row` is read as `row["name"]` or `row[0]`. This needs host interop (`hostLang`); in portable mode only KS's own types can be indexed.

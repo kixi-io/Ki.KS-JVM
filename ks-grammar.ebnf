@@ -50,17 +50,33 @@
 // ---------------------------------------------------------------------------
 
 program
-    = { NL } { topLevelDeclaration { statementSeparator } } EOF
+    = { NL } [ crateLine { statementSeparator } ]
+      { topLevelDeclaration { statementSeparator } } EOF
+    ;
+
+(* A crate file starts with its crate line (comments may precede it) and holds
+   declarations only. `crate` is a soft keyword: an identifier everywhere else.
+   The dots are written without spaces around them, and a segment after the
+   first may be a keyword, as in a `use` path. *)
+crateLine
+    = 'crate' IDENTIFIER { '.' IDENTIFIER }
     ;
 
 topLevelDeclaration
     = useDeclaration
-    | functionDeclaration
-    | classDeclaration
-    | traitDeclaration
-    | enumDeclaration
-    | variableDeclaration
+    | [ visibility ] functionDeclaration
+    | [ visibility ] classDeclaration
+    | [ visibility ] traitDeclaration
+    | [ visibility ] enumDeclaration
+    | [ visibility ] variableDeclaration
     | statement
+    ;
+
+(* Soft modifiers, top level only, enforced in crate files (no effect in a script).
+   No modifier means public. *)
+visibility
+    = 'private'                       (* this file only *)
+    | 'internal'                      (* every file of the crate *)
     ;
 
 statementSeparator
